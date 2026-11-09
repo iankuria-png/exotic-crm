@@ -11,7 +11,7 @@ use Illuminate\Support\Str;
 
 class SubscriptionAuditBuilder
 {
-    public const RULE_VERSION = '2026-11-05.1';
+    public const RULE_VERSION = '2026-11-08.1';
 
     private const SOURCE_LIMIT = 30000;
 
@@ -36,173 +36,11 @@ class SubscriptionAuditBuilder
         }
 
         return DB::transaction(function () use ($from, $to): SubscriptionAuditRun {
-            $fromSql = $from->toDateTimeString();
+            $profileAsOf = CarbonImmutable::now('UTC')->startOfSecond();
+            $started = microtime(true);
             $toSql = $to->toDateTimeString();
-            $platforms = DB::table('platforms')->get(['id', 'name', 'domain', 'country', 'currency_code'])->keyBy('id');
-            $audits = $this->bounded(DB::table('audit_log')->where('entity_type', 'deal')->whereIn('action', ['deal_activate', 'deal_renew', 'deal_extend'])->where('created_at', '>=', $fromSql)->where('created_at', '<', $toSql)->orderBy('id'), ['id', 'platform_id', 'actor_id', 'entity_id', 'action', 'before_state', 'after_state', 'created_at']);
-            $timeline = $this->bounded(DB::table('timeline_events')->whereIn('event_type', ['subscription_activation_recorded', 'deal_activated', 'deal_extended', 'deal_renewed'])->where('created_at', '>=', $fromSql)->where('created_at', '<', $toSql)->orderBy('id'), ['id', 'platform_id', 'entity_type', 'entity_id', 'actor_id', 'event_type', 'content', 'created_at']);
-            $dealIds = [];
-            foreach ($audits as $row) {
-                $after = AuditValue::json($row->after_state);
-                $dealIds[] = $row->action === 'deal_renew' ? (int) ($after['new_deal_id'] ?? 0) : (int) $row->entity_id;
-            }
-            foreach ($timeline as $row) {
-                $content = AuditValue::json($row->content);
-                $dealIds[] = (int) ($content['new_deal_id'] ?? $content['deal_id'] ?? ($row->entity_type === 'deal' ? $row->entity_id : 0));
-            }
-            $current = $this->bounded(DB::table('deals')->where('activated_at', '>=', $fromSql)->where('activated_at', '<', $toSql)->orderBy('id'), $this->sourceColumns('deals'));
-            foreach ($current as $deal) {
-                $dealIds[] = (int) $deal->id;
-            }
-            $deals = $this->lookup('deals', array_filter(array_unique($dealIds)));
-            $sourceCounts = ['action_audits' => count($audits), 'success_timelines' => count($timeline), 'current_deals' => count($current)];
-            $events = [];
-            $canonicalLinks = [];
-            $canonicalPayments = [];
-            $exactOperations = [];
-            $representedDeals = [];
-            $representedActivations = [];
-            $skippedAttempts = 0;
-            foreach ($audits as $row) {
-                $before = AuditValue::json($row->before_state);
-                $after = AuditValue::json($row->after_state);
-                $kind = ['deal_activate' => 'activation', 'deal_renew' => 'renewal', 'deal_extend' => 'extension'][$row->action];
-                // Activation initiation audits also exist. They are not successful effects.
-                if ($kind !== 'extension' && ! in_array($after['deal_status'] ?? $after['new_status'] ?? null, ['active', 'expired', 'renewed'], true)) {
-                    $skippedAttempts++;
-
-                    continue;
-                }
-                if ($kind === 'extension' && ! array_key_exists('expires_at', $after) && ! array_key_exists('new_expires_at', $after)) {
-                    $skippedAttempts++;
-
-                    continue;
-                }
-                $dealId = $kind === 'renewal' ? (int) ($after['new_deal_id'] ?? 0) : (int) $row->entity_id;
-                $deal = $deals[$dealId] ?? null;
-                $paymentId = $kind === 'extension' ? ($after['extension_payment_id'] ?? null) : ($after['payment_id'] ?? null);
-                $event = $this->event('audit', $row->id, $kind, $row->platform_id, $dealId ?: null, $deal?->client_id, $paymentId, $row->actor_id, $row->created_at, $before, $after);
-                $index = count($events);
-                $events[] = $event;
-                $canonicalLinks[$this->effectLink($event)] = $index;
-                if ($event['payment_id']) {
-                    $canonicalPayments[$this->paymentLink($event)] = $index;
-                }
-                $exactOperations[$this->operationLink($event)] = $index;
-                $representedDeals[$dealId] = true;
-                if ($kind !== 'extension') {
-                    $representedActivations[$dealId] = true;
-                }
-            }
-            // Prefer the dedicated success snapshot to the older activation timeline.
-            $timeline = collect($timeline)->sortBy(fn ($row) => $row->event_type === 'subscription_activation_recorded' ? 0 : 1)->all();
-            foreach ($timeline as $row) {
-                $content = AuditValue::json($row->content);
-                $dealId = (int) ($content['new_deal_id'] ?? $content['deal_id'] ?? ($row->entity_type === 'deal' ? $row->entity_id : 0));
-                $deal = $deals[$dealId] ?? null;
-                $kind = match ($row->event_type) {
-                    'deal_extended' => 'extension',
-                    'deal_renewed' => 'renewal',
-                    default => ($content['source'] ?? null) === 'crm_extension' ? 'extension'
-                        : ((str_contains((string) ($content['source'] ?? ''), 'renewal') || isset($content['renewed_from_deal_id']) || ($content['subscription_lifecycle'] ?? null) === 'renewal') ? 'renewal' : 'activation'),
-                };
-                // Renewal initiation timeline can precede an actual activation.
-                if ($row->event_type === 'deal_renewed' && ! in_array($content['new_status'] ?? null, ['active', 'expired', 'renewed'], true)) {
-                    continue;
-                }
-                $paymentId = $kind === 'extension' && $row->event_type !== 'subscription_activation_recorded'
-                    ? ($content['extension_payment_id'] ?? null) : ($content['payment_id'] ?? null);
-                $event = $this->event('timeline', $row->id, $kind, $row->platform_id, $dealId ?: null, $deal?->client_id ?? ($row->entity_type === 'client' ? $row->entity_id : null), $paymentId, $row->actor_id, $row->created_at, [], $content);
-                // Only exact identity links collapse paired representations. A null-payment
-                // extension has no identity safe enough to infer another independent effect.
-                $matched = $canonicalLinks[$this->effectLink($event)] ?? null;
-                if ($matched === null && $paymentId && $kind !== 'extension') {
-                    $matched = $canonicalPayments[$this->paymentLink($event)] ?? null;
-                }
-                // A recorder snapshot omits expiry and charge terms. It can support an
-                // exact same recorded operation, never suppress all changes to a deal.
-                if ($matched === null && ($row->event_type === 'subscription_activation_recorded' || $kind === 'extension')) {
-                    $operationMatch = $exactOperations[$this->operationLink($event)] ?? null;
-                    if ($operationMatch !== null && (! $event['new_expiry_known'] || ! $events[$operationMatch]['new_expiry_known']
-                        || $event['new_expiry'] === $events[$operationMatch]['new_expiry'])) {
-                        $matched = $operationMatch;
-                    }
-                }
-                if ($matched !== null) {
-                    $this->supplement($events[$matched], $event);
-
-                    continue;
-                }
-                if ($row->event_type === 'subscription_activation_recorded' && $kind === 'extension'
-                    && ! $event['new_expiry_known'] && isset($representedDeals[$dealId])) {
-                    $event['event_type'] = 'observation';
-                    $event['match_basis'] = 'unresolved_success_snapshot_context_only';
-                    $event['reasons'][] = 'additional_source_representation_unresolved';
-                } elseif (isset($representedDeals[$dealId])) {
-                    $event['reasons'][] = 'additional_source_representation_unresolved';
-                }
-                $index = count($events);
-                $events[] = $event;
-                $canonicalLinks[$this->effectLink($event)] = $index;
-                if ($paymentId) {
-                    $canonicalPayments[$this->paymentLink($event)] = $index;
-                }
-                $exactOperations[$this->operationLink($event)] = $index;
-                $representedDeals[$dealId] = true;
-                if ($kind !== 'extension') {
-                    $representedActivations[$dealId] = true;
-                }
-            }
-            foreach ($current as $deal) {
-                if (isset($representedActivations[(int) $deal->id])) {
-                    continue;
-                }
-                $event = $this->event('deal_observation', $deal->id, 'observation', $deal->platform_id, $deal->id, $deal->client_id, $deal->payment_id, null, $deal->activated_at, [], [
-                    'amount' => $deal->amount, 'currency' => $deal->currency, 'is_free_trial' => (bool) $deal->is_free_trial,
-                    'discount_percentage' => $deal->discount_percentage, 'expires_at' => $deal->expires_at,
-                ]);
-                $event['match_basis'] = 'current_deal_payment_context_only';
-                $events[] = $event;
-            }
-            unset($audits, $timeline, $current, $dealIds);
-            if (count($events) > self::SOURCE_LIMIT) {
-                throw new SubscriptionAuditException('The canonical effect set exceeds the bounded reporting limit.', 'audit_source_limit', 503, -32020);
-            }
-            $paymentIds = array_filter(array_unique(array_column($events, 'payment_id')));
-            $payments = $this->lookup('payments', $paymentIds);
-            // A reverse link is a visible candidate; it does not silently clear an action.
-            $reverse = [];
-            $reverseCount = 0;
-            foreach (array_chunk(array_filter(array_unique(array_column($events, 'deal_id'))), 500) as $ids) {
-                foreach ($this->bounded(DB::table('payments')->whereIn('deal_id', $ids), ['id', 'deal_id']) as $row) {
-                    if (++$reverseCount > self::SOURCE_LIMIT) {
-                        throw new SubscriptionAuditException('Reverse-link candidates exceed the bounded reporting limit.', 'audit_source_limit', 503, -32020);
-                    }
-                    $reverse[(int) $row->deal_id][] = (int) $row->id;
-                }
-            }
-            $candidateIds = [];
-            foreach ($events as &$event) {
-                if (! $event['payment_id'] && $event['event_type'] !== 'extension' && count($reverse[$event['deal_id']] ?? []) === 1) {
-                    $event['payment_id'] = $reverse[$event['deal_id']][0];
-                    $event['match_basis'] = 'reverse_link_candidate';
-                    $candidateIds[] = $event['payment_id'];
-                }
-            }
-            unset($event);
-            $payments += $this->lookup('payments', array_unique($candidateIds));
-            $approvals = [];
-            $approvalCount = 0;
-            foreach (array_chunk(array_filter(array_unique(array_column($events, 'deal_id'))), 500) as $ids) {
-                $rows = $this->bounded(DB::table('audit_log')->where('entity_type', 'deal')->whereIn('entity_id', $ids)->whereIn('action', ['deal_discount', 'deal_free_trial'])->where('created_at', '<', $toSql)->orderByDesc('id'), ['id', 'platform_id', 'entity_id', 'action', 'actor_id', 'after_state', 'created_at']);
-                $approvalCount += count($rows);
-                if ($approvalCount > self::SOURCE_LIMIT) {
-                    throw new SubscriptionAuditException('Approval history exceeds the bounded build limit.', 'audit_source_limit', 503, -32020);
-                }
-                foreach ($rows as $approval) {
-                    $approvals[(int) $approval->platform_id.':'.(int) $approval->entity_id][] = $approval;
-                }
-            }
+            ['events' => $events, 'deals' => $deals, 'payments' => $payments, 'trialEvidence' => $trialEvidence, 'platforms' => $platforms, 'sourceCounts' => $sourceCounts, 'skippedAttempts' => $skippedAttempts] = $this->sources($from, $to);
+            [$approvals, $approvalCount] = $this->approvalCandidates($events, $to);
             $aliases = Schema::hasTable('mcp_staff_aliases') ? DB::table('mcp_staff_aliases')->where('active', true)->pluck('agent_alias', 'user_id')->all() : [];
             $coverage = [
                 'state' => 'partial', 'time_basis' => 'UTC; from inclusive, to exclusive',
@@ -222,21 +60,8 @@ class SubscriptionAuditBuilder
             $siteCounts = [];
             $batch = [];
             foreach ($events as $event) {
-                $event['approval_candidates'] = [];
-                foreach ($approvals[$event['platform_id'].':'.$event['deal_id']] ?? [] as $approval) {
-                    $after = AuditValue::json($approval->after_state);
-                    $event['approval_candidates'][] = [
-                        'kind' => $approval->action, 'recorded_at' => AuditValue::iso($approval->created_at),
-                        'source_ref' => AuditValue::handle('src', 'approval:'.$approval->id),
-                        'approver_handle' => AuditValue::handle('staff', $after['discount_approved_by'] ?? $after['free_trial_approved_by'] ?? null),
-                        'recording_actor_handle' => AuditValue::handle('staff', $approval->actor_id),
-                        'approval_method' => ($after['approval_mode'] ?? null) === 'pin' ? 'pin_authorisation_recorded' : 'staff_approval_record',
-                        'effect_link' => 'unverified',
-                    ];
-                    if (count($event['approval_candidates']) === 5) {
-                        break;
-                    }
-                }
+                $event['trial_evidence'] = $trialEvidence[$event['payment_id']] ?? null;
+                $event['approval_candidates'] = $approvals[$event['platform_id'].':'.$event['deal_id']] ?? [];
                 $platform = $platforms[$event['platform_id']] ?? null;
                 $host = $platform ? parse_url(str_contains($platform->domain ?? '', '://') ? $platform->domain : 'https://'.($platform->domain ?? ''), PHP_URL_HOST) : null;
                 $row = app(SubscriptionAuditClassifier::class)->project($event, $deals[$event['deal_id']] ?? null, $payments[$event['payment_id']] ?? null, [
@@ -258,10 +83,221 @@ class SubscriptionAuditBuilder
                 $coverage['platforms'][] = ['platform_id' => (int) $platform->id, 'market_label' => $platform->name, 'country' => $platform->country,
                     'state' => isset($siteCounts[$platform->id]) ? 'partial' : 'no_observed_activity', 'event_count' => $siteCounts[$platform->id] ?? 0];
             }
+            unset($events, $deals, $payments, $trialEvidence, $batch, $allocated, $approvals, $aliases);
+            if (Schema::hasTable('subscription_audit_profiles')) {
+                $coverage['profiles'] = app(SubscriptionProfileAuditBuilder::class)->build($run, $profileAsOf, $started);
+            } else {
+                $coverage['profiles'] = ['state' => 'unavailable', 'reason' => 'profile_reporting_migration_missing'];
+            }
+            $coverage['trial_approval_source'] = app(TrialAuditEvidence::class)->available() ? 'available' : 'unavailable';
+            if ($coverage['trial_approval_source'] === 'unavailable') {
+                $coverage['caveats'][] = 'Durable trial approval source tables are unavailable; missing approval evidence may be a source-coverage gap.';
+            }
             $run->update(['coverage' => $coverage, 'status' => 'completed']);
 
-            return $run->fresh();
+            $completed = $run->fresh();
+            if (($coverage['profiles']['state'] ?? null) === 'partial' && microtime(true) - $started > (float) config('mcp.subscription_profiles.build_seconds', 120)) {
+                throw new SubscriptionAuditException('Snapshot completion exceeded its time budget.', 'audit_source_limit', 503, -32020);
+            }
+
+            return $completed;
         }, 1);
+    }
+
+    /** Retained approval candidates are context, not proof of authorising a given effect. */
+    public function approvalCandidates(array $events, CarbonImmutable $to): array
+    {
+        $candidates = [];
+        $count = 0;
+        foreach (array_chunk(array_filter(array_unique(array_column($events, 'deal_id'))), 500) as $ids) {
+            $rows = $this->bounded(DB::table('audit_log')->where('entity_type', 'deal')->whereIn('entity_id', $ids)->whereIn('action', ['deal_discount', 'deal_free_trial'])->where('created_at', '<', $to->toDateTimeString())->orderByDesc('id'), ['id', 'platform_id', 'entity_id', 'action', 'actor_id', 'after_state', 'created_at']);
+            $count += count($rows);
+            if ($count > self::SOURCE_LIMIT) {
+                throw new SubscriptionAuditException('Approval history exceeds the bounded build limit.', 'audit_source_limit', 503, -32020);
+            }
+            foreach ($rows as $approval) {
+                $key = $approval->platform_id.':'.$approval->entity_id;
+                if (count($candidates[$key] ?? []) >= 5) {
+                    continue;
+                }
+                $after = AuditValue::json($approval->after_state);
+                $candidates[$key][] = ['kind' => $approval->action, 'recorded_at' => AuditValue::iso($approval->created_at),
+                    'source_ref' => AuditValue::handle('src', 'approval:'.$approval->id),
+                    'approver_handle' => AuditValue::handle('staff', $after['discount_approved_by'] ?? $after['free_trial_approved_by'] ?? null),
+                    'recording_actor_handle' => AuditValue::handle('staff', $approval->actor_id),
+                    'approval_method' => ($after['approval_mode'] ?? null) === 'pin' ? 'pin_authorisation_recorded' : 'staff_approval_record', 'effect_link' => 'unverified'];
+            }
+        }
+
+        return [$candidates, $count];
+    }
+
+    /** Shared source reconstruction for event windows and all-retained profile history. */
+    public function sources(?CarbonImmutable $from, CarbonImmutable $to, ?array $clientIds = null): array
+    {
+        $dealScope = fn () => DB::table('deals')->whereIn('client_id', $clientIds ?? [])->select('id');
+        $fromSql = $from?->toDateTimeString();
+        $toSql = $to->toDateTimeString();
+        $platforms = DB::table('platforms')->get(['id', 'name', 'domain', 'country', 'currency_code'])->keyBy('id');
+        $audits = $this->bounded(DB::table('audit_log')->where('entity_type', 'deal')->whereIn('action', ['deal_activate', 'deal_renew', 'deal_extend'])->when($clientIds !== null, fn ($q) => $q->where(fn ($q) => $q->whereIn('entity_id', $dealScope())->orWhereIn('after_state->new_deal_id', $dealScope())))->when($fromSql !== null, fn ($q) => $q->where('created_at', '>=', $fromSql))->where('created_at', '<', $toSql)->orderBy('id'), ['id', 'platform_id', 'actor_id', 'entity_id', 'action', 'before_state', 'after_state', 'created_at']);
+        $timeline = $this->bounded(DB::table('timeline_events')->whereIn('event_type', ['subscription_activation_recorded', 'deal_activated', 'deal_extended', 'deal_renewed'])->when($clientIds !== null, fn ($q) => $q->where(fn ($q) => $q->where(fn ($q) => $q->where('entity_type', 'deal')->whereIn('entity_id', $dealScope()))->orWhere(fn ($q) => $q->where('entity_type', 'client')->whereIn('entity_id', $clientIds))->orWhereIn('content->new_deal_id', $dealScope())))->when($fromSql !== null, fn ($q) => $q->where('created_at', '>=', $fromSql))->where('created_at', '<', $toSql)->orderBy('id'), ['id', 'platform_id', 'entity_type', 'entity_id', 'actor_id', 'event_type', 'content', 'created_at']);
+        $dealIds = [];
+        foreach ($audits as $row) {
+            $after = AuditValue::json($row->after_state);
+            $dealIds[] = $row->action === 'deal_renew' ? (int) ($after['new_deal_id'] ?? 0) : (int) $row->entity_id;
+        }
+        foreach ($timeline as $row) {
+            $content = AuditValue::json($row->content);
+            $dealIds[] = (int) ($content['new_deal_id'] ?? $content['deal_id'] ?? ($row->entity_type === 'deal' ? $row->entity_id : 0));
+        }
+        $current = $this->bounded(DB::table('deals')->when($clientIds !== null, fn ($q) => $q->whereIn('client_id', $clientIds))->when($fromSql !== null, fn ($q) => $q->where('activated_at', '>=', $fromSql))->whereNotNull('activated_at')->where('activated_at', '<', $toSql)->orderBy('id'), $this->sourceColumns('deals'));
+        foreach ($current as $deal) {
+            $dealIds[] = (int) $deal->id;
+        }
+        $deals = $this->lookup('deals', array_filter(array_unique($dealIds)));
+        $sourceCounts = ['action_audits' => count($audits), 'success_timelines' => count($timeline), 'current_deals' => count($current)];
+        $events = [];
+        $canonicalLinks = [];
+        $canonicalPayments = [];
+        $exactOperations = [];
+        $representedDeals = [];
+        $representedActivations = [];
+        $skippedAttempts = 0;
+        foreach ($audits as $row) {
+            $before = AuditValue::json($row->before_state);
+            $after = AuditValue::json($row->after_state);
+            $kind = ['deal_activate' => 'activation', 'deal_renew' => 'renewal', 'deal_extend' => 'extension'][$row->action];
+            // Activation initiation audits also exist. They are not successful effects.
+            if ($kind !== 'extension' && ! in_array($after['deal_status'] ?? $after['new_status'] ?? null, ['active', 'expired', 'renewed'], true)) {
+                $skippedAttempts++;
+
+                continue;
+            }
+            if ($kind === 'extension' && ! array_key_exists('expires_at', $after) && ! array_key_exists('new_expires_at', $after)) {
+                $skippedAttempts++;
+
+                continue;
+            }
+            $dealId = $kind === 'renewal' ? (int) ($after['new_deal_id'] ?? 0) : (int) $row->entity_id;
+            $deal = $deals[$dealId] ?? null;
+            $paymentId = $kind === 'extension' ? ($after['extension_payment_id'] ?? null) : ($after['payment_id'] ?? null);
+            $event = $this->event('audit', $row->id, $kind, $row->platform_id, $dealId ?: null, $deal?->client_id, $paymentId, $row->actor_id, $row->created_at, $before, $after);
+            $index = count($events);
+            $events[] = $event;
+            $canonicalLinks[$this->effectLink($event)] = $index;
+            if ($event['payment_id']) {
+                $canonicalPayments[$this->paymentLink($event)] = $index;
+            }
+            $exactOperations[$this->operationLink($event)] = $index;
+            $representedDeals[$dealId] = true;
+            if ($kind !== 'extension') {
+                $representedActivations[$dealId] = true;
+            }
+        }
+        // Prefer the dedicated success snapshot to the older activation timeline.
+        $timeline = collect($timeline)->sortBy(fn ($row) => $row->event_type === 'subscription_activation_recorded' ? 0 : 1)->all();
+        foreach ($timeline as $row) {
+            $content = AuditValue::json($row->content);
+            $dealId = (int) ($content['new_deal_id'] ?? $content['deal_id'] ?? ($row->entity_type === 'deal' ? $row->entity_id : 0));
+            $deal = $deals[$dealId] ?? null;
+            $kind = match ($row->event_type) {
+                'deal_extended' => 'extension',
+                'deal_renewed' => 'renewal',
+                default => ($content['source'] ?? null) === 'crm_extension' ? 'extension'
+                    : ((str_contains((string) ($content['source'] ?? ''), 'renewal') || isset($content['renewed_from_deal_id']) || ($content['subscription_lifecycle'] ?? null) === 'renewal') ? 'renewal' : 'activation'),
+            };
+            // Renewal initiation timeline can precede an actual activation.
+            if ($row->event_type === 'deal_renewed' && ! in_array($content['new_status'] ?? null, ['active', 'expired', 'renewed'], true)) {
+                continue;
+            }
+            $paymentId = $kind === 'extension' && $row->event_type !== 'subscription_activation_recorded'
+                ? ($content['extension_payment_id'] ?? null) : ($content['payment_id'] ?? null);
+            $event = $this->event('timeline', $row->id, $kind, $row->platform_id, $dealId ?: null, $deal?->client_id ?? ($row->entity_type === 'client' ? $row->entity_id : null), $paymentId, $row->actor_id, $row->created_at, [], $content);
+            // Only exact identity links collapse paired representations. A null-payment
+            // extension has no identity safe enough to infer another independent effect.
+            $matched = $canonicalLinks[$this->effectLink($event)] ?? null;
+            if ($matched === null && $paymentId && $kind !== 'extension') {
+                $matched = $canonicalPayments[$this->paymentLink($event)] ?? null;
+            }
+            // A recorder snapshot omits expiry and charge terms. It can support an
+            // exact same recorded operation, never suppress all changes to a deal.
+            if ($matched === null && ($row->event_type === 'subscription_activation_recorded' || $kind === 'extension')) {
+                $operationMatch = $exactOperations[$this->operationLink($event)] ?? null;
+                if ($operationMatch !== null && (! $event['new_expiry_known'] || ! $events[$operationMatch]['new_expiry_known']
+                    || $event['new_expiry'] === $events[$operationMatch]['new_expiry'])) {
+                    $matched = $operationMatch;
+                }
+            }
+            if ($matched !== null) {
+                $this->supplement($events[$matched], $event);
+
+                continue;
+            }
+            if ($row->event_type === 'subscription_activation_recorded' && $kind === 'extension'
+                && ! $event['new_expiry_known'] && isset($representedDeals[$dealId])) {
+                $event['event_type'] = 'observation';
+                $event['match_basis'] = 'unresolved_success_snapshot_context_only';
+                $event['reasons'][] = 'additional_source_representation_unresolved';
+            } elseif (isset($representedDeals[$dealId])) {
+                $event['reasons'][] = 'additional_source_representation_unresolved';
+            }
+            $index = count($events);
+            $events[] = $event;
+            $canonicalLinks[$this->effectLink($event)] = $index;
+            if ($paymentId) {
+                $canonicalPayments[$this->paymentLink($event)] = $index;
+            }
+            $exactOperations[$this->operationLink($event)] = $index;
+            $representedDeals[$dealId] = true;
+            if ($kind !== 'extension') {
+                $representedActivations[$dealId] = true;
+            }
+        }
+        foreach ($current as $deal) {
+            if (isset($representedActivations[(int) $deal->id])) {
+                continue;
+            }
+            $event = $this->event('deal_observation', $deal->id, 'observation', $deal->platform_id, $deal->id, $deal->client_id, $deal->payment_id, null, $deal->activated_at, [], [
+                'amount' => $deal->amount, 'currency' => $deal->currency, 'is_free_trial' => (bool) $deal->is_free_trial,
+                'discount_percentage' => $deal->discount_percentage, 'expires_at' => $deal->expires_at,
+            ]);
+            $event['match_basis'] = 'current_deal_payment_context_only';
+            $events[] = $event;
+        }
+        unset($audits, $timeline, $current, $dealIds);
+        if (count($events) > self::SOURCE_LIMIT) {
+            throw new SubscriptionAuditException('The canonical effect set exceeds the bounded reporting limit.', 'audit_source_limit', 503, -32020);
+        }
+        $paymentIds = array_filter(array_unique(array_column($events, 'payment_id')));
+        $payments = $this->lookup('payments', $paymentIds);
+        // A reverse link is a visible candidate; it does not silently clear an action.
+        $reverse = [];
+        $reverseCount = 0;
+        foreach (array_chunk(array_filter(array_unique(array_column($events, 'deal_id'))), 500) as $ids) {
+            foreach ($this->bounded(DB::table('payments')->whereIn('deal_id', $ids), ['id', 'deal_id']) as $row) {
+                if (++$reverseCount > self::SOURCE_LIMIT) {
+                    throw new SubscriptionAuditException('Reverse-link candidates exceed the bounded reporting limit.', 'audit_source_limit', 503, -32020);
+                }
+                $reverse[(int) $row->deal_id][] = (int) $row->id;
+            }
+        }
+        $candidateIds = [];
+        foreach ($events as &$event) {
+            if (! $event['payment_id'] && $event['event_type'] !== 'extension' && count($reverse[$event['deal_id']] ?? []) === 1) {
+                $event['payment_id'] = $reverse[$event['deal_id']][0];
+                $event['match_basis'] = 'reverse_link_candidate';
+                $candidateIds[] = $event['payment_id'];
+            }
+        }
+        unset($event);
+        $payments += $this->lookup('payments', array_unique($candidateIds));
+        $trialEvidence = app(TrialAuditEvidence::class)->forPayments($payments);
+        if ($clientIds !== null) {
+            $clientSites = DB::table('clients')->whereIn('id', $clientIds)->pluck('platform_id', 'id');
+            $events = array_values(array_filter($events, fn ($event) => isset($clientSites[$event['client_id']]) && (int) $clientSites[$event['client_id']] === (int) $event['platform_id']));
+        }
+
+        return compact('events', 'deals', 'payments', 'trialEvidence', 'platforms', 'sourceCounts', 'skippedAttempts');
     }
 
     /** Prune only derived snapshots; newest completed run and the six-hour cursor buffer survive. */
@@ -298,10 +334,10 @@ class SubscriptionAuditBuilder
     {
         return $table === 'deals'
             ? ['id', 'platform_id', 'client_id', 'payment_id', 'amount', 'currency', 'activated_at', 'expires_at', 'is_free_trial', 'free_trial_approved_by', 'discount_percentage', 'discount_approved_by', 'assigned_to']
-            : ['id', 'platform_id', 'client_id', 'deal_id', 'amount', 'currency', 'status', 'purpose', 'provider_environment', 'record_classification', 'resolution_code', 'reconciliation_state', 'manual_payment_bundle_id', 'wallet_transaction_id', 'confirmed_by', DB::raw("JSON_EXTRACT(payment_data, '$.test_mode') AS audit_test_mode")];
+            : ['id', 'platform_id', 'client_id', 'deal_id', 'amount', 'currency', 'status', 'purpose', 'provider_environment', 'record_classification', 'resolution_code', 'reconciliation_state', 'manual_payment_bundle_id', 'wallet_transaction_id', 'confirmed_by', DB::raw("JSON_EXTRACT(payment_data, '$.test_mode') AS audit_test_mode"), DB::raw((DB::connection()->getDriverName() === 'mysql' ? "JSON_UNQUOTE(JSON_EXTRACT(payment_data, '$.trial_operation_id'))" : "JSON_EXTRACT(payment_data, '$.trial_operation_id')").' AS audit_trial_operation'), DB::raw("JSON_EXTRACT(payment_data, '$.trial_request_id') AS audit_trial_request")];
     }
 
-    private function event(string $source, int $sourceId, string $kind, int $platformId, ?int $dealId, ?int $clientId, mixed $paymentId, ?int $actorId, string $recordedAt, array $before, array $terms): array
+    public function event(string $source, int $sourceId, string $kind, int $platformId, ?int $dealId, ?int $clientId, mixed $paymentId, ?int $actorId, string $recordedAt, array $before, array $terms): array
     {
         if (! isset($terms['payment_method']) && isset($terms['method'])) {
             $terms['payment_method'] = $terms['method'];

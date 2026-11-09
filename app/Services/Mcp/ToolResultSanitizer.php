@@ -24,6 +24,46 @@ class ToolResultSanitizer
         return $value;
     }
 
+    /** Only an authorised report presenter may supply these exact identity locations. */
+    public function auditEnvelope(array $envelope, \App\Services\Mcp\McpAuthorizationContext $auth): array
+    {
+        if (! $auth->allows('mcp:subscription-audit') || ! $auth->allows('mcp:identified-clients') || $auth->user->role !== 'admin' || ! $auth->user->isActive()) {
+            throw new RuntimeException('Named audit context is unavailable.');
+        }
+        $identities = [];
+        foreach (array_keys($envelope['data']['rows'] ?? []) as $index) {
+            if (isset($envelope['data']['rows'][$index]['audit_identity'])) {
+                $identities['rows'][$index] = $envelope['data']['rows'][$index]['audit_identity'];
+                unset($envelope['data']['rows'][$index]['audit_identity']);
+            }
+        }
+        if (isset($envelope['data']['event']['audit_identity'])) {
+            $identities['event'] = $envelope['data']['event']['audit_identity'];
+            unset($envelope['data']['event']['audit_identity']);
+        }
+        $safe = $this->sanitize($envelope);
+        $restore = function (array $identity): array {
+            $url = $identity['profile_url'] ?? null;
+            unset($identity['profile_url']);
+            $identity = $this->sanitize($identity);
+            // The presenter constructs this locator from the bound platform origin.
+            if ($url !== null && (! preg_match('#^https?://[^\s<>]+/\?p=[1-9][0-9]*$#iD', $url) || parse_url($url, PHP_URL_USER) !== null || parse_url($url, PHP_URL_FRAGMENT) !== null)) {
+                throw new RuntimeException('Invalid public profile locator.');
+            }
+            $identity['profile_url'] = $url;
+
+            return $identity;
+        };
+        foreach ($identities['rows'] ?? [] as $index => $identity) {
+            $safe['data']['rows'][$index]['audit_identity'] = $restore($identity);
+        }
+        if (isset($identities['event'])) {
+            $safe['data']['event']['audit_identity'] = $restore($identities['event']);
+        }
+
+        return $safe;
+    }
+
     private function walk(mixed $value): mixed
     {
         if (is_array($value)) {

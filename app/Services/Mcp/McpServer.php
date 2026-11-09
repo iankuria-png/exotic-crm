@@ -76,7 +76,10 @@ class McpServer
             }
 
             $response = $this->success($id, $method, $result, $context);
-            if ($context->enhanced() && $token && ! $this->budget->reserve($token, (int) data_get($result, '_meta.exotic/rowCount', 0), strlen($response->getContent()))) {
+            if ($this->registry->isSubscriptionAudit((string) ($params['name'] ?? ''))) {
+                $response->headers->set('Cache-Control', 'private, no-store');
+            }
+            if (($context->enhanced() || $this->registry->isSubscriptionAudit((string) ($params['name'] ?? ''))) && $token && ! $this->budget->reserve($token, (int) data_get($result, '_meta.exotic/rowCount', 0), strlen($response->getContent()))) {
                 throw McpProtocolException::rpc(-32029, 'MCP daily response budget exhausted.', 'daily_budget', 429);
             }
             $this->audit($request, $method, $params, 'success', null, $response->getData(true), $started, $requestId);
@@ -106,6 +109,7 @@ class McpServer
                 ->where('tokenable_id', $user->id)->where('name', 'like', 'mcp:%')
                 ->whereJsonContains('abilities', 'mcp:subscription-audit')
                 ->whereJsonContains('abilities', 'mcp:tool:'.$name)
+                ->when(($arguments['identified'] ?? false) === true, fn ($query) => $query->whereJsonContains('abilities', 'mcp:identified-clients'))
                 ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()))
                 ->latest('id')->first();
             $abilities = $grant ? (array) $grant->abilities : [];
@@ -285,19 +289,20 @@ class McpServer
         }
         $metadata = array_intersect_key((array) ($data['_report_meta'] ?? []), array_flip(['result_state', 'coverage', 'caveats', 'row_count', 'filters', 'citations']));
         unset($data['_report_meta']);
-        $safe = $this->sanitizer->sanitize($this->projector->project($data));
+        $safe = $this->projector->project($data);
         $rowCount = max(0, (int) ($metadata['row_count'] ?? $this->rowCount($safe)));
-        $envelope = $this->sanitizer->sanitize(ToolResult::envelope($safe, [], array_merge([
+        $envelope = ToolResult::envelope($safe, [], array_merge([
             'filters' => $this->resultFilters($arguments),
             'row_count' => $rowCount,
             'result_state' => 'partial',
-        ], $metadata)));
+        ], $metadata));
+        $envelope = ($arguments['identified'] ?? false) === true ? $this->sanitizer->auditEnvelope($envelope, $auth) : $this->sanitizer->sanitize($envelope);
 
         return [
             'content' => [['type' => 'text', 'text' => $this->serializer->encode($envelope)]],
             'structuredContent' => $envelope,
             'isError' => false,
-            '_meta' => ['exotic/resultType' => $envelope['meta']['result_state'], 'exotic/rowCount' => $rowCount, 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000],
+            '_meta' => ['exotic/resultType' => $envelope['meta']['result_state'], 'exotic/rowCount' => $rowCount, 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 0],
         ];
     }
 
@@ -527,10 +532,19 @@ class McpServer
                 'currency' => (string) $platform->currency_code,
             ])->all();
 
+        $visibleTools = array_column($this->registry->definitions($user, $this->settings, $abilities, $enhanced), 'name');
+
         return [
-            'tools' => array_column($this->registry->definitions($user, $this->settings, $abilities, $enhanced), 'name'),
+            'tools' => $visibleTools,
             'markets' => $markets,
-            'coverage' => ['from' => Client::query()->min('created_at'), 'to' => now()->toDateString()],
+            'coverage' => ['from' => Client::query()->when(is_array($allowed), fn ($query) => $query->whereIn('platform_id', $allowed))->min('created_at'), 'to' => now()->toDateString()],
+            'audit_access' => [
+                'administrator_active' => $user->role === 'admin' && $user->isActive(),
+                'subscription_audit_granted' => in_array('mcp:subscription-audit', $abilities ?? [], true),
+                'identified_clients_granted' => in_array('mcp:identified-clients', $abilities ?? [], true),
+                'named_audit_ready' => count(array_intersect($visibleTools, ['exotic_subscription_audit_profiles', 'exotic_subscription_audit_events', 'exotic_subscription_audit_trace'])) > 0 && $user->role === 'admin' && $user->isActive() && in_array('mcp:subscription-audit', $abilities ?? [], true) && in_array('mcp:identified-clients', $abilities ?? [], true),
+                'instructions' => 'Use the enabled subscription audit profiles tool for active profiles and retained payment history. Named reads require identified=true and purpose. An administrator can enable named audit access in Settings or reconnect with named audit consent.',
+            ],
         ];
     }
 

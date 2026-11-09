@@ -36,18 +36,23 @@ class SubscriptionAuditController extends Controller
             'cursor' => ['sometimes', 'string', 'max:499'],
             'event_ref' => ['sometimes', 'string', 'max:100'],
             'include_identity' => ['sometimes', 'boolean'],
+            'identified' => ['sometimes', 'boolean'],
+            'profile_scope' => ['sometimes', 'in:active,published'],
+            'payment_filter' => ['sometimes', 'in:all,no_successful_cash_payment_in_retained_crm,payment_history_unverified,current_action_payment_unverified,authorised_free,approval_unverified'],
         ]);
         foreach (['platform_id', 'page_size'] as $key) {
             if (isset($arguments[$key])) {
                 $arguments[$key] = (int) $arguments[$key];
             }
         }
-        if (isset($arguments['exceptions_only'])) {
-            $arguments['exceptions_only'] = (bool) $arguments['exceptions_only'];
+        foreach (['exceptions_only', 'identified'] as $key) {
+            if (isset($arguments[$key])) {
+                $arguments[$key] = $request->boolean($key);
+            }
         }
         $includeIdentity = $kind === 'trace' && $request->boolean('include_identity');
         unset($arguments['include_identity']);
-        $auth = McpAuthorizationContext::for($user, ['mcp:read', 'mcp:subscription-audit'], app(MarketAuthorizationService::class));
+        $auth = McpAuthorizationContext::for($user, ['mcp:read', 'mcp:subscription-audit', 'mcp:identified-clients'], app(MarketAuthorizationService::class));
 
         try {
             $data = $reports->report($kind, $arguments, $auth);

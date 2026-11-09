@@ -127,6 +127,35 @@ class McpSubscriptionAuditGrantTest extends TestCase
         $this->postJson('/api/mcp/oauth/token', ['grant_type' => 'refresh_token', 'client_id' => $pair['client_id'], 'refresh_token' => $pair['refresh_token']])->assertForbidden();
     }
 
+    public function test_named_oauth_consent_and_refresh_removal_do_not_resurrect_identity_access(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        [, $parameters] = $this->clientParameters();
+        $this->actingAs($admin, 'web')->get('/mcp/oauth/authorize?'.http_build_query($parameters + ['approved' => 1, 'identified_clients' => 1]))->assertStatus(422);
+        $consent = $this->actingAs($admin, 'web')->post('/mcp/oauth/authorize', $parameters + ['approved' => 1, 'identified_clients' => 1])->assertRedirect();
+        parse_str((string) parse_url($consent->headers->get('Location'), PHP_URL_QUERY), $query);
+        $pair = $this->postJson('/api/mcp/oauth/token', ['grant_type' => 'authorization_code', 'client_id' => $parameters['client_id'], 'code' => $query['code'], 'redirect_uri' => $parameters['redirect_uri'], 'code_verifier' => str_repeat('x', 43)])->assertOk()->json();
+        $token = PersonalAccessToken::findToken($pair['access_token']);
+        $this->assertContains('mcp:identified-clients', $token->abilities);
+        $this->assertContains('mcp:subscription-audit', $token->abilities);
+        $this->assertContains('mcp:tool:exotic_subscription_audit_profiles', $token->abilities);
+        app(McpTokenGrantService::class)->update($token, $admin, ['identified_clients' => false]);
+        $refreshed = $this->postJson('/api/mcp/oauth/token', ['grant_type' => 'refresh_token', 'client_id' => $parameters['client_id'], 'refresh_token' => $pair['refresh_token']])->assertOk();
+        $this->assertNotContains('mcp:identified-clients', PersonalAccessToken::findToken($refreshed->json('access_token'))->abilities);
+    }
+
+    public function test_mint_names_are_explicit_and_non_admin_cannot_request_them(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        Sanctum::actingAs($admin);
+        $mint = $this->postJson('/api/crm/settings/mcp/tokens', ['label' => 'named audit', 'identified_clients' => true])->assertCreated();
+        $this->assertContains('mcp:identified-clients', $mint->json('abilities'));
+        $this->assertContains('mcp:subscription-audit', $mint->json('abilities'));
+        $this->assertContains('mcp:tool:exotic_subscription_audit_profiles', $mint->json('abilities'));
+        $sales = User::factory()->create(['role' => 'sales']);
+        $this->postJson('/api/crm/settings/mcp/tokens', ['label' => 'bad owner', 'owner_id' => $sales->id, 'identified_clients' => true])->assertStatus(422);
+    }
+
     private function clientParameters(): array
     {
         $client = McpOAuthClient::query()->create(['client_id' => (string) \Illuminate\Support\Str::uuid(), 'client_name' => 'Claude or ChatGPT', 'redirect_uris' => ['https://connector.example.test/callback'], 'active' => true]);

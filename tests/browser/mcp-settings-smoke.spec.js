@@ -22,6 +22,8 @@ const settingsPayload = {
     ],
 };
 
+settingsPayload.tools.push({ name: 'exotic_subscription_audit_profiles', title: 'Active profile payment audit', domain: 'subscription_audit', min_role: 'admin', configured_role: 'admin', enabled: true, inputSchema: { properties: { purpose: { type: 'string' } } }, returns_no: ['contacts', 'raw payment references'] });
+
 const activityPayload = {
     rows: [{ id: 1, tool: 'exotic_revenue_summary', token_label: 'ian-laptop', status: 'success', row_count: 12, bytes_out: 1024, latency_ms: 240, created_at: new Date().toISOString(), refusal_reason: null, request_id: 'req-browser-1', argument_summary: { window: 'string' }, platform_scope: { markets: ['Kenya'] }, generated_sql_redacted: null }],
     summary: { calls_today: 12, rows_today: 340, bytes_today: 12400, refusals_today: 1, p95_latency_ms: 412, active_tokens: 2, expiring_tokens: 1 },
@@ -32,10 +34,12 @@ test.describe('MCP settings control station', () => {
     test.afterEach(async ({ page, request }) => cleanupAuthState(page, request));
 
     test('admin can inspect and operate every control-station surface', async ({ page, request }) => {
+        await page.route('**/api/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', json: {} }));
+        let mintedPayload = null;
         await page.route('**/api/crm/settings/billing/overview*', async (route) => route.fulfill({ status: 200, contentType: 'application/json', json: { enabled: false, features: { workspace: false } } }));
         await page.route('**/api/crm/settings/mcp/activity*', async (route) => route.fulfill({ status: 200, contentType: 'application/json', json: activityPayload }));
         await page.route('**/api/crm/settings/mcp/tokens*', async (route) => {
-            if (route.request().method() === 'POST') return route.fulfill({ status: 201, contentType: 'application/json', json: { token: 'mcp-browser-secret', label: 'browser-test', expires_at: new Date(Date.now() + 86400000 * 90).toISOString() } });
+            if (route.request().method() === 'POST') { mintedPayload = route.request().postDataJSON(); return route.fulfill({ status: 201, contentType: 'application/json', json: { token: 'mcp-browser-secret', label: 'browser-test', expires_at: new Date(Date.now() + 86400000 * 90).toISOString() } }); }
             return route.fulfill({ status: 200, contentType: 'application/json', json: { tokens: [{ id: 1, label: 'ian-laptop', owner: 'Ian Kuria', role: 'admin', abilities: ['mcp:read'], status: 'active', expires_at: new Date(Date.now() + 86400000 * 90).toISOString(), last_used_at: new Date().toISOString(), calls_7d: 96, bytes_7d: 8000 }] } });
         });
         await page.route('**/api/crm/settings/mcp/tools/*/preview', async (route) => route.fulfill({ status: 200, contentType: 'application/json', json: { tool: 'exotic_catalog', payload: { tools: ['exotic_catalog'], markets: [] }, bytes: 48, row_count: 0, pii_scan: { clean: true, fields_checked: ['name', 'phone', 'email', 'bio'] } } }));
@@ -76,8 +80,19 @@ test.describe('MCP settings control station', () => {
         await page.getByRole('button', { name: 'Mint token' }).click();
         await expect(page.getByRole('dialog')).toContainText('Mint an MCP token');
         await page.getByLabel('Token label').fill('browser-test');
+        const named = page.getByRole('checkbox', { name: /Include names and public profile links/ });
+        await expect(named).not.toBeChecked();
+        await named.check();
+        await expect(page.getByRole('checkbox', { name: /Include audit reports/ })).toBeChecked();
+        await page.setViewportSize({ width: 390, height: 844 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+        await page.screenshot({ path: 'tests/browser/artifacts/mcp-named-audit-mobile.png' });
+        await page.setViewportSize({ width: 1440, height: 960 });
         await page.getByRole('button', { name: 'Mint token' }).last().click();
         await expect(page.getByRole('button', { name: 'Copy full setup bundle' })).toBeVisible();
+        expect(mintedPayload.identified_clients).toBe(true);
+        expect(mintedPayload.subscription_audit).toBe(true);
+        expect(mintedPayload.tools).toContain('exotic_subscription_audit_profiles');
 
         await page.getByRole('button', { name: /Data & Privacy/ }).click();
         await expect(page.getByRole('heading', { name: 'Payload preview' })).toBeVisible();
@@ -92,8 +107,8 @@ test.describe('MCP settings control station', () => {
         await page.getByRole('button', { name: 'Export CSV' }).click();
 
         await page.getByRole('button', { name: /Guide/ }).click();
-        await expect(page.getByRole('heading', { name: 'Connect your client' })).toBeVisible();
-        await expect(page.getByText('Install the Claude Code command line tool')).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Connect a remote assistant' })).toBeVisible();
+        await expect(page.getByText('Claude Code (optional)', { exact: true })).toBeVisible();
         await page.getByPlaceholder('Ask about revenue, lifecycle, markets or system health').fill('Which markets are growing fastest?');
         await page.getByRole('button', { name: 'Copy prompt' }).click();
         await expect(page.getByRole('button', { name: 'Prompt copied' })).toBeVisible();

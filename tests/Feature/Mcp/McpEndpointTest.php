@@ -269,7 +269,7 @@ class McpEndpointTest extends TestCase
 
         $registry = $this->getJson('/api/crm/settings/mcp')
             ->assertOk()
-            ->assertJsonCount(34, 'tools');
+            ->assertJsonCount(35, 'tools');
         $knowledge = collect($registry->json('tools'))->firstWhere('name', 'exotic_search_knowledge');
         $this->assertSame('rollout', $knowledge['management_mode']);
         $this->assertTrue($knowledge['scope_required']);

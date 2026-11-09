@@ -8,12 +8,30 @@ class SubscriptionAuditClassifier
     public function project(array $event, ?object $deal, ?object $payment, array $platform, array $aliases, array &$allocated): array
     {
         $terms = $event['terms'];
+        $trial = $event['trial_evidence'] ?? null;
+        $trialApplies = ($trial['state'] ?? null) === 'approval_recorded'
+            && (int) $event['platform_id'] === $trial['_platform_id'] && (int) $event['client_id'] === $trial['_client_id']
+            && (int) $event['deal_id'] === $trial['_deal_id'] && (int) $event['payment_id'] === $trial['_payment_id']
+            && ($event['recorded_at'] >= $trial['_dispatched_at'] && $event['recorded_at'] <= $trial['_finalized_at'])
+            && (! $event['new_expiry_known'] || strtotime((string) $event['new_expiry']) === $trial['_expiry']);
+        if (! $trialApplies) {
+            $trial = null;
+        }
+        $synthesizedActor = ($terms['source'] ?? null) === 'trial_approval' || $trialApplies;
+        if ($synthesizedActor) {
+            $event['actor_id'] = null;
+            $event['automatic'] = false;
+        }
         $reasons = $event['reasons'] ?? [];
+        if ($trial && ! $trial['reason_recorded']) {
+            $reasons[] = 'exception_reason_not_recorded';
+        }
+        $approverId = $trialApplies && $trial['approval_method'] === 'pin' ? null : ($trialApplies ? (int) $trial['_authorised_id'] : null);
         $isObservation = $event['event_type'] === 'observation';
         $isExtension = $event['event_type'] === 'extension';
         $method = strtolower((string) ($terms['payment_method'] ?? ''));
         $free = (bool) ($terms['is_free_trial'] ?? ($isObservation ? ($deal->is_free_trial ?? false) : false)) || $method === 'free_trial';
-        $approved = (int) ($terms['free_trial_approved_by'] ?? $terms['discount_approved_by'] ?? 0);
+        $approved = $trialApplies ? (int) $trial['_authorised_id'] : (int) ($terms['free_trial_approved_by'] ?? $terms['discount_approved_by'] ?? 0);
         $currentApprover = (int) ($free ? ($deal->free_trial_approved_by ?? 0) : ($deal->discount_approved_by ?? 0));
         $discount = $terms['discount_percentage'] ?? ($isObservation ? ($deal->discount_percentage ?? null) : null);
         $discountMinor = AuditValue::minor($discount);
@@ -138,8 +156,9 @@ class SubscriptionAuditClassifier
             'deal_handle' => AuditValue::handle('deal', $event['deal_id']),
             'payment_locator' => AuditValue::handle('pay', $event['payment_id']),
             'actor' => $actor,
-            'execution' => $event['automatic'] ? 'automatic_recorded' : ($event['actor_id'] ? 'staff_recorded' : 'unknown'),
-            'approver' => $this->staff($approved ?: null, $aliases),
+            'trial_authorisation' => $trial ? array_filter($trial, fn ($key) => ! str_starts_with($key, '_'), ARRAY_FILTER_USE_KEY) : null,
+            'execution' => $synthesizedActor ? 'unknown_system_mediated' : ($event['automatic'] ? 'automatic_recorded' : ($event['actor_id'] ? 'staff_recorded' : 'unknown')),
+            'approver' => $this->staff($trialApplies ? $approverId : ($approved ?: null), $aliases),
             'current_approval_field' => $currentApprover ? ['staff' => $this->staff($currentApprover, $aliases), 'basis' => 'current_state_not_historical_approval'] : null,
             'payment_confirmer' => $this->staff($payment->confirmed_by ?? null, $aliases),
             'assigned_owner' => $this->staff($deal->assigned_to ?? null, $aliases),
@@ -153,6 +172,7 @@ class SubscriptionAuditClassifier
             'payment_status_now' => $status,
             'payment_status_at_action' => 'not_independently_reconstructed',
             'payment_match_basis' => $matchBasis,
+            'payment_allocation_scope' => $event['allocation_scope'] ?? 'event_window_only',
             'provider_assurance' => 'not_independently_verified',
             'authorisation_state' => $authorisation,
             'approval_evidence_candidates' => $event['approval_candidates'] ?? [],
@@ -174,7 +194,7 @@ class SubscriptionAuditClassifier
             'exception' => count($payload['exception_codes']) > 0, 'population' => $population,
             'source_type' => $event['source_type'], 'source_id' => $event['source_id'],
             'client_id' => $event['client_id'], 'deal_id' => $event['deal_id'], 'payment_id' => $event['payment_id'],
-            'actor_id' => $event['actor_id'], 'approver_id' => $approved ?: null, 'payload' => $payload,
+            'actor_id' => $event['actor_id'], 'approver_id' => $trialApplies ? $approverId : ($approved ?: null), 'payload' => $payload,
         ];
     }
 

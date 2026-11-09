@@ -1,0 +1,93 @@
+{
+  "base_head": "4e75147d108c5d619ab9247fefbacc1de76f4f64",
+  "note": "Prior committed versions only. Actual production backup is mandatory; new reporting table remains. New files can remain inert under old code.",
+  "new_paths": [
+    "app/Services/SubscriptionAudit/SubscriptionAuditIdentityPresenter.php",
+    "app/Services/SubscriptionAudit/SubscriptionProfileAuditBuilder.php",
+    "app/Services/SubscriptionAudit/TrialAuditEvidence.php",
+    "database/migrations/2026_11_09_100000_create_subscription_audit_profiles_table.php",
+    "public/build/assets/app-BXtiOzGc.js"
+  ],
+  "restore": [
+    {
+      "path": "app/Http/Controllers/CRM/McpOAuthController.php",
+      "sha256": "3eae1e31a58ef58fe75eece1e4eab3f501a564a5d2f3e7a27a01f905e303382d"
+    },
+    {
+      "path": "app/Http/Controllers/CRM/McpTokenController.php",
+      "sha256": "9b1230a18fe23eb24a82585b29ff6881ae15cab3029a65d997fc66946a65b049"
+    },
+    {
+      "path": "app/Http/Controllers/CRM/SubscriptionAuditController.php",
+      "sha256": "ba1342bceb3199f4ea24b076d64a9afbfcc5a945f79ef9637a618754b3dede52"
+    },
+    {
+      "path": "app/Services/Mcp/McpServer.php",
+      "sha256": "0a7e46207b7f233f59b67c661889fb0cfbd0f6c02148a74866eebc0a02aa5a99"
+    },
+    {
+      "path": "app/Services/Mcp/ToolRegistry.php",
+      "sha256": "bca93f8702f901425340713280374c1f7b9ee2ff76b3ff92118234b6bc633839"
+    },
+    {
+      "path": "app/Services/Mcp/ToolResultSanitizer.php",
+      "sha256": "72e34802b82989e79a7e84abf0495915fbdf941bd8be430b56f46ebc869d2bb9"
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/SubscriptionAuditBuilder.php",
+      "sha256": "07df85e1c5a004bd15604b7cfdf043bfaede2ea29fc0fe120a039a9aee4775b8"
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/SubscriptionAuditClassifier.php",
+      "sha256": "08034e3333ec67377136f8f26dfa1c440601b1203191ae865ef6f93e21b32e6a"
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/SubscriptionAuditService.php",
+      "sha256": "868b6d544e1eebd9c8f67341ba73aa589b2a103e55ca3c21ff230419e0913144"
+    },
+    {
+      "path": "config/mcp.php",
+      "sha256": "214308ed71057525e59bb3c253ffa1ace80598b7121fb569f59a1b0d8295922d"
+    },
+    {
+      "path": "docs/subscription-audit-operations.md",
+      "sha256": "7f168cfa29971babaa688535ec0ec9132681fd64d7576183bf50821d3e272c5a"
+    },
+    {
+      "path": "public/build/assets/app-DCOESuqC.css",
+      "sha256": "6162d3339de0782f8867345b0aca3d4afd5e3ec075d4ba12bcd1204698215ed0"
+    },
+    {
+      "path": "public/build/assets/layers-2x-Bpkbi35X.png",
+      "sha256": "066daca850d8ffbef007af00b06eac0015728dee279c51f3cb6c716df7c42edf"
+    },
+    {
+      "path": "public/build/assets/layers-BWBAp2CZ.png",
+      "sha256": "1dbbe9d028e292f36fcba8f8b3a28d5e8932754fc2215b9ac69e4cdecf5107c6"
+    },
+    {
+      "path": "public/build/assets/marker-icon-hN30_KVU.png",
+      "sha256": "574c3a5cca85f4114085b6841596d62f00d7c892c7b03f28cbfa301deb1dc437"
+    },
+    {
+      "path": "public/build/manifest.json",
+      "sha256": "33e7bd6ec6aa880e32db3df2700d343845e1d5c2e5b9234284d4ce1a7bc13034"
+    },
+    {
+      "path": "resources/js/components/settings/McpWorkspacePanel.jsx",
+      "sha256": "9a94d074651d1678b2053ba03a2ea209fba878a9fdfaaf811642d255cd08f7a6"
+    },
+    {
+      "path": "routes/api.php",
+      "sha256": "7b736fb5715f7d77a1894f8fdf562307a223ca771860d55ef5ecfb9bafb83d91"
+    },
+    {
+      "path": "public/build/assets/app-CJMe8T83.css",
+      "sha256": "527c5e5753b0ff94696a89fdc1c6eac26f0bdc13cca7cb006591e1b201178cab"
+    },
+    {
+      "path": "public/build/assets/app-CNO4h4rO.js",
+      "sha256": "d1ddc924a1045ca88c9ac42bcd9507af0466b952176c905e5caf927e4b8b2476"
+    }
+  ]
+}

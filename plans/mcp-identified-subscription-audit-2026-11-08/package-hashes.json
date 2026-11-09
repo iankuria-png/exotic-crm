@@ -1,0 +1,12 @@
+[
+  {
+    "name": "crm-mcp-named-audit-2026-11-09.zip",
+    "sha256": "85f6137df9088609b9f2f225ca83129891b9a1d17eeb06fa044e22b64a1eed9c",
+    "bytes": 1519467
+  },
+  {
+    "name": "crm-mcp-named-audit-rollback-2026-11-09.zip",
+    "sha256": "e6e3e529e494e9c4f6a1d4ff221f474a5c288b440f243c26af8f30d22fa7852b",
+    "bytes": 1537753
+  }
+]

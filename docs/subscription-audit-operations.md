@@ -1,5 +1,33 @@
 # Subscription audit reporting
 
+## Named profile audit extension — release prepared 9 November 2026
+
+The named-profile extension is included in this CRM release; deployment and management-account acceptance must be recorded separately. It adds `exotic_subscription_audit_profiles`, named event/trace enrichment, and explicit named-audit consent. The previous release notes below describe the original four anonymous event tools.
+
+An active administrator connection needs the explicit tool permission and `mcp:subscription-audit`. Named reads additionally require `mcp:identified-clients`, `identified=true` and a purpose of 3–160 characters. Select **Include names and public profile links** when minting a token, edit an existing grant to select the profile/event/trace tools and identified-client capability, or reconnect through OAuth and select **Include named subscription audits**. These choices are unchecked by default. Named audits require no additional confirmation on each page; the existing client queue still uses its confirmation flag. Revoked capabilities remain revoked through OAuth refresh. Settings preview uses one eligible owned grant rather than combining separate tokens.
+
+The catalog reports this connection's effective audit capabilities. It does not establish another manager's permissions. Named responses are private/no-store, carry zero result-cache TTL, and require a successful dedicated audit-log write. Generic tool logs retain only keyed argument digests and counts. Contact details, arbitrary reasons, raw payment references and internal CRM links remain excluded.
+
+Management prompts:
+
+1. “For an authorised subscription audit, show active profiles in Kenya with no successful cash payment found in retained CRM records. Include names, public profile URLs, the latest evidenced activation date, activation staff, payment evidence and exception authorisation. State missing evidence and snapshot freshness.”
+2. “Using that same run, list every remaining page and reconcile unique profile references with the total.”
+3. “Show profiles whose payment history remains unverified, including wallet-funding and conflicting-payment evidence.”
+4. “Show profiles with unverified payment for their latest subscription action, including those that have paid previously.”
+5. “Trace this event from the same run with identified=true for management review. Separate the executor, assigned owner, payment confirmer and authoriser.”
+
+Profile and trace findings share retained payment allocation and approval-candidate logic. During a new build, profile history refines matching event rows in that same unpublished transaction; completed runs are never revised. Each event exposes its payment allocation scope. Historical events for closed/deleted profiles without a profile projection retain an explicit event-window-only scope.
+
+The profile tool accepts `purpose`, `run_ref`, `platform_id`, `country`, `identified`, `profile_scope=active|published`, `payment_filter`, `page_size` (1–100) and `cursor`. Supported payment filters: `all`, `no_successful_cash_payment_in_retained_crm`, `payment_history_unverified`, `current_action_payment_unverified`, `authorised_free`, `approval_unverified`. It deliberately does not accept event date/population filters. Active means the established CRM business-active definition; published also includes SEO-retained inactive profiles. `profile_as_of` identifies the current cached population/payment status separately from the possibly historical event window. Every non-closed cached profile is represented, including no-deal profiles and older activations. Per-profile cache/expiry discrepancies stay visible.
+
+No-retained-cash means no qualifying positive cash subscription/top-up record and no unresolved candidate that could establish cash. It never proves lifetime nonpayment. Wallet subscription debits do not count as cash receipts; cash top-ups establish cash history but do not prove allocation to a specific purchase. Test, reversed, disputed, conflicting, duplicate-receipt and incomplete collection/bundle evidence cannot silently establish successful cash. Other valid cash does not erase unresolved-candidate review flags. Currency totals count allocated records separately by currency and do not count wallet debits again.
+
+Names and the `/?p=…` public WordPress locator are current identity labels. The URL is not asserted to be the canonical slug. Both profile rows and event traces check the same frozen platform/client/WP-post/WP-user bindings; changed or unavailable bindings produce `identity_unavailable`. Old runs without a profile projection cannot resolve an unchecked new URL. Deleted staff remain former/unavailable. Latest activation requires a recorded effect; a mutable deal timestamp alone is an observation. Outside-window action evidence retains opaque provenance and an explicit unavailable trace state.
+
+Durable trial request/operation/event records supply exact approval provenance. A PIN-authorised staff member is an authoriser; they are not presented as a named administrator approver or proven executor. Both known trial dispatch/activation actor fields are synthesized from the authoriser and cannot independently prove execution. Unrecorded execution remains unknown/system-mediated. Trial source availability appears in coverage/caveats.
+
+Deployment adds only `database/migrations/2026_11_09_100000_create_subscription_audit_profiles_table.php` and rebuilds reporting snapshots. See `plans/mcp-identified-subscription-audit-2026-11-08/delivery.md` for the exact package, validation and commands. The build reserves the existing CLI memory allowance, uses 500-profile chunks, caps the profile population at 300,000 and rejects a run exceeding its 120-second build budget. Event-source bounds remain in effect. Failure rolls back the derived run and keeps the prior completed report; six-hour retention and 15-minute cursors remain. Rollback retains the derived table. No WordPress upload, payment write, activation or policy change is part of this release.
+
 This release delivers the subscription action report, payment exceptions, staff/approval trace, per-currency potential exposure and read-only access through both ChatGPT and Claude. Authenticated CRM report endpoints consume the same service. It uses retained CRM evidence; independent provider/statement verification, new WordPress event capture and EWMS-specific bindings are separate work.
 
 ## Deploy after the authorised CRM push

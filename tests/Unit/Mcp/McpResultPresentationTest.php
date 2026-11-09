@@ -24,12 +24,15 @@ class McpResultPresentationTest extends TestCase
         $this->assertSame(7.777777777777, $payload['rate']);
     }
 
-    public function test_agent_performance_uses_staff_names_without_internal_ids_for_admins(): void
+    public function test_agent_performance_preserves_alias_only_identity_outside_named_audits(): void
     {
         $admin = new User(['role' => 'admin']);
-        $payload = (new AgentPerformancePresenter)->present(['agents' => [['id' => 18, 'name' => 'Jane Agent', 'role' => 'sales']]], $admin);
+        $aliases = \Mockery::mock(\App\Services\Mcp\McpStaffAliasService::class);
+        $aliases->shouldReceive('aliasFor')->once()->with(18)->andReturn('synthetic-sales');
+        $payload = (new AgentPerformancePresenter($aliases))->present(['agents' => [['id' => 18, 'name' => 'Jane Agent', 'role' => 'sales']]], $admin);
 
-        $this->assertSame('Jane Agent', $payload['agents'][0]['agent_display_name']);
+        $this->assertSame('synthetic-sales', $payload['agents'][0]['agent_alias']);
+        $this->assertArrayNotHasKey('agent_display_name', $payload['agents'][0]);
         $this->assertArrayNotHasKey('id', $payload['agents'][0]);
         $this->assertArrayNotHasKey('name', $payload['agents'][0]);
     }

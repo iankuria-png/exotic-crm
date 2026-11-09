@@ -16,8 +16,15 @@ class SubscriptionAuditService
         if ($auth->user->role !== 'admin' || ! $auth->user->isActive() || ! $auth->allows('mcp:subscription-audit')) {
             throw new SubscriptionAuditException('An active administrator audit grant is required.', 'audit_forbidden', 403, -32011);
         }
-        if (! in_array($kind, ['summary', 'events', 'trace', 'coverage'], true)) {
+        if (! in_array($kind, ['summary', 'events', 'trace', 'coverage', 'profiles'], true)) {
             throw new SubscriptionAuditException('Unknown subscription audit report.');
+        }
+        if (isset($arguments['identified']) && ! is_bool($arguments['identified'])) {
+            throw new SubscriptionAuditException('identified must be a boolean.');
+        }
+        $identified = $arguments['identified'] ?? false;
+        if ($identified && (! in_array($kind, ['events', 'trace', 'profiles'], true) || ! $auth->allows('mcp:identified-clients'))) {
+            throw new SubscriptionAuditException('Enable named audit access on this administrator connection in Settings or reconnect with named audit consent.', 'identified_audit_denied', 403, -32011);
         }
         $purpose = trim((string) ($arguments['purpose'] ?? ''));
         if (mb_strlen($purpose) < 3 || mb_strlen($purpose) > 160) {
@@ -37,7 +44,13 @@ class SubscriptionAuditService
         if (! $run) {
             throw new SubscriptionAuditException('No completed subscription audit snapshot is available. Build the reporting snapshot first.', 'audit_unavailable', 503, -32020);
         }
-        $filters = $this->filters($arguments, $run, $auth);
+        if ($kind === 'profiles') {
+            return $this->profiles($run, $arguments, $auth, $cursor, $purpose, $identified);
+        }
+        if ($cursor && $kind !== 'events') {
+            throw new SubscriptionAuditException('Only paged reports accept a cursor.');
+        }
+        $filters = $this->filters($arguments, $run, $auth) + ['report' => $kind, 'identified' => $identified];
         $query = $this->query($run, $filters, $auth);
         $total = (clone $query)->count();
         $coverage = $this->coverage($run, $filters, $auth);
@@ -54,6 +67,10 @@ class SubscriptionAuditService
             $returned = $total;
         } elseif ($kind === 'coverage') {
             $data['coverage'] = $coverage;
+            $data['source_availability'] = ['durable_trial_approvals' => $run->coverage['trial_approval_source'] ?? 'unknown'];
+            $data['profile_coverage'] = ['profile_as_of' => data_get($run->coverage, 'profiles.profile_as_of'),
+                'state' => data_get($run->coverage, 'profiles.state', 'unavailable'),
+                'platforms' => array_values(array_filter(data_get($run->coverage, 'profiles.platforms', []), fn ($site) => in_array($site['platform_id'], array_column($coverage, 'platform_id'), true)))];
             $data['source_counts'] = $auth->platformIds === null && $filters['platform_id'] === null && $filters['country'] === null ? ($run->coverage['source_counts'] ?? []) : [];
             $returned = count($coverage);
         } elseif ($kind === 'trace') {
@@ -61,11 +78,11 @@ class SubscriptionAuditService
             if (! preg_match('/^evt_[a-f0-9]{64}$/D', $ref)) {
                 throw new SubscriptionAuditException('Provide a valid opaque event reference.');
             }
-            $event = (clone $query)->where('event_ref', $ref)->first(['payload']);
+            $event = (clone $query)->where('event_ref', $ref)->first();
             if (! $event) {
                 throw new SubscriptionAuditException('The audit event is unavailable in this authorised report scope.', 'audit_event_not_found', 404, -32004);
             }
-            $data['event'] = AuditValue::json($event->payload);
+            $data['event'] = $this->identity(AuditValue::json($event->payload), $event, $auth, $identified);
             $returned = 1;
         } else {
             $pageSize = filter_var($arguments['page_size'] ?? 50, FILTER_VALIDATE_INT);
@@ -76,22 +93,116 @@ class SubscriptionAuditService
             if ($cursor && ((int) $cursor['r'] !== (int) $run->id || ! hash_equals($digest, (string) $cursor['h']))) {
                 throw new SubscriptionAuditException('The cursor does not match the current report filters or authorisation scope.', 'audit_cursor_mismatch');
             }
-            $page = (clone $query)->when($cursor, fn (Builder $q) => $q->where('id', '>', (int) $cursor['i']))->orderBy('id')->limit($pageSize + 1)->get(['id', 'payload']);
+            $page = (clone $query)->when($cursor, fn (Builder $q) => $q->where('id', '>', (int) $cursor['i']))->orderBy('id')->limit($pageSize + 1)->get();
             $hasMore = $page->count() > $pageSize;
             $page = $page->take($pageSize);
-            $data['rows'] = $page->map(fn ($row) => AuditValue::json($row->payload))->values()->all();
+            $data['rows'] = $page->map(fn ($row) => $this->identity(AuditValue::json($row->payload), $row, $auth, $identified))->values()->all();
             $data['returned_count'] = $page->count();
             $data['next_cursor'] = $hasMore ? $this->encodeCursor(['r' => (int) $run->id, 'i' => (int) $page->last()->id, 'h' => $digest, 'e' => time() + 900]) : null;
             $returned = $page->count();
         }
-        DB::table('audit_log')->insert(['platform_id' => $filters['platform_id'], 'actor_id' => $auth->user->id,
+        $this->writeReadAudit(['platform_id' => $filters['platform_id'], 'actor_id' => $auth->user->id,
             'action' => 'subscription_audit_report_read', 'entity_type' => 'subscription_audit_run', 'entity_id' => $run->id,
             'before_state' => null, 'after_state' => json_encode(['report' => $kind, 'run_ref' => $run->run_ref, 'filters' => $filters, 'returned_count' => $returned], JSON_THROW_ON_ERROR),
             'reason' => $purpose, 'ip_address' => null, 'created_at' => now('UTC')]);
+        $this->identityRead($kind, $run, $filters, $auth, $purpose, $identified, $data['rows'] ?? (isset($data['event']) ? [$data['event']] : []));
         $data['_report_meta'] = ['result_state' => 'partial', 'filters' => $filters + ['purpose_recorded' => true], 'coverage' => $coverage,
             'row_count' => $returned, 'caveats' => $caveats, 'citations' => [['source' => 'retained_crm_audit_snapshot', 'reference' => $run->run_ref, 'as_of' => $run->as_of->toIso8601String()]]];
 
         return $data;
+    }
+
+    private function writeReadAudit(array $row): void
+    {
+        try {
+            DB::table('audit_log')->insert($row);
+        } catch (\Throwable) {
+            // Do not send purpose/bindings to the generic exception logger.
+            throw new SubscriptionAuditException('The audit read could not be logged. No report identities were returned.', 'audit_log_unavailable', 503, -32020);
+        }
+    }
+
+    private function identity(array $payload, object $row, McpAuthorizationContext $auth, bool $identified): array
+    {
+        return $identified ? app(SubscriptionAuditIdentityPresenter::class)->enrich($payload, $row, $auth) : $payload;
+    }
+
+    private function identityRead(string $kind, SubscriptionAuditRun $run, array $filters, McpAuthorizationContext $auth, string $purpose, bool $identified, array $rows): void
+    {
+        if (! $identified) {
+            return;
+        }
+        $this->writeReadAudit(['platform_id' => $filters['platform_id'], 'actor_id' => $auth->user->id,
+            'action' => 'subscription_audit_identity_read', 'entity_type' => 'subscription_audit_run', 'entity_id' => $run->id,
+            'after_state' => json_encode(['report' => $kind, 'run_ref' => $run->run_ref, 'scope_digest' => $this->cursorDigest($run, $filters, $auth),
+                'returned_count' => count($rows), 'references' => array_values(array_filter(array_map(fn ($row) => $row['profile_ref'] ?? $row['event_ref'] ?? null, $rows)))], JSON_THROW_ON_ERROR),
+            'reason' => $purpose, 'created_at' => now('UTC')]);
+    }
+
+    private function profiles(SubscriptionAuditRun $run, array $args, McpAuthorizationContext $auth, ?array $cursor, string $purpose, bool $identified): array
+    {
+        if (! Schema::hasTable('subscription_audit_profiles') || data_get($run->coverage, 'profiles.state') !== 'partial') {
+            throw new SubscriptionAuditException('This run has no complete profile projection. Apply the profile reporting migration and build a new snapshot.', 'audit_unavailable', 503, -32020);
+        }
+        foreach (['from', 'to', 'population', 'event_type', 'staff_handle', 'exceptions_only', 'event_ref'] as $key) {
+            if (array_key_exists($key, $args)) {
+                throw new SubscriptionAuditException('Profile history uses all retained records; event-window filters are not supported.');
+            }
+        }
+        $scope = $args['profile_scope'] ?? 'active';
+        $payment = $args['payment_filter'] ?? 'all';
+        if (! in_array($scope, ['active', 'published'], true) || ! in_array($payment, ['all', 'no_successful_cash_payment_in_retained_crm', 'payment_history_unverified', 'current_action_payment_unverified', 'authorised_free', 'approval_unverified'], true)) {
+            throw new SubscriptionAuditException('Choose a supported profile scope and payment filter.');
+        }
+        $siteFilters = $this->filters(array_intersect_key($args, array_flip(['platform_id', 'country'])), $run, $auth);
+        $filters = array_intersect_key($siteFilters, array_flip(['platform_id', 'country'])) + ['report' => 'profiles', 'profile_scope' => $scope, 'payment_filter' => $payment, 'identified' => $identified];
+        $digest = $this->cursorDigest($run, $filters, $auth);
+        if ($cursor && ((int) $cursor['r'] !== (int) $run->id || ! hash_equals($digest, (string) $cursor['h']))) {
+            throw new SubscriptionAuditException('The cursor does not match this profile report or current access.', 'audit_cursor_mismatch');
+        }
+        $query = DB::table('subscription_audit_profiles')->where('run_id', $run->id)
+            ->when($auth->platformIds !== null, fn ($q) => $q->whereIn('platform_id', $auth->platformIds))
+            ->when($filters['platform_id'] !== null, fn ($q) => $q->where('platform_id', $filters['platform_id']))
+            ->when($filters['country'] !== null, fn ($q) => $q->where('country', $filters['country']))
+            ->where($scope === 'active' ? 'business_active' : 'published', true);
+        match ($payment) {
+            'no_successful_cash_payment_in_retained_crm' => $query->where('payment_history_state', 'no_retained_cash'),
+            'payment_history_unverified' => $query->where('payment_history_state', 'payment_history_unverified'),
+            'current_action_payment_unverified' => $query->whereNotIn('action_payment_state', ['crm_recorded_only', 'authorised_free_record']),
+            'authorised_free' => $query->where('action_payment_state', 'authorised_free_record'),
+            'approval_unverified' => $query->whereIn('authorisation_state', ['not_recorded', 'approval_not_recorded', 'approval_evidence_available_link_unverified']),
+            default => null,
+        };
+        $total = (clone $query)->count();
+        $groups = (clone $query)->select('payment_history_state', DB::raw('COUNT(*) as profile_count'))->groupBy('payment_history_state')->get()->all();
+        $size = filter_var($args['page_size'] ?? 50, FILTER_VALIDATE_INT);
+        if ($size === false || $size < 1 || $size > 100) {
+            throw new SubscriptionAuditException('Page size must be between 1 and 100.');
+        }
+        $page = (clone $query)->when($cursor, fn ($q) => $q->where('id', '>', (int) $cursor['i']))->orderBy('id')->limit($size + 1)->get();
+        $more = $page->count() > $size;
+        $page = $page->take($size);
+        $rows = $page->map(fn ($row) => $this->identity(AuditValue::json($row->payload), $row, $auth, $identified))->all();
+        $coverage = $this->coverage($run, $siteFilters, $auth);
+        $allowedSites = array_column($coverage, 'platform_id');
+        $profileCoverage = array_values(array_filter(data_get($run->coverage, 'profiles.platforms', []), fn ($site) => in_array($site['platform_id'], $allowedSites, true)));
+        $this->identityRead('profiles', $run, $filters, $auth, $purpose, $identified, $rows);
+        if (! $identified) {
+            $this->writeReadAudit(['platform_id' => $filters['platform_id'], 'actor_id' => $auth->user->id, 'action' => 'subscription_audit_report_read',
+                'entity_type' => 'subscription_audit_run', 'entity_id' => $run->id, 'reason' => $purpose, 'created_at' => now('UTC')]);
+        }
+
+        return ['run_ref' => $run->run_ref, 'rule_version' => $run->rule_version, 'profile_as_of' => data_get($run->coverage, 'profiles.profile_as_of'),
+            'payment_history_basis' => 'all_retained_crm_at_profile_as_of', 'history_completeness' => 'retention_and_direct_wordpress_gaps_unknown',
+            'event_window' => ['from' => $run->from_at->toIso8601String(), 'to_exclusive' => $run->to_at->toIso8601String()],
+            'total_matching' => $total, 'by_payment_history' => array_map(fn ($row) => (array) $row, $groups), 'rows' => $rows, 'returned_count' => count($rows),
+            'next_cursor' => $more ? $this->encodeCursor(['r' => (int) $run->id, 'i' => (int) $page->last()->id, 'h' => $digest, 'e' => time() + 900]) : null,
+            '_report_meta' => ['result_state' => 'partial', 'filters' => $filters + ['purpose_recorded' => true], 'coverage' => $profileCoverage, 'row_count' => count($rows),
+                'caveats' => array_merge($run->coverage['caveats'] ?? [], ['Profile membership and payment status are current cached state at profile_as_of; the event window can be historical.',
+                    'No successful cash payment found in retained CRM records never certifies lifetime nonpayment.',
+                    'Missing or mixed wallet funding remains unverified; cash top-ups do not prove allocation to an individual purchase.'],
+                    $run->as_of->lt(CarbonImmutable::now('UTC')->subHours(2)) ? ['The reporting snapshot is older than two hours.'] : []),
+                'citations' => [['source' => 'retained_crm_profile_snapshot', 'reference' => $run->run_ref]]]];
     }
 
     private function filters(array $args, SubscriptionAuditRun $run, McpAuthorizationContext $auth): array

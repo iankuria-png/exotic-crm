@@ -1,0 +1,144 @@
+{
+  "base_head": "4e75147d108c5d619ab9247fefbacc1de76f4f64",
+  "status": "release_prepared_production_deployment_pending",
+  "files": [
+    {
+      "path": "app/Http/Controllers/CRM/McpOAuthController.php",
+      "sha256": "aec69467358e6e2a479912853d7119e5eb5b321557cdf6286060ab9c1d5a07a5",
+      "expected_prior_sha256": "3eae1e31a58ef58fe75eece1e4eab3f501a564a5d2f3e7a27a01f905e303382d",
+      "bytes": 13167
+    },
+    {
+      "path": "app/Http/Controllers/CRM/McpTokenController.php",
+      "sha256": "9fab6732f6945843bbeea1bb51f165214cc673ee709993b29fbf79e5375b0150",
+      "expected_prior_sha256": "9b1230a18fe23eb24a82585b29ff6881ae15cab3029a65d997fc66946a65b049",
+      "bytes": 9322
+    },
+    {
+      "path": "app/Http/Controllers/CRM/SubscriptionAuditController.php",
+      "sha256": "f80ecb269e814e9dc71797db3ed7fdea0530dfd5259904292424e5da1ebee432",
+      "expected_prior_sha256": "ba1342bceb3199f4ea24b076d64a9afbfcc5a945f79ef9637a618754b3dede52",
+      "bytes": 5106
+    },
+    {
+      "path": "app/Services/Mcp/McpServer.php",
+      "sha256": "27aa3b97b0de2230d13edcc47e7e4363563ffe48ba40ec25f4021e6397dfccec",
+      "expected_prior_sha256": "0a7e46207b7f233f59b67c661889fb0cfbd0f6c02148a74866eebc0a02aa5a99",
+      "bytes": 48725
+    },
+    {
+      "path": "app/Services/Mcp/ToolRegistry.php",
+      "sha256": "7506043c0a0e27344d3b8d16b555ef2bd3242a6ed43a5a370e437dab09fad832",
+      "expected_prior_sha256": "bca93f8702f901425340713280374c1f7b9ee2ff76b3ff92118234b6bc633839",
+      "bytes": 26327
+    },
+    {
+      "path": "app/Services/Mcp/ToolResultSanitizer.php",
+      "sha256": "0d4f570bb6f49d1ad9dcd11f989bb1b86fd0c0f49b844022fc67c54792774e75",
+      "expected_prior_sha256": "72e34802b82989e79a7e84abf0495915fbdf941bd8be430b56f46ebc869d2bb9",
+      "bytes": 3683
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/SubscriptionAuditBuilder.php",
+      "sha256": "a1f71cccf57ab31985662ffbf51c577fdfde2411cb3c58f1f346cbf4c66f713e",
+      "expected_prior_sha256": "07df85e1c5a004bd15604b7cfdf043bfaede2ea29fc0fe120a039a9aee4775b8",
+      "bytes": 25667
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/SubscriptionAuditClassifier.php",
+      "sha256": "4495756f0e676c58d955ef2072348622c6f8da3d55ed14cd469533c58af821d5",
+      "expected_prior_sha256": "08034e3333ec67377136f8f26dfa1c440601b1203191ae865ef6f93e21b32e6a",
+      "bytes": 13274
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/SubscriptionAuditIdentityPresenter.php",
+      "sha256": "e0251bb08e687ea78eb08ced24406560a5dcf4dbb8eff64f4b1f18c3e2fd6bf3",
+      "expected_prior_sha256": null,
+      "bytes": 3971
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/SubscriptionAuditService.php",
+      "sha256": "b597a15eb090b417bc4472f4dd794b6573a4b246b5fb818c66515e2d6d475d62",
+      "expected_prior_sha256": "868b6d544e1eebd9c8f67341ba73aa589b2a103e55ca3c21ff230419e0913144",
+      "bytes": 25418
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/SubscriptionProfileAuditBuilder.php",
+      "sha256": "5ccac36c27d2dda1546f7ae4903b4ecbbbbc234146cf967c16d899f1a6a00338",
+      "expected_prior_sha256": null,
+      "bytes": 19683
+    },
+    {
+      "path": "app/Services/SubscriptionAudit/TrialAuditEvidence.php",
+      "sha256": "aaeba0809dc665edafdc26f00fe6c9d8bb634f33b71307c5585b8d3a92861849",
+      "expected_prior_sha256": null,
+      "bytes": 5457
+    },
+    {
+      "path": "config/mcp.php",
+      "sha256": "05853d732ce4bbaa5973bc854f1232227972b6fe844a9f4e5368f21517e3bec7",
+      "expected_prior_sha256": "214308ed71057525e59bb3c253ffa1ace80598b7121fb569f59a1b0d8295922d",
+      "bytes": 5695
+    },
+    {
+      "path": "database/migrations/2026_11_09_100000_create_subscription_audit_profiles_table.php",
+      "sha256": "60a54d632ff660a0dec080145c1b3559f6d8c1cefa5de76a104e94ad65122f7f",
+      "expected_prior_sha256": null,
+      "bytes": 1533
+    },
+    {
+      "path": "docs/subscription-audit-operations.md",
+      "sha256": "51ccb65bc197cef824aa7ae346a92c9c7f8660055b2c151c9be6f3ff53e9dd45",
+      "expected_prior_sha256": "7f168cfa29971babaa688535ec0ec9132681fd64d7576183bf50821d3e272c5a",
+      "bytes": 13214
+    },
+    {
+      "path": "public/build/assets/app-BXtiOzGc.js",
+      "sha256": "055039decd9bacd353f93c166cf94b68185c84a29ec4a328de523398f823fd22",
+      "expected_prior_sha256": null,
+      "bytes": 5612674
+    },
+    {
+      "path": "public/build/assets/app-DCOESuqC.css",
+      "sha256": "6162d3339de0782f8867345b0aca3d4afd5e3ec075d4ba12bcd1204698215ed0",
+      "expected_prior_sha256": "6162d3339de0782f8867345b0aca3d4afd5e3ec075d4ba12bcd1204698215ed0",
+      "bytes": 280836
+    },
+    {
+      "path": "public/build/assets/layers-2x-Bpkbi35X.png",
+      "sha256": "066daca850d8ffbef007af00b06eac0015728dee279c51f3cb6c716df7c42edf",
+      "expected_prior_sha256": "066daca850d8ffbef007af00b06eac0015728dee279c51f3cb6c716df7c42edf",
+      "bytes": 1259
+    },
+    {
+      "path": "public/build/assets/layers-BWBAp2CZ.png",
+      "sha256": "1dbbe9d028e292f36fcba8f8b3a28d5e8932754fc2215b9ac69e4cdecf5107c6",
+      "expected_prior_sha256": "1dbbe9d028e292f36fcba8f8b3a28d5e8932754fc2215b9ac69e4cdecf5107c6",
+      "bytes": 696
+    },
+    {
+      "path": "public/build/assets/marker-icon-hN30_KVU.png",
+      "sha256": "574c3a5cca85f4114085b6841596d62f00d7c892c7b03f28cbfa301deb1dc437",
+      "expected_prior_sha256": "574c3a5cca85f4114085b6841596d62f00d7c892c7b03f28cbfa301deb1dc437",
+      "bytes": 1466
+    },
+    {
+      "path": "public/build/manifest.json",
+      "sha256": "26e1d715375a049730c0aa4cbb11eee3a14fa227e3ca3dafc51575b5a3f1b8c7",
+      "expected_prior_sha256": "33e7bd6ec6aa880e32db3df2700d343845e1d5c2e5b9234284d4ce1a7bc13034",
+      "bytes": 880
+    },
+    {
+      "path": "resources/js/components/settings/McpWorkspacePanel.jsx",
+      "sha256": "bf17a541c6a228f8df642ad1a868460c272f61a04676902cec12b9f19972a9ea",
+      "expected_prior_sha256": "9a94d074651d1678b2053ba03a2ea209fba878a9fdfaaf811642d255cd08f7a6",
+      "bytes": 80680
+    },
+    {
+      "path": "routes/api.php",
+      "sha256": "237a298db75d82bdeb633497210c4182c62258efe16f6df0a78ccff69a118116",
+      "expected_prior_sha256": "7b736fb5715f7d77a1894f8fdf562307a223ca771860d55ef5ecfb9bafb83d91",
+      "bytes": 126190
+    }
+  ]
+}

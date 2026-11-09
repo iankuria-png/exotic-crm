@@ -77,6 +77,7 @@ class McpTokenController extends Controller
             'label' => ['required', 'string', 'max:80'],
             'ttl_days' => ['nullable', 'integer', 'min:1', 'max:365'],
             'subscription_audit' => ['nullable', 'boolean'],
+            'identified_clients' => ['nullable', 'boolean'],
             'tools' => ['nullable', 'array'],
             'tools.*' => ['string', 'max:64'],
             'owner_id' => ['nullable', 'integer', 'exists:users,id'],
@@ -92,7 +93,9 @@ class McpTokenController extends Controller
         if ($requestedTools === []) {
             $requestedTools = $this->registry->defaultToolNames($owner, $this->settings);
         }
-        $auditOptIn = (bool) ($data['subscription_audit'] ?? false);
+        $identifiedClients = (bool) ($data['identified_clients'] ?? false);
+        abort_if($identifiedClients && $owner->role !== 'admin', 422, 'Named access requires an administrator owner.');
+        $auditOptIn = (bool) ($data['subscription_audit'] ?? false) || $identifiedClients;
         if (! $auditOptIn) {
             // The existing mint UI submits every enabled tool by default. That
             // broad selection is not consent to this new financial-audit scope.
@@ -109,6 +112,9 @@ class McpTokenController extends Controller
             abort_unless(array_diff($auditTools, $this->registry->subscriptionAuditToolNames($owner, $this->settings)) === [], 422, 'A requested subscription-audit tool is disabled.');
         }
         $abilities = $auditTools === [] ? ['mcp:read'] : ['mcp:read', 'mcp:subscription-audit'];
+        if ($identifiedClients) {
+            $abilities[] = 'mcp:identified-clients';
+        }
         foreach ($requestedTools as $tool) {
             abort_unless($this->registry->metadata($tool) !== null, 422, 'Unknown MCP tool.');
             $abilities[] = 'mcp:tool:'.$tool;

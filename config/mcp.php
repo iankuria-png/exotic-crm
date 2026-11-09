@@ -35,6 +35,7 @@ return [
         explode(',', (string) env('MCP_ALLOWED_ORIGINS', ''))
     ))),
     'tools' => [
+        'exotic_subscription_audit_profiles' => ['enabled' => true, 'min_role' => 'admin'],
         'exotic_subscription_audit_summary' => ['enabled' => true, 'min_role' => 'admin'],
         'exotic_subscription_audit_events' => ['enabled' => true, 'min_role' => 'admin'],
         'exotic_subscription_audit_trace' => ['enabled' => true, 'min_role' => 'admin'],
@@ -97,6 +98,7 @@ return [
         'max_ttl_days' => 365,
         'allow_tool_allowlist' => true,
     ],
+    'subscription_profiles' => ['max_profiles' => 300000, 'build_seconds' => 120],
     'sanitisation' => [
         'truncate_chars' => 500,
         'strip_urls' => true,
