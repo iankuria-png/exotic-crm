@@ -150,7 +150,7 @@ class CollectionSalesService
             'remainder_reason' => $remainder ? trim($input['remainder_reason']) : null, 'items' => $items,
             'blocked_reasons' => array_values(array_unique($blockers)), 'can_activate' => ! $blockers];
         $projection['preview_token'] = Crypt::encryptString(json_encode(['actor' => $actor->id, 'receipt' => $receipt->id,
-            'digest' => $this->digest($projection), 'expires' => now()->addMinutes(5)->timestamp], JSON_THROW_ON_ERROR));
+            'digest' => $this->previewDigest($projection), 'expires' => now()->addMinutes(5)->timestamp], JSON_THROW_ON_ERROR));
 
         return $projection;
     }
@@ -255,6 +255,22 @@ class CollectionSalesService
         }
 
         return $this->digest($input);
+    }
+
+    /**
+     * Activation compares previews taken seconds apart (around a live WordPress read). Only decision
+     * data counts: the status clock and background sync time are display-only and must not block it.
+     */
+    public function previewDigest(array $preview): string
+    {
+        unset($preview['preview_token']);
+        foreach ($preview['items'] ?? [] as $index => $item) {
+            if (is_array($item['client']['status'] ?? null)) {
+                unset($preview['items'][$index]['client']['status']['checked_at'], $preview['items'][$index]['client']['status']['last_synced_at']);
+            }
+        }
+
+        return $this->digest($preview);
     }
 
     public function digest(array $data): string

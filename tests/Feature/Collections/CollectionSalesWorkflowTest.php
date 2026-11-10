@@ -194,6 +194,22 @@ class CollectionSalesWorkflowTest extends CollectionWorkflowTestCase
         $this->assertSame(1, DB::table('payments')->count());
     }
 
+    public function test_activation_is_not_blocked_by_status_clock_or_background_sync_between_preview_and_confirm(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $this->fakeWordPress();
+        $input = $this->accepted($this->input($r, $client, $price), $r, $actor);
+        $sales = app(\App\Services\Collections\CollectionSalesService::class);
+        $first = $sales->preview($r, $actor, $input);
+        $this->travel(7)->seconds();
+        $client->forceFill(['last_synced_at' => now()])->save();
+        $second = $sales->preview($r->fresh(), $actor, $input);
+        unset($first['preview_token'], $second['preview_token']);
+        $this->assertSame($sales->previewDigest($first), $sales->previewDigest($second));
+        $result = app(\App\Services\Collections\CollectionSalesFulfillmentService::class)->prepare($r->fresh(), $actor, $input);
+        $this->assertSame('prepared', $result['session']['state']);
+    }
+
     public function test_shared_unknown_stops_siblings_and_readback_keeps_confirmed_children(): void
     {
         [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
