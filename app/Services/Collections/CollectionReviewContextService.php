@@ -32,7 +32,8 @@ class CollectionReviewContextService
         $platforms = $history['scope']['platform_ids'];
         $intents = CollectionPurchaseIntent::where('account_id', $receipt->account_id)->where('provider_reference', $receipt->reference_norm)
             ->whereNull('revoked_at')->orderByDesc('created_at')->limit(50)->get();
-        $saved = $intents->first();
+        // Only a staff-reviewed choice is a saved purchase the drawer may reuse; automatic catalogue matches stay suggestions.
+        $saved = $intents->firstWhere('authority', 'reviewed_quote');
         $valid = [];
         foreach ($intents as $intent) {
             try {

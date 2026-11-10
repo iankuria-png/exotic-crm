@@ -69,8 +69,9 @@ class CollectionSalesService
                 throw new CollectionException('shared_payment_requires_one_market', 422);
             }
             $platform = (int) $client->platform_id;
-            $saved = ! empty($value['saved_intent_id']) ? CollectionPurchaseIntent::where('account_id', $receipt->account_id)
-                ->where('provider_reference', $receipt->reference_norm)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->findOrFail($value['saved_intent_id'])
+            $saved = ! empty($value['saved_intent_id']) ? (CollectionPurchaseIntent::where('account_id', $receipt->account_id)
+                ->where('provider_reference', $receipt->reference_norm)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->find($value['saved_intent_id'])
+                    ?? throw new CollectionException('saved_purchase_changed'))
                 : CollectionPurchaseIntent::where('account_id', $receipt->account_id)->where('provider_reference', $receipt->reference_norm)
                     ->where('client_id', $client->id)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->orderByDesc('created_at')->first();
             if ($saved && ((int) $saved->client_id !== $client->id || (int) $saved->purchase_snapshot['product_price_id'] !== (int) $value['product_price_id']

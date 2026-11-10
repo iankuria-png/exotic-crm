@@ -226,6 +226,23 @@ class CollectionSalesWorkflowTest extends CollectionWorkflowTestCase
         $this->getJson('/api/crm/collections/receipts/'.$r->id)->assertOk()->assertJsonPath('activation.actor.name', $actor->name);
     }
 
+    public function test_automatic_catalogue_match_is_not_reused_as_a_saved_staff_choice(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $automatic = $intent->replicate();
+        $automatic->id = (string) Str::uuid();
+        $automatic->authority = 'matched_catalogue';
+        $automatic->provider_reference = $r->reference_norm;
+        $automatic->save();
+        $this->getJson('/api/crm/collections/receipts/'.$r->id.'/review-context?workflow=manual')->assertOk()->assertJsonPath('saved_choice', null);
+        $input = $this->input($r, $client, $price);
+        $input['items'][0]['saved_intent_id'] = $automatic->id;
+        $this->postJson('/api/crm/collections/receipts/'.$r->id.'/sales/preview', $input)
+            ->assertStatus(409)->assertJsonPath('reason', 'saved_purchase_changed');
+        unset($input['items'][0]['saved_intent_id']);
+        $this->postJson('/api/crm/collections/receipts/'.$r->id.'/sales/preview', $input)->assertOk()->assertJsonPath('items.0.client_id', $client->id);
+    }
+
     public function test_shared_unknown_stops_siblings_and_readback_keeps_confirmed_children(): void
     {
         [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
