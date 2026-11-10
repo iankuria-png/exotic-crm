@@ -1,0 +1,382 @@
+{
+  "as_of_utc": "2026-11-10T06:50:36+00:00",
+  "source_sha256": "ad45601985f6f4431fe175a2472eb088e2bfe52a33fbc442556f6a47803e8e09",
+  "scope": {
+    "captured_receipts": 206,
+    "linked_cash_rows": 187,
+    "exact_staff_confirmed_receipts": 183,
+    "unique_clients": 183,
+    "receipt_sales_sessions": 2,
+    "excluded": [
+      {
+        "receipt_id": 192,
+        "reasons": [
+          "outside_primary_market"
+        ]
+      },
+      {
+        "receipt_id": 28,
+        "reasons": [
+          "receipt_payment_amount_or_currency_mismatch"
+        ]
+      },
+      {
+        "receipt_id": 108,
+        "reasons": [
+          "receipt_payment_amount_or_currency_mismatch"
+        ]
+      },
+      {
+        "receipt_id": 151,
+        "reasons": [
+          "receipt_payment_amount_or_currency_mismatch"
+        ]
+      }
+    ]
+  },
+  "amounts": [
+    {
+      "amount_minor": 3000000,
+      "receipts": 3,
+      "clients": 3,
+      "packages": [
+        {
+          "tier": "vip",
+          "days": 7,
+          "price_id": null,
+          "count": 2
+        },
+        {
+          "tier": "vip",
+          "days": 5,
+          "price_id": null,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "amount_minor": 3400000,
+      "receipts": 1,
+      "clients": 1,
+      "packages": [
+        {
+          "tier": "vip",
+          "days": 7,
+          "price_id": null,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "amount_minor": 3500000,
+      "receipts": 171,
+      "clients": 171,
+      "packages": [
+        {
+          "tier": "vip",
+          "days": 7,
+          "price_id": 143,
+          "count": 99
+        },
+        {
+          "tier": "vip",
+          "days": 7,
+          "price_id": 256,
+          "count": 68
+        },
+        {
+          "tier": "vip",
+          "days": 8,
+          "price_id": 242,
+          "count": 4
+        }
+      ]
+    },
+    {
+      "amount_minor": 4000000,
+      "receipts": 7,
+      "clients": 7,
+      "packages": [
+        {
+          "tier": "premium",
+          "days": 14,
+          "price_id": 147,
+          "count": 7
+        }
+      ]
+    },
+    {
+      "amount_minor": 10000000,
+      "receipts": 1,
+      "clients": 1,
+      "packages": [
+        {
+          "tier": "vvip",
+          "days": 16,
+          "price_id": null,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "captured_repeat_client_amount_groups": 0,
+  "payer_evidence": {
+    "reviewed_links": 0,
+    "confirmed_receipts_missing_payer": 34,
+    "known_payer_groups": 148,
+    "groups_with_multiple_clients": 1,
+    "conflicting_groups_receipts": 2
+  },
+  "broader_history": {
+    "scope": {
+      "since_utc": "2026-08-01 00:00:00",
+      "client_count": 194,
+      "platform_id": 6,
+      "account_provenance": "Only explicit collection_account_verified establishes this wallet; broader history is context, not wallet-confirmed evidence."
+    },
+    "rows": 1231,
+    "staff_verified_bound_paid_rows": 1138,
+    "last_90_day_rows": 1049,
+    "last_90_day_client_amount_groups": 247,
+    "repeat_groups": 179,
+    "repeat_semantic_consistent": 140,
+    "repeat_exact_price_consistent": 35,
+    "strict_3_purchase_90_day_45_day_current_price_groups": 16,
+    "strict_groups_with_all_explicit_wallet_provenance": 0,
+    "strict_groups_receipts": 70
+  },
+  "pilot": {
+    "new_receipts": 8,
+    "automatic_allocations": 0,
+    "saved_holds": {
+      "client_match_below_threshold_or_conflicting": 6,
+      "no_saved_hold_staff_activated": 1,
+      "subsidiary_policy_grant_required": 1
+    },
+    "rows": [
+      {
+        "receipt_id": 201,
+        "amount_minor": 3500000,
+        "saved_reasons": [
+          "client_match_below_threshold_or_conflicting"
+        ],
+        "saved_matching": {
+          "recommended_client_id": null,
+          "needs_choice": false,
+          "rule_version": "collection-match-v2",
+          "threshold": 80,
+          "selected_client_id": null,
+          "suggestions": []
+        },
+        "ingest_latency_seconds": 33.0,
+        "staff_cash_now_linked": true
+      },
+      {
+        "receipt_id": 202,
+        "amount_minor": 3500000,
+        "saved_reasons": [
+          "client_match_below_threshold_or_conflicting"
+        ],
+        "saved_matching": {
+          "recommended_client_id": null,
+          "needs_choice": false,
+          "rule_version": "collection-match-v2",
+          "threshold": 80,
+          "selected_client_id": null,
+          "suggestions": []
+        },
+        "ingest_latency_seconds": 6.0,
+        "staff_cash_now_linked": false
+      },
+      {
+        "receipt_id": 203,
+        "amount_minor": 3500000,
+        "saved_reasons": [
+          "client_match_below_threshold_or_conflicting"
+        ],
+        "saved_matching": {
+          "recommended_client_id": null,
+          "needs_choice": false,
+          "rule_version": "collection-match-v2",
+          "threshold": 80,
+          "selected_client_id": null,
+          "suggestions": []
+        },
+        "ingest_latency_seconds": 35.0,
+        "staff_cash_now_linked": true
+      },
+      {
+        "receipt_id": 204,
+        "amount_minor": 4000000,
+        "saved_reasons": [],
+        "saved_matching": {
+          "suggestions": []
+        },
+        "ingest_latency_seconds": 22.0,
+        "staff_cash_now_linked": true
+      },
+      {
+        "receipt_id": 205,
+        "amount_minor": 3500000,
+        "saved_reasons": [
+          "client_match_below_threshold_or_conflicting"
+        ],
+        "saved_matching": {
+          "recommended_client_id": null,
+          "needs_choice": false,
+          "rule_version": "collection-match-v2",
+          "threshold": 80,
+          "selected_client_id": null,
+          "suggestions": []
+        },
+        "ingest_latency_seconds": 6.0,
+        "staff_cash_now_linked": true
+      },
+      {
+        "receipt_id": 206,
+        "amount_minor": 3500000,
+        "saved_reasons": [
+          "reviewed_payer_and_purchase_authority",
+          "subsidiary_policy_grant_required"
+        ],
+        "saved_matching": {
+          "recommended_client_id": 937779,
+          "needs_choice": false,
+          "rule_version": "collection-match-v2",
+          "threshold": 80,
+          "selected_client_id": 937779,
+          "suggestions": [
+            {
+              "id": 937779,
+              "platform_id": 6,
+              "score": 90,
+              "reasons": [
+                "15 prior cash payments are linked to this profile.",
+                "The full SMS payer phone matches this profile\u2019s advert phone."
+              ]
+            }
+          ]
+        },
+        "ingest_latency_seconds": 21.0,
+        "staff_cash_now_linked": false
+      },
+      {
+        "receipt_id": 207,
+        "amount_minor": 3500000,
+        "saved_reasons": [
+          "client_match_below_threshold_or_conflicting"
+        ],
+        "saved_matching": {
+          "recommended_client_id": null,
+          "needs_choice": true,
+          "rule_version": "collection-match-v2",
+          "threshold": 80,
+          "selected_client_id": null,
+          "suggestions": []
+        },
+        "ingest_latency_seconds": 52.0,
+        "staff_cash_now_linked": false
+      },
+      {
+        "receipt_id": 208,
+        "amount_minor": 4000000,
+        "saved_reasons": [
+          "client_match_below_threshold_or_conflicting"
+        ],
+        "saved_matching": {
+          "recommended_client_id": null,
+          "needs_choice": true,
+          "rule_version": "collection-match-v2",
+          "threshold": 80,
+          "selected_client_id": null,
+          "suggestions": [
+            {
+              "id": 16333,
+              "platform_id": 6,
+              "score": 49,
+              "reasons": [
+                "7 prior cash payments are linked to this profile.",
+                "History coverage is incomplete; choose the profile explicitly."
+              ]
+            }
+          ]
+        },
+        "ingest_latency_seconds": 32.0,
+        "staff_cash_now_linked": false
+      }
+    ]
+  },
+  "processing_backlog": [
+    {
+      "id": 1052,
+      "kind": "decide",
+      "subject_id": "206",
+      "available_at": "2026-11-10 06:54:12",
+      "attempts": 3,
+      "last_error_code": "processing_failed"
+    },
+    {
+      "id": 1063,
+      "kind": "decide",
+      "subject_id": "206",
+      "available_at": "2026-11-10 06:54:19",
+      "attempts": 3,
+      "last_error_code": "processing_failed"
+    }
+  ],
+  "current_policy": {
+    "single_cap_minor": null,
+    "daily_cap_minor": null,
+    "unreviewed_cap_minor": null,
+    "unverified_cap_minor": null,
+    "version": 11,
+    "limits_approved_by": 10,
+    "limits_approved_at": "2026-11-06T12:27:15+00:00",
+    "catalogue_price_defaults": {
+      "6:TZS:3500000": 143
+    },
+    "catalogue_price_defaults_approved_by": 10,
+    "catalogue_price_defaults_approved_at": "2026-11-09T11:49:18+00:00",
+    "purchase_matching": "exact_catalogue_or_reviewed",
+    "purchase_matching_approved_by": 10,
+    "purchase_matching_approved_at": "2026-11-09T11:49:18+00:00",
+    "automation_enabled": true,
+    "match_threshold": 80,
+    "max_auto_age_seconds": 3600,
+    "automation_epoch": "249fbf96-13c6-4433-abd2-175b97ac6a40",
+    "enabled_from": "2026-11-10T03:49:37+00:00",
+    "independent_reconciliation_accepted_at": "2026-11-10T03:47:14+00:00",
+    "settlement_policy_accepted_at": "2026-11-10T03:47:47+00:00",
+    "held_out_parser_accepted_at": "2026-11-10T03:48:13+00:00",
+    "accepted_parser_versions": [
+      "tz-mpesa-v1"
+    ],
+    "correction_acceptance_at": "2026-11-10T03:48:34+00:00",
+    "device_capture_accepted_at": "2026-11-10T03:48:56+00:00",
+    "historical_reference_map_accepted_at": "2026-11-10T03:49:11+00:00",
+    "observation_exception": {
+      "account_id": "c12d64b4-d300-4927-bea1-94301e28c1ef",
+      "platform_ids": [
+        2,
+        6
+      ],
+      "parser_version": "tz-mpesa-v1",
+      "waived_keys": [
+        "clean_observation_days",
+        "positive_receiving_credits"
+      ],
+      "approved_by": 10,
+      "approved_at": "2026-11-10T03:49:37+00:00",
+      "starts_at": "2026-11-10T03:49:37+00:00",
+      "expires_at": "2026-11-11T03:49:37+00:00"
+    }
+  },
+  "subsidiary_trial_policy": [
+    {
+      "platform_id": 2,
+      "approval_mode": "admin_or_pin",
+      "version": 2,
+      "review_on": "2026-12-05"
+    }
+  ]
+}

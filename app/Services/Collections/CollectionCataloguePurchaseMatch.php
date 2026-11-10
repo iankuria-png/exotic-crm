@@ -54,13 +54,14 @@ class CollectionCataloguePurchaseMatch
             || empty($policy['purchase_matching_approved_at']) || Carbon::parse($policy['purchase_matching_approved_at'])->gt($receipt->provider_at)) {
             throw new CollectionException('automatic_catalogue_matching_policy_required');
         }
-        $prices = $this->eligiblePrices($receipt, $client);
+        $learned = app(CollectionPackageHistoryService::class)->package($receipt, $client);
+        $prices = $learned ? collect([$learned['price']]) : $this->eligiblePrices($receipt, $client);
         if ($prices->count() !== 1) {
             throw new CollectionException($prices->count() ? 'multiple_exact_package_matches' : 'no_exact_catalogue_package_match');
         }
         $price = $prices->first();
 
-        return ['product_price_id' => $price->id, 'product_id' => $price->product_id, 'name' => $price->product->name,
+        return ['source' => $learned ? 'confirmed_receipt_history' : 'catalogue', 'history_evidence' => $learned['evidence'] ?? null, 'product_price_id' => $price->id, 'product_id' => $price->product_id, 'name' => $price->product->name,
             'tier' => $price->product->tier, 'duration_days' => $price->duration_days, 'duration_key' => $price->duration_key,
             'duration_label' => $price->duration_label, 'amount_minor' => $receipt->principal_minor, 'catalogue_minor' => $receipt->principal_minor, 'currency' => $receipt->currency,
             'approved_default' => isset($policy['catalogue_price_defaults'][$client->platform_id.':'.$receipt->currency.':'.$receipt->principal_minor])];
@@ -74,7 +75,7 @@ class CollectionCataloguePurchaseMatch
         $preview = $this->preview($receipt, $client);
         $price = ProductPrice::with('product')->findOrFail($preview['product_price_id']);
         $secondary = null;
-        if ($secondaryId = config('collection.subsidiary_platforms.'.$client->platform_id)) {
+        if (! app(CollectionAutomationPolicy::class)->independentSubsidiary($receipt->account) && ($secondaryId = config('collection.subsidiary_platforms.'.$client->platform_id))) {
             if (! $client->phone_normalized) {
                 throw new CollectionException('linked_subsidiary_identity_requires_review');
             }
@@ -87,17 +88,29 @@ class CollectionCataloguePurchaseMatch
             }
             $secondary = ['client_id' => $linked->id, 'platform_id' => $linked->platform_id, 'wp_post_id' => $linked->wp_post_id, 'wp_user_id' => $linked->wp_user_id];
         }
-        $snapshot = ['client_id' => $client->id, 'platform_id' => $client->platform_id, 'wp_post_id' => $client->wp_post_id, 'wp_user_id' => $client->wp_user_id,
+        $history = $preview['source'] === 'confirmed_receipt_history';
+        $snapshot = ['history_evidence' => $preview['history_evidence'], 'learning_policy' => $history ? ($policy['receipt_learning'] ?? null) : null, 'client_id' => $client->id, 'platform_id' => $client->platform_id, 'wp_post_id' => $client->wp_post_id, 'wp_user_id' => $client->wp_user_id,
             'product_id' => $price->product_id, 'product_price_id' => $price->id, 'tier' => $price->product->tier,
             'duration_days' => $price->duration_days, 'duration_key' => $price->duration_key, 'duration_label' => $price->duration_label,
             'amount_minor' => $receipt->principal_minor, 'catalogue_minor' => $receipt->principal_minor, 'currency' => $receipt->currency,
             'discount_approved_by' => null, 'discount_source' => null, 'original_amount' => null, 'discount_percentage' => null,
             'stacking' => 'same_tier', 'identity_authority' => 'rule_supported_payer', 'subsidiary' => $secondary,
             'catalogue_policy_version' => $policy['version'], 'catalogue_price_updated_at' => $price->updated_at->toIso8601String()];
+        $existing = CollectionPurchaseIntent::where('account_id', $receipt->account_id)->where('provider_reference', $receipt->reference_norm)
+            ->whereIn('authority', ['matched_catalogue', 'matched_receipt_history'])->whereNull('revoked_at')->lockForUpdate()->first();
+        if ($existing) {
+            return $existing; // One machine authority per receipt; enrichment does not mint another.
+        }
+        $approvedBy = $history ? $policy['receipt_learning']['approved_by'] : $policy['purchase_matching_approved_by'];
+        $approvedAt = $history ? $policy['receipt_learning']['approved_at'] : $policy['purchase_matching_approved_at'];
+        $validFrom = Carbon::parse($approvedAt)->max(Carbon::parse($policy['purchase_matching_approved_at']));
+        if ($history) {
+            $validFrom = $validFrom->max(Carbon::parse($preview['history_evidence']['confirmed_at']));
+        }
         $intent = CollectionPurchaseIntent::create(['id' => (string) Str::uuid(), 'account_id' => $receipt->account_id, 'client_id' => $client->id,
-            'platform_id' => $client->platform_id, 'authority' => 'matched_catalogue', 'provider_reference' => $receipt->reference_norm,
-            'purchase_snapshot' => $snapshot, 'approved_by' => $policy['purchase_matching_approved_by'], 'approved_at' => $policy['purchase_matching_approved_at'],
-            'valid_from' => $policy['purchase_matching_approved_at'], 'valid_until' => $receipt->provider_at->copy()->addSeconds($policy['max_auto_age_seconds'])->addSecond(), 'max_renewals' => 1]);
+            'platform_id' => $client->platform_id, 'authority' => $history ? 'matched_receipt_history' : 'matched_catalogue', 'provider_reference' => $receipt->reference_norm,
+            'purchase_snapshot' => $snapshot, 'approved_by' => $approvedBy, 'approved_at' => $approvedAt,
+            'valid_from' => $validFrom, 'valid_until' => $receipt->provider_at->copy()->addSeconds($policy['max_auto_age_seconds'])->addSecond(), 'max_renewals' => 1]);
         app(CollectionPurchaseService::class)->audit($receipt, null, 'automatic_catalogue_purchase_selected', ['intent_id' => $intent->id,
             'purchase' => $snapshot, 'policy_version' => $policy['version'], 'policy_approved_by' => $policy['purchase_matching_approved_by'],
             'reason' => 'unique_current_exact_catalogue_price_after_supported_client_match']);
@@ -108,12 +121,16 @@ class CollectionCataloguePurchaseMatch
     public function assertCurrent(CollectionPurchaseIntent $intent, CollectionReceipt $receipt, Client $client): void
     {
         $policy = $receipt->account->policy ?? [];
-        $prices = $this->eligiblePrices($receipt, $client);
+        $preview = $this->preview($receipt, $client);
+        $history = $intent->authority === 'matched_receipt_history';
+        $approvedBy = $history ? data_get($policy, 'receipt_learning.approved_by') : ($policy['purchase_matching_approved_by'] ?? null);
         if (($policy['purchase_matching'] ?? '') !== 'exact_catalogue_or_reviewed'
-            || (int) ($policy['purchase_matching_approved_by'] ?? 0) !== (int) $intent->approved_by
-            || $intent->provider_reference !== $receipt->reference_norm || $prices->count() !== 1
-            || (int) $prices->first()->id !== (int) $intent->purchase_snapshot['product_price_id']
-            || (int) $intent->purchase_snapshot['amount_minor'] !== (int) $intent->purchase_snapshot['catalogue_minor']) {
+            || (int) $approvedBy !== (int) $intent->approved_by || $intent->provider_reference !== $receipt->reference_norm
+            || (int) $preview['product_price_id'] !== (int) $intent->purchase_snapshot['product_price_id']
+            || (int) $intent->purchase_snapshot['amount_minor'] !== (int) $intent->purchase_snapshot['catalogue_minor']
+            || ($history && ($preview['source'] !== 'confirmed_receipt_history'
+                || data_get($preview, 'history_evidence.source_digest') !== data_get($intent->purchase_snapshot, 'history_evidence.source_digest')
+                || data_get($policy, 'receipt_learning.approved_at') !== data_get($intent->purchase_snapshot, 'learning_policy.approved_at')))) {
             throw new CollectionException('catalogue_purchase_terms_changed');
         }
     }

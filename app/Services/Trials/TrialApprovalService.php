@@ -56,7 +56,15 @@ class TrialApprovalService
         return hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));
     }
 
-    public function create(User $actor, array $terms, ?string $pin = null, ?string $requestKey = null): FreeTrialRequest
+    public function createForCollection(User $actor, array $terms, \App\Models\Collections\CollectionSubsidiaryObligation $owner): FreeTrialRequest
+    {
+        app(\App\Services\Collections\CollectionSubsidiaryFulfillmentService::class)->assertDelegation($owner, $actor->id);
+        $terms['collection_obligation_id'] = $owner->id;
+
+        return $this->create($actor, $terms, null, $owner->id, $owner);
+    }
+
+    public function create(User $actor, array $terms, ?string $pin = null, ?string $requestKey = null, ?\App\Models\Collections\CollectionSubsidiaryObligation $collectionOwner = null): FreeTrialRequest
     {
         $market = (int) $terms['platform_id'];
         $this->access($actor, $market);
@@ -76,8 +84,8 @@ class TrialApprovalService
         $key = $requestKey ?: (string) Str::uuid();
         if (! empty($terms['subsidiary_identity'])) abort_unless(app(\App\Services\SubsidiaryActivationPreviewService::class)->same($terms['subsidiary_identity'], app(\App\Services\SubsidiaryActivationPreviewService::class)->currentIdentity($terms)), 409, 'Customer identity changed. Refresh the preview.');
         $source = $this->source($terms);
-        $save = function (?int $generation = null) use ($actor, $terms, $market, $reason, $key, $source) {
-            return DB::transaction(function () use ($actor, $terms, $market, $reason, $key, $source, $generation) {
+        $save = function (?int $generation = null) use ($actor, $terms, $market, $reason, $key, $source, $collectionOwner) {
+            return DB::transaction(function () use ($actor, $terms, $market, $reason, $key, $source, $generation, $collectionOwner) {
                 User::whereKey($actor->id)->lockForUpdate()->firstOrFail();
                 $actor->refresh();
                 $this->access($actor, $market);
@@ -106,9 +114,9 @@ class TrialApprovalService
                 $approved = $actor->role === 'admin' || $generation !== null;
                 $r = FreeTrialRequest::create(['request_key' => $key, 'active_identity' => $terms['action'] === 'subsidiary' ? app(\App\Services\SubsidiaryTrialWorkflow::class)->identityKey($terms) : hash('sha256', json_encode([$market, $terms['action'], $terms['client_ids'], $terms['source_deal_id'] ?? null])), 'requester_id' => $actor->id, 'platform_id' => $market, 'client_id' => count($terms['client_ids']) === 1 ? $terms['client_ids'][0] : null,
                     'deal_id' => $terms['source_deal_id'] ?? null, 'action' => $terms['action'], 'terms_json' => $terms, 'source_version' => $source, 'policy_version' => $policy->version,
-                    'status' => $approved ? 'approved' : 'pending', 'approved_via' => $approved ? ($actor->role === 'admin' ? 'admin' : 'pin') : null, 'approver_id' => $actor->role === 'admin' ? $actor->id : null,
+                    'status' => $approved ? 'approved' : 'pending', 'approved_via' => $approved ? ($collectionOwner ? 'policy' : ($actor->role === 'admin' ? 'admin' : 'pin')) : null, 'approver_id' => $actor->role === 'admin' ? $actor->id : null,
                     'authorized_actor_id' => $approved ? $actor->id : null, 'pin_generation' => $generation, 'reason' => $reason, 'authorized_at' => $approved ? now() : null, 'expires_at' => $approved ? now()->addHours(24) : null]);
-                $this->event($r, $actor, $approved ? 'authorized' : 'requested', ['method' => $r->approved_via], $reason);
+                $this->event($r, $collectionOwner ? null : $actor, $approved ? 'authorized' : 'requested', ['method' => $r->approved_via, 'policy_approver_id' => $collectionOwner ? $actor->id : null], $reason);
                 if (! empty($terms['copy_contract_version'])) {
                     app(\App\Services\SubsidiaryProfileCopyService::class)->register($r);
                 }
@@ -164,6 +172,10 @@ class TrialApprovalService
             $primary = app(\App\Services\SubsidiaryTrialWorkflow::class)->assertAttached($r);
             abort_unless($primary->status === 'active' && (! $primary->expires_at || $primary->expires_at->isFuture()), 409, 'Primary coverage must be current before a new subsidiary trial.');
         }
+        if (! empty($r->terms_json['collection_obligation_id'])) {
+            $coordinator = app(\App\Services\Collections\CollectionSubsidiaryFulfillmentService::class);
+            $coordinator->assertCurrent($coordinator->forRequest($r));
+        }
         abort_unless(in_array($r->status, ['approved', 'activating']), 409, 'This trial is not authorized for activation.');
         $actor = User::findOrFail($r->authorized_actor_id);
         $this->access($actor, $r->platform_id);
@@ -176,6 +188,11 @@ class TrialApprovalService
         abort_unless(($policy?->version ?? 1) === $r->policy_version, 409, 'Market approval policy changed. Request authorization again.');
         if ($r->approved_via === 'admin') {
             abort_unless($actor->role === 'admin', 403);
+        } elseif ($r->approved_via === 'policy') {
+            $coordinator = app(\App\Services\Collections\CollectionSubsidiaryFulfillmentService::class);
+            $owner = $coordinator->forRequest($r);
+            abort_unless($owner, 403, 'Collection policy requires its saved obligation owner.');
+            $coordinator->assertDelegation($owner, $actor->id);
         } else {
             abort_unless($policy?->approval_mode === 'admin_or_pin', 409, 'PIN approval is no longer allowed for this market.');
             app(WalletSettingsService::class)->assertFreeTrialPinGeneration((int) $r->pin_generation);

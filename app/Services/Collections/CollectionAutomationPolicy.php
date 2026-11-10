@@ -12,7 +12,7 @@ use Illuminate\Validation\Rule;
 
 class CollectionAutomationPolicy
 {
-    public const FIELDS = ['automation_enabled', 'match_threshold', 'max_auto_age_seconds', 'observation_pilot_hours', 'purchase_matching', 'catalogue_price_defaults'];
+    public const FIELDS = ['automation_enabled', 'match_threshold', 'max_auto_age_seconds', 'observation_pilot_hours', 'purchase_matching', 'catalogue_price_defaults', 'continuous_operation', 'receipt_learning', 'independent_subsidiary', 'approve_package_default'];
 
     /** Human acceptance facts the automatic gate requires; each is recorded by a manager with who accepted it and why. */
     public const SIGNOFFS = [
@@ -47,7 +47,7 @@ class CollectionAutomationPolicy
 
         return ['enabled' => ($p['automation_enabled'] ?? false) === true,
             'match_threshold' => $p['match_threshold'] ?? 80, 'purchase_matching' => $p['purchase_matching'] ?? 'reviewed_only', 'catalogue_price_defaults' => $p['catalogue_price_defaults'] ?? [],
-            'max_auto_age_seconds' => $p['max_auto_age_seconds'] ?? null,
+            'max_auto_age_seconds' => $p['max_auto_age_seconds'] ?? null, 'continuous_operation' => $this->continuous($account), 'continuous_available' => $this->tzScope($account), 'receipt_learning' => $p['receipt_learning'] ?? ['enabled' => false], 'independent_subsidiary' => $this->independentSubsidiary($account),
             'enabled_from' => $p['enabled_from'] ?? null, 'include_backlog' => false,
             'observation_exception' => $p['observation_exception'] ?? null, 'default_packages' => $this->defaultPackages($account),
             'readiness' => $this->readiness($account)];
@@ -84,9 +84,11 @@ class CollectionAutomationPolicy
         $parser = config('collection.parser_versions.'.$account->provider_key);
         $checks[] = ['key' => 'parser', 'label' => 'Current parser version accepted', 'ready' => is_string($parser) && in_array($parser, $p['accepted_parser_versions'] ?? [], true)];
         $platforms = DB::table('collection_account_platforms')->where('account_id', $account->id)->whereNull('valid_until')->pluck('platform_id')->map(fn ($id) => (int) $id)->all();
-        foreach ($platforms as $platformId) {
-            if ($secondary = config('collection.subsidiary_platforms.'.$platformId)) {
-                $platforms[] = (int) $secondary;
+        if (! $this->independentSubsidiary($account)) {
+            foreach ($platforms as $platformId) {
+                if ($secondary = config('collection.subsidiary_platforms.'.$platformId)) {
+                    $platforms[] = (int) $secondary;
+                }
             }
         }
         $platforms = array_values(array_unique($platforms));
@@ -110,9 +112,10 @@ class CollectionAutomationPolicy
     {
         $p = $account->policy ?? [];
         $pilot = $this->pilot($account);
+        $continuous = $this->continuous($account);
         $blocking = array_values(array_map(fn ($c) => $c['key'], array_filter($presented['readiness'], fn ($c) => ! $c['ready'])));
         $observed = (int) ($p['clean_observation_days'] ?? 0) >= 7 && (int) ($p['positive_receiving_credits'] ?? 0) >= 100;
-        $state = ! $presented['enabled'] ? 'paused' : ($blocking ? 'held' : (! $observed && $pilot['state'] !== 'active' ? 'pilot_ended' : 'live'));
+        $state = ! $presented['enabled'] ? 'paused' : ($blocking ? 'held' : (! $continuous && ! $observed && $pilot['state'] !== 'active' ? 'pilot_ended' : 'live'));
         $activity = null;
         if (! empty($p['enabled_from'])) {
             $from = \Illuminate\Support\Carbon::parse($p['enabled_from']);
@@ -126,8 +129,8 @@ class CollectionAutomationPolicy
             ->orderByDesc('a.id')->first(['a.action', 'a.context', 'a.created_at', 'u.name']);
         $context = $last ? json_decode((string) $last->context, true) : null;
 
-        return ['live_state' => $state, 'blocking' => $blocking, 'pilot' => $pilot, 'observation_met' => $observed,
-            'can_enable' => ! $presented['enabled'] && ! array_diff($blocking, ['age']) && ($observed || $pilot['state'] === 'active' || $pilot['available']),
+        return ['live_state' => $state, 'blocking' => $blocking, 'pilot' => $pilot, 'observation_met' => $observed, 'continuous_operation' => $continuous,
+            'can_enable' => ! $presented['enabled'] && ! array_diff($blocking, ['age']) && ($continuous || $observed || $pilot['state'] === 'active' || $pilot['available']),
             'activity' => $activity,
             'last_change' => $last ? ['action' => $last->action, 'actor' => $last->name ?: 'CRM staff', 'at' => \Illuminate\Support\Carbon::parse($last->created_at)->toIso8601String(),
                 'reason' => $context['reason'] ?? $context['note'] ?? null] : null];
@@ -201,7 +204,10 @@ class CollectionAutomationPolicy
         }
         $v = Validator::make($input, ['expected_version' => 'required|integer|min:0', 'reason' => 'required|string|min:3|max:500',
             'automation_enabled' => 'sometimes|boolean', 'match_threshold' => 'sometimes|integer|min:0|max:100',
-            'catalogue_price_defaults' => 'sometimes|array|max:50', 'catalogue_price_defaults.*' => 'required|integer|min:1', 'purchase_matching' => 'sometimes|in:reviewed_only,exact_catalogue_or_reviewed', 'max_auto_age_seconds' => 'sometimes|integer|min:60|max:86400', 'observation_pilot_hours' => 'sometimes|integer|in:24'])->validate();
+            'catalogue_price_defaults' => 'sometimes|array|max:50', 'catalogue_price_defaults.*' => 'required|integer|min:1', 'purchase_matching' => 'sometimes|in:reviewed_only,exact_catalogue_or_reviewed', 'max_auto_age_seconds' => 'sometimes|integer|min:60|max:86400', 'observation_pilot_hours' => 'sometimes|integer|in:24',
+            'continuous_operation' => 'sometimes|boolean', 'receipt_learning' => 'sometimes|boolean', 'independent_subsidiary' => 'sometimes|boolean',
+            'approve_package_default' => 'sometimes|array:key,product_price_id,source_digest', 'approve_package_default.key' => 'required_with:approve_package_default|string',
+            'approve_package_default.product_price_id' => 'required_with:approve_package_default|integer|min:1', 'approve_package_default.source_digest' => 'required_with:approve_package_default|string|size:64'])->validate();
 
         return DB::transaction(function () use ($actor, $accountId, $v) {
             $account = CollectionAccount::lockForUpdate()->findOrFail($accountId);
@@ -210,6 +216,39 @@ class CollectionAutomationPolicy
                 throw new CollectionException('collection_policy_changed', 409);
             }
             $before = $this->present($account);
+            $authorityChanged = false;
+            foreach (['continuous_operation', 'receipt_learning', 'independent_subsidiary'] as $field) {
+                if (! array_key_exists($field, $v)) {
+                    continue;
+                }
+                if (! $this->tzScope($account)) {
+                    throw new CollectionException('continuous_tz_account_scope_required', 422);
+                }
+                if ($field === 'independent_subsidiary' && $v[$field]) {
+                    if ($actor->role !== 'admin') {
+                        throw new CollectionException('subsidiary_admin_policy_required', 403);
+                    }
+                    app(MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, 2);
+                }
+                $value = ['enabled' => (bool) $v[$field], 'approved_by' => $actor->id, 'approved_at' => now()->toIso8601String(),
+                    'reason' => $v['reason'], 'platform_ids' => [6, 2]];
+                if ($field === 'independent_subsidiary') {
+                    $value['create_and_copy'] = true;
+                }
+                $account->policy = $p = array_replace($p, [$field => $value]);
+                $authorityChanged = true;
+            }
+            if (isset($v['approve_package_default'])) {
+                $approval = $v['approve_package_default'];
+                $evidence = app(CollectionPackageHistoryService::class)->evidence($account);
+                $candidate = collect($evidence['suggestions'])->firstWhere('key', $approval['key']);
+                if (! $candidate || ! $candidate['eligible'] || (int) $candidate['product_price_id'] !== (int) $approval['product_price_id']
+                    || ! hash_equals($candidate['source_digest'], $approval['source_digest'])) {
+                    throw new CollectionException('package_rule_evidence_changed', 409);
+                }
+                $v['catalogue_price_defaults'] = array_replace($p['catalogue_price_defaults'] ?? [], [$approval['key'] => (int) $approval['product_price_id']]);
+                $p['catalogue_default_evidence'][$approval['key']] = $candidate + ['approved_by' => $actor->id, 'approved_at' => now()->toIso8601String(), 'lookback_days' => 90];
+            }
             $enabled = array_key_exists('automation_enabled', $v) ? (bool) $v['automation_enabled'] : $before['enabled'];
             $threshold = (int) ($v['match_threshold'] ?? $before['match_threshold']);
             $age = isset($v['max_auto_age_seconds']) ? (int) $v['max_auto_age_seconds'] : $before['max_auto_age_seconds'];
@@ -240,7 +279,7 @@ class CollectionAutomationPolicy
                 $p['purchase_matching_approved_by'] = $actor->id;
                 $p['purchase_matching_approved_at'] = now()->toIso8601String();
             }
-            $changed = $defaultsChanged || $purchaseChanged || $enabled !== $before['enabled'] || $threshold !== $before['match_threshold'] || $age !== $before['max_auto_age_seconds'];
+            $changed = $authorityChanged || $defaultsChanged || $purchaseChanged || $enabled !== $before['enabled'] || $threshold !== $before['match_threshold'] || $age !== $before['max_auto_age_seconds'];
             $p['automation_enabled'] = $enabled;
             $p['match_threshold'] = $threshold;
             $p['max_auto_age_seconds'] = $age;
@@ -281,6 +320,31 @@ class CollectionAutomationPolicy
         }, 3);
     }
 
+    public function tzScope(CollectionAccount $account): bool
+    {
+        return $account->country === 'TZ' && $account->provider_key === 'vodacom_mpesa_tz'
+            && in_array($account->id, config('collection.automatic_accounts', []), true)
+            && (int) config('collection.subsidiary_platforms.6') === 2
+            && DB::table('collection_account_platforms')->where('account_id', $account->id)->whereNull('valid_until')->pluck('platform_id')->map(fn ($id) => (int) $id)->unique()->values()->all() === [6];
+    }
+
+    public function continuous(CollectionAccount $account): bool
+    {
+        return $this->approvedMode($account, 'continuous_operation');
+    }
+
+    public function independentSubsidiary(CollectionAccount $account): bool
+    {
+        return $this->approvedMode($account, 'independent_subsidiary');
+    }
+
+    private function approvedMode(CollectionAccount $account, string $field): bool
+    {
+        $policy = $account->policy[$field] ?? [];
+
+        return ($policy['enabled'] ?? false) === true && ! empty($policy['approved_by']) && ! empty($policy['approved_at']) && $this->tzScope($account);
+    }
+
     private function platforms(CollectionAccount $account): array
     {
         $ids = DB::table('collection_account_platforms')->where('account_id', $account->id)->where('valid_from', '<=', now())
@@ -290,7 +354,7 @@ class CollectionAutomationPolicy
         }
 
         foreach ($ids as $platformId) {
-            if ($secondary = config('collection.subsidiary_platforms.'.$platformId)) {
+            if (! $this->independentSubsidiary($account) && ($secondary = config('collection.subsidiary_platforms.'.$platformId))) {
                 $ids[] = (int) $secondary;
             }
         }

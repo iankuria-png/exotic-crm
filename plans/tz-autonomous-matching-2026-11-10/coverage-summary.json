@@ -1,0 +1,39 @@
+{
+  "source_run": "20261110T070940Z-d4792-d9410-read-crm-tz-autonomy-backtest-read-e7d6",
+  "source_sha256": "d2393acfbefac07dc50f17653cf2ded3e2dde65f743723cdc1bdef4b5248d7a0",
+  "truth_cutoff_utc": "2026-11-10 06:50:36",
+  "confirmed_TZ_truth_count": 183,
+  "direct_lookup_simulation": {
+    "client_candidates": 58,
+    "wrong_client_candidates": 7,
+    "with_default_package": 56,
+    "correct_client_and_package": 49,
+    "joint_wrong_client": 6,
+    "joint_wrong_package_same_client": 1,
+    "interpretation": "Candidate simulation with current profiles, not a complete worker replay or a promise of successful WordPress activation. Current receipt cash and later-paid cash excluded; legacy payment phones are weak identity evidence."
+  },
+  "package_only": {
+    "correct_default_package": 174,
+    "total": 183,
+    "percentage": 95.1,
+    "other_8_day": 4,
+    "ambiguous_or_non_catalogue": 5
+  },
+  "future_learning_potential": {
+    "unconflicted_observed_SMS_payer_client_relationships": 147,
+    "associated_with_default_package": 140,
+    "interpretation": "Labels available after staff confirmation; cannot count these as independent historical predictions. Canonical source qualification and chronological evaluation still required."
+  },
+  "new_pilot_receipts": {
+    "total": 8,
+    "proven_saved_worker_client_and_package_match": 1,
+    "direct_lookup_candidates": 4,
+    "candidate_receipt_ids": [
+      204,
+      205,
+      206,
+      208
+    ],
+    "limitations": "204 already staff activated; 205 current profile cache may have changed; 208 saved incomplete-history hold. No historical replay authorized."
+  }
+}

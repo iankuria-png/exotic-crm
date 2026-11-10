@@ -50,6 +50,19 @@ class CollectionReceiptStatusService
 
     public function filter(Builder $query, string $state): void
     {
+        if ($state === 'needs_action') {
+            $query->where(function ($q) {
+                $q->where(function ($unrecorded) {
+                    $unrecorded->whereDoesntHave('sale')->whereDoesntHave('allocation')
+                        ->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
+                        ->where(fn ($c) => $c->whereNull('conflicts')->orWhereJsonLength('conflicts', 0))
+                        ->whereNotExists($this->referenceQuery('payments', 'cash')->selectRaw('1'))
+                        ->whereNotExists($this->referenceQuery('manual_payment_bundles', 'bundle')->selectRaw('1'));
+                })->orWhereHas('allocation.subsidiaryObligation', fn ($o) => $o->whereIn('state', ['needs_approval', 'needs_profile', 'uncertain']));
+            });
+
+            return;
+        }
         $query->whereDoesntHave('sale')->whereDoesntHave('allocation');
         if ($state === 'needs_action') {
             $query->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])

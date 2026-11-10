@@ -46,7 +46,7 @@ class CollectionJourneyAssessment
                 throw new CollectionException('profile_or_package_requires_review');
             }
             $platforms = [$profile['platform_id']];
-            if ($secondary = config('collection.subsidiary_platforms.'.$profile['platform_id'])) {
+            if (! app(CollectionAutomationPolicy::class)->independentSubsidiary($receipt->account) && ($secondary = config('collection.subsidiary_platforms.'.$profile['platform_id']))) {
                 $platforms[] = (int) $secondary;
             }
             app(CollectionGate::class)->assertWrites($receipt->account, $platforms, true);

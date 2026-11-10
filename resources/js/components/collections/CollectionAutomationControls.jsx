@@ -1,3 +1,4 @@
+import CollectionPackageRules from './CollectionPackageRules';
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
@@ -23,7 +24,7 @@ export function automationHeadline(policy, status, now = Date.now()) {
     const done = readiness.filter(check => check.ready).length;
     if (state === 'live') return { state, tone: 'live', badge: 'Live', title: 'Automatic activation is live', pulse: true,
         text: `New payments that match one profile above ${policy.match_threshold} / 100 and a configured package activate on their own. Everything else waits here for staff.`,
-        pilot: status?.pilot?.state === 'active' ? `24-hour pilot · ends ${eat(status.pilot.expires_at)} · ${remaining(status.pilot.expires_at, now)}` : null };
+        pilot: policy?.continuous_operation ? 'Continuous automation · no expiry' : status?.pilot?.state === 'active' ? `24-hour pilot · ends ${eat(status.pilot.expires_at)} · ${remaining(status.pilot.expires_at, now)}` : null };
     if (state === 'held') return { state, tone: 'action', badge: 'Held', title: 'Switched on, but held',
         text: 'New payments wait for staff until the checks marked below pass again. Nothing activates automatically meanwhile.' };
     if (state === 'pilot_ended') return { state, tone: 'action', badge: 'Pilot ended', title: 'The 24-hour pilot has ended',
@@ -67,6 +68,7 @@ export default function CollectionAutomationControls({ account, manager }) {
         </div>
         <Checklist account={account} manager={manager} defaultOpen={!allReady || head.state === 'held'} />
         <Rules account={account} manager={manager} />
+        <CollectionPackageRules account={account} manager={manager} />
     </section>;
 }
 
@@ -86,7 +88,7 @@ function SwitchPanel({ account, mode, onDone }) {
     const status = policy.status || {};
     const [reason, setReason] = useState('');
     const { mutation, error, setError, reload } = usePolicyMutation(`/crm/collections/accounts/${account.account_id}/policy`, 'put', onDone);
-    const pilot = mode === 'enable' && !status.observation_met && status.pilot?.state !== 'active';
+    const pilot = mode === 'enable' && !policy.continuous_operation && !status.observation_met && status.pilot?.state !== 'active';
     const pilotEnd = new Date(Date.now() + 24 * 3600000).toISOString();
     function submit(event) {
         event.preventDefault();
@@ -101,6 +103,7 @@ function SwitchPanel({ account, mode, onDone }) {
             <li className="flex gap-2"><Icon name="check" className="mt-0.5 h-4 w-4 text-teal-700" />Only payments received after you switch on. Payments already in the queue stay with staff.</li>
             <li className="flex gap-2"><Icon name="check" className="mt-0.5 h-4 w-4 text-teal-700" />One profile must match above {policy.match_threshold} / 100 and the payment must be under {ageLabel(policy.max_auto_age_seconds)} old.</li>
             <li className="flex gap-2"><Icon name="check" className="mt-0.5 h-4 w-4 text-teal-700" />{policy.default_packages?.length ? `Package: ${policy.default_packages.map(p => `${p.currency} ${Number(p.amount).toLocaleString()} → ${p.name} · ${p.duration_days} days`).join('; ')}.` : `Package: ${matchingLabel(policy.purchase_matching).toLowerCase()}.`}</li>
+            {policy.continuous_operation && <li className="flex gap-2"><Icon name="check" className="mt-0.5 h-4 w-4 text-teal-700" />Continuous automation runs until paused, with no pilot expiry.</li>}
             {pilot && <li className="flex gap-2"><Icon name="pending" className="mt-0.5 h-4 w-4 text-teal-700" />Runs as the approved 24-hour pilot, ending about {eat(pilotEnd)}.</li>}
             <li className="flex gap-2"><Icon name="check" className="mt-0.5 h-4 w-4 text-teal-700" />Every activation can be confirmed, undone or moved to another profile from its receipt. You can pause at any time.</li>
         </ul> : <p className="text-sm text-slate-700">New payments will wait for staff review. Activations already made stay in place and can still be reviewed or corrected.</p>}

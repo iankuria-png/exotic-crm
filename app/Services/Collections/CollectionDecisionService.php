@@ -46,7 +46,7 @@ class CollectionDecisionService
                     }
                     app(CollectionAutomationEpoch::class)->assertReceipt($r);
                     $platforms = [(int) \App\Models\Client::findOrFail($matching['selected_client_id'])->platform_id];
-                    if ($secondary = config('collection.subsidiary_platforms.'.$platforms[0])) {
+                    if (! app(CollectionAutomationPolicy::class)->independentSubsidiary($r->account) && ($secondary = config('collection.subsidiary_platforms.'.$platforms[0]))) {
                         $platforms[] = (int) $secondary;
                     }
                     app(CollectionGate::class)->assertWrites($r->account, $platforms, true);

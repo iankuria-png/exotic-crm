@@ -32,6 +32,11 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('corrections/{correction}/execute', [CollectionPaymentController::class, 'executeCorrection']);
         Route::get('arrivals', [CollectionPaymentController::class, 'arrivals']);
         Route::get('device-health', [CollectionPaymentController::class, 'deviceHealth']);
+        Route::get('accounts/{account}/package-rule-evidence', [CollectionPaymentController::class, 'packageRuleEvidence']);
+        Route::get('receipts/{receipt}/subsidiary', [\App\Http\Controllers\CRM\CollectionSubsidiaryController::class, 'show'])->whereNumber('receipt');
+        Route::get('receipts/{receipt}/subsidiary/subsidiary-trial-targets', [\App\Http\Controllers\CRM\CollectionSubsidiaryController::class, 'targets'])->whereNumber('receipt');
+        Route::get('receipts/{receipt}/subsidiary/subsidiary-trial-preview', [\App\Http\Controllers\CRM\CollectionSubsidiaryController::class, 'preview'])->whereNumber('receipt');
+        Route::post('receipts/{receipt}/subsidiary/finish', [\App\Http\Controllers\CRM\CollectionSubsidiaryController::class, 'finish'])->whereNumber('receipt');
         Route::get('account-policies', [CollectionPaymentController::class, 'policies']);
         Route::put('accounts/{account}/policy', [CollectionPaymentController::class, 'updatePolicy']);
         Route::post('accounts/{account}/signoffs', [CollectionPaymentController::class, 'recordSignoff']);

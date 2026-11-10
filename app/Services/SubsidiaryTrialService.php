@@ -59,6 +59,15 @@ class SubsidiaryTrialService
         $helper = app(SubsidiaryActivationPreviewService::class);
         $resolution = $helper->resolve($main, $target, $selected);
         $client = $resolution['client_id'] ? Client::find($resolution['client_id']) : null;
+        if (! empty($options['collection_obligation_id'])) {
+            $owner = \App\Models\Collections\CollectionSubsidiaryObligation::findOrFail($options['collection_obligation_id']);
+            abort_unless((int) $owner->source_deal_id === (int) $main->id && (int) $owner->target_platform_id === (int) $target->id, 409);
+            if ($resolution['kind'] === 'already_active') {
+                // Collection owns a pinned interval; an active but shorter target still needs its uncovered period.
+                $resolution['kind'] = 'existing';
+            }
+        }
+
         $errors = $this->configErrors($target, $main);
         if ($client && $client->wp_post_id) $errors = array_values(array_diff($errors, ['missing_wp_db_credentials']));
         if ($resolution['kind'] === 'already_active') $errors = array_values(array_intersect($errors, ['inactive_market']));

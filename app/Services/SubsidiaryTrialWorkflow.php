@@ -103,6 +103,9 @@ class SubsidiaryTrialWorkflow
 
     public function noGrant(FreeTrialRequest $r, Client $client): bool
     {
+        if (! empty($r->terms_json['collection_obligation_id'])) {
+            return false; // The collection coordinator verifies same-tier coverage through the pinned interval end.
+        }
         $coverage = app(SubsidiaryActivationPreviewService::class)->coverage($client);
         if (! $coverage) {
             return false;

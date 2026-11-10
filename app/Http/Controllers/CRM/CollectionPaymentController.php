@@ -146,6 +146,15 @@ class CollectionPaymentController extends Controller
         return response()->json($rows->toArray() + ['counts' => ['needs_action' => $needsAction]]);
     }
 
+    public function packageRuleEvidence(Request $request, string $account)
+    {
+        $this->enabled();
+        app(\App\Services\MarketAuthorizationService::class)->ensureManager($request->user());
+        $a = $this->access->account($request->user(), $account);
+
+        return response()->json(app(\App\Services\Collections\CollectionPackageHistoryService::class)->evidence($a));
+    }
+
     public function show(Request $request, int $receipt)
     {
         $this->enabled();
@@ -170,6 +179,7 @@ class CollectionPaymentController extends Controller
     {
         $allocation = $r->allocation;
         $p = $allocation?->purchase_snapshot;
+        $obligation = $allocation && Schema::hasTable('collection_subsidiary_obligations') ? \App\Models\Collections\CollectionSubsidiaryObligation::where('allocation_id', $allocation->id)->orderByDesc('source_generation')->first() : null;
         $savedChoice = ! $allocation ? \App\Models\Collections\CollectionPurchaseIntent::where('account_id', $r->account_id)
             ->where('provider_reference', $r->reference_norm)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->latest('created_at')->first() : null;
         $p ??= $savedChoice?->purchase_snapshot;
@@ -185,7 +195,7 @@ class CollectionPaymentController extends Controller
         $suggestions = array_values(array_filter(array_map(fn ($candidate) => isset($profiles[$candidate['id']])
             ? ['id' => $candidate['id'], 'name' => $profiles[$candidate['id']]->name, 'score' => $candidate['score']] : null, $suggestions)));
 
-        return ['id' => $r->id, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
+        return ['id' => $r->id, 'subsidiary_obligation' => $obligation ? ['state' => $obligation->state, 'version' => $obligation->version, 'last_error_code' => $obligation->last_error_code] : null, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
             'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
             'payer' => $payer ?? app(CollectionPayerEvidenceService::class)->forReceipt($r), 'captured_payer_receipts' => $capturedCount,
             'usage' => $usage, 'activation' => $activation, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',

@@ -36,7 +36,7 @@ class CollectionGate
             }
         }
         if ($automatic && ($account->mode !== 'auto' || ! in_array($account->id, config('collection.automatic_accounts'), true)
-            || ((! $this->observationWaived($account, $platformIds)) && (data_get($account->policy, 'clean_observation_days', 0) < 7 || data_get($account->policy, 'positive_receiving_credits', 0) < 100))
+            || ((! app(CollectionAutomationPolicy::class)->continuous($account) && ! $this->observationWaived($account, $platformIds)) && (data_get($account->policy, 'clean_observation_days', 0) < 7 || data_get($account->policy, 'positive_receiving_credits', 0) < 100))
             || ! data_get($account->policy, 'independent_reconciliation_accepted_at') || ! data_get($account->policy, 'held_out_parser_accepted_at')
             || ! data_get($account->policy, 'correction_acceptance_at') || ! data_get($account->policy, 'device_capture_accepted_at')
             || ! data_get($account->policy, 'settlement_policy_accepted_at') || ! data_get($account->policy, 'historical_reference_map_accepted_at')

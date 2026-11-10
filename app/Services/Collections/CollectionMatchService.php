@@ -11,7 +11,7 @@ class CollectionMatchService
     public function evidence(CollectionReceipt $receipt, array $history, array $payer, array $valid): array
     {
         // A machine-selected catalogue intent cannot raise its own identity score.
-        $valid = array_values(array_filter($valid, fn ($intent) => $intent->authority !== 'matched_catalogue'));
+        $valid = array_values(array_filter($valid, fn ($intent) => ! in_array($intent->authority, ['matched_catalogue', 'matched_receipt_history'], true)));
         $platforms = $history['scope']['platform_ids'];
         $links = $receipt->payer_fingerprint ? CollectionPayerLink::where('account_id', $receipt->account_id)
             ->where('payer_fingerprint', $receipt->payer_fingerprint)->whereNotNull('reviewed_at')
@@ -64,12 +64,43 @@ class CollectionMatchService
             }
             unset($suggestion);
         }
+        $learned = app(CollectionPackageHistoryService::class)->payer($receipt);
+        if ($learned['clients']) {
+            $learnedIds = array_column($learned['clients'], 'client_id');
+            $explicitIds = $links->filter(function ($link) {
+                $client = $this->selectable()->find($link->client_id);
+
+                return $client && (int) $link->wp_post_id === (int) $client->wp_post_id && (int) $link->wp_user_id === (int) $client->wp_user_id;
+            })->pluck('client_id')->map(fn ($id) => (int) $id)->all();
+            $authorityIds = array_values(array_unique([...$learnedIds, ...$explicitIds, ...array_map(fn ($i) => (int) $i->client_id, $valid)]));
+            $learnedClients = $this->selectable()->whereIn('platform_id', $platforms)->whereIn('id', $authorityIds)->get()->keyBy('id');
+            $conflict = count($authorityIds) !== 1 || $learnedClients->count() !== 1 || ! $learned['complete'] || ! $payer['complete']
+                || (bool) $receipt->conflicts || count(array_intersect($authorityIds, $excluded)) > 0;
+            // Legacy Payment.phone is advisory: observed SMS plus exact staff confirmation is stronger authority.
+            foreach ($suggestions as &$suggestion) {
+                $suggestion['score'] = $conflict ? min(49, $suggestion['score']) : 0;
+            }
+            unset($suggestion);
+            foreach ($learnedClients as $client) {
+                $existing = array_search($client->id, array_column($suggestions, 'id'), true);
+                $reason = $conflict ? 'Confirmed SMS payer evidence conflicts; choose the client explicitly.'
+                    : 'This SMS payer previously paid this profile in a staff-confirmed receipt.';
+                $row = ['id' => $client->id, 'name' => $client->name, 'platform_id' => (int) $client->platform_id,
+                    'wp_post_id' => (int) $client->wp_post_id, 'score' => $conflict ? 49 : 95, 'reasons' => [$reason], 'source' => 'staff_confirmed_sms'];
+                if ($existing === false) {
+                    $suggestions[] = $row;
+                } else {
+                    $suggestions[$existing] = $row;
+                }
+            }
+            $clients = $clients->union($learnedClients);
+        }
         usort($suggestions, fn ($a, $b) => $b['score'] <=> $a['score']);
         $positive = array_values(array_filter($suggestions, fn ($suggestion) => $suggestion['score'] > 0));
         $recommended = ! $conflict && count($positive) === 1 && $positive[0]['score'] >= 80 ? $positive[0]['id'] : null;
 
         return ['suggestions' => $suggestions, 'recommended_client_id' => $recommended,
-            'needs_choice' => $conflict, 'clients' => $clients, 'rule_version' => 'collection-match-v2'];
+            'needs_choice' => $conflict, 'clients' => $clients, 'rule_version' => 'collection-match-v3', 'learned_payer' => $learned];
     }
 
     public function automatic(CollectionReceipt $receipt): array

@@ -122,6 +122,7 @@ class CollectionCorrectionService
             if ($c->version !== $version || $c->allocation_version !== $a->version || $c->expires_at->isPast() || ! $c->preview['can_execute']) {
                 throw new CollectionException('correction_preview_stale_or_held');
             }
+            app(CollectionSubsidiaryFulfillmentService::class)->fence($a);
             app(CollectionMatchExclusionService::class)->record($a->receipt, (int) $a->purchase_snapshot['client_id'],
                 isset($c->preview['target_purchase']['client_id']) ? (int) $c->preview['target_purchase']['client_id'] : null,
                 'allocation-correction:'.$c->id, $actor->id, $c->reason);
@@ -398,6 +399,14 @@ class CollectionCorrectionService
             $a->receipt->update(['decision_state' => $a->state, 'reviewed_at' => null, 'reviewed_by' => null, 'version' => $a->receipt->version + 1]);
             $a->increment('version');
             $c->update(['state' => 'verified']);
+            if ($target && ($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent') {
+                $replacement = $a->purchase_snapshot;
+                $replacement['subsidiary'] = null;
+                $replacement['subsidiary_mode'] = 'independent';
+                $replacement['subsidiary_platform_id'] = $allocation->purchase_snapshot['subsidiary_platform_id'];
+                $a->update(['purchase_snapshot' => $replacement]);
+                app(CollectionSubsidiaryFulfillmentService::class)->ensure($a, $target);
+            }
             DB::table('collection_profile_holds')->where('allocation_id', $a->id)->delete();
             app(CollectionPurchaseService::class)->audit($a->receipt, $actor->id, 'correction_verified', ['correction_id' => $c->id, 'cash_changed' => false, 'payment_id' => $payment->id], 'correction-verified:'.$c->id);
         }, 3);
