@@ -49,6 +49,7 @@ class BannerAdController extends Controller
         $validated = $request->validate([
             'platform_id' => ['required', 'integer', 'exists:platforms,id'],
             'status' => ['nullable', Rule::in(['active', 'scheduled', 'paused', 'expired'])],
+            'category' => ['nullable', Rule::in(['homepage', 'profile_location'])],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
@@ -175,7 +176,10 @@ class BannerAdController extends Controller
 
         $validated = $request->validate([
             'platform_id' => ['required', 'integer', 'exists:platforms,id'],
-            'shuffle_mode' => ['required', 'boolean'],
+            'shuffle_mode' => ['sometimes', 'required_without:profile_locations', 'boolean'],
+            'profile_locations' => ['sometimes', 'required_without:shuffle_mode', 'array:enabled,tracking_enabled'],
+            'profile_locations.enabled' => ['sometimes', 'boolean'],
+            'profile_locations.tracking_enabled' => ['sometimes', 'boolean'],
         ]);
 
         $platform = $this->authorizedPlatform($request, (int) $validated['platform_id']);
@@ -190,6 +194,36 @@ class BannerAdController extends Controller
                 'message' => 'Settings updated.',
             ]);
         });
+    }
+
+    public function destinations(Request $request): JsonResponse
+    {
+        $this->ensureBannerAdRole($request);
+        $validated = $request->validate([
+            'platform_id' => ['required', 'integer', 'exists:platforms,id'],
+            'search' => ['nullable', 'string', 'max:100'],
+            'page' => ['nullable', 'integer', 'min:1'],
+        ]);
+
+        return $this->remoteResponse(fn () => response()->json(
+            $this->bannerAds->destinations($this->authorizedPlatform($request, (int) $validated['platform_id']), $validated)
+        ));
+    }
+
+    public function report(Request $request): JsonResponse
+    {
+        $this->ensureBannerAdRole($request);
+        $validated = $request->validate([
+            'platform_id' => ['required', 'integer', 'exists:platforms,id'],
+            'category' => ['required', Rule::in(['homepage', 'profile_location'])],
+            'from' => ['required', 'date_format:Y-m-d'],
+            'to' => ['required', 'date_format:Y-m-d', 'after_or_equal:from', 'before_or_equal:'.now()->format('Y-m-d')],
+        ]);
+        abort_if(\Carbon\CarbonImmutable::parse($validated['from'])->diffInDays($validated['to']) > 366, 422, 'Choose a date range of at most 366 days.');
+
+        return $this->remoteResponse(fn () => response()->json(
+            $this->bannerAds->report($this->authorizedPlatform($request, (int) $validated['platform_id']), $validated)
+        ));
     }
 
     public function media(Request $request): JsonResponse
@@ -245,6 +279,13 @@ class BannerAdController extends Controller
             'platform_id' => ['required', 'integer', 'exists:platforms,id'],
             'post_title' => [$required, 'string', 'max:100'],
             '_campaign_format' => [$required, Rule::in(['card', 'image'])],
+            '_campaign_category' => ['sometimes', Rule::in(['homepage', 'profile_location'])],
+            '_campaign_weight' => ['sometimes', 'integer', 'min:1', 'max:1000'],
+            '_campaign_source_location_ids' => ['sometimes', 'array', 'max:100'],
+            '_campaign_source_location_ids.*' => ['integer', 'min:1', 'distinct'],
+            '_campaign_destination_kind' => ['sometimes', Rule::in(['term', 'page'])],
+            '_campaign_destination_id' => ['sometimes', 'integer', 'min:1'],
+            '_campaign_approved' => ['sometimes', 'boolean'],
             '_campaign_badge_text' => ['nullable', 'string', 'max:20'],
             '_campaign_description' => ['nullable', 'string', 'max:200'],
             '_campaign_icon_class' => ['nullable', 'string', 'max:60'],

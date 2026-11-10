@@ -499,6 +499,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::patch('/settings', [BannerAdController::class, 'settings']);
         Route::get('/media', [BannerAdController::class, 'media']);
         Route::post('/media', [BannerAdController::class, 'uploadMedia']);
+        Route::get('/destinations', [BannerAdController::class, 'destinations']);
+        Route::get('/report', [BannerAdController::class, 'report']);
         Route::get('/{campaignId}', [BannerAdController::class, 'show']);
         Route::patch('/{campaignId}', [BannerAdController::class, 'update']);
         Route::post('/{campaignId}/status', [BannerAdController::class, 'status']);

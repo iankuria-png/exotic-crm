@@ -20,6 +20,12 @@ const STATUS_OPTIONS = [
 
 const DEFAULT_FORM = {
     post_title: '',
+    _campaign_category: 'homepage',
+    _campaign_weight: 10,
+    _campaign_destination_kind: 'term',
+    _campaign_destination_id: '',
+    _campaign_source_location_ids: [],
+    _campaign_approved: false,
     _campaign_format: 'card',
     _campaign_badge_text: '',
     _campaign_description: '',
@@ -77,6 +83,12 @@ function toApiDate(value) {
 function fromCampaign(item) {
     return {
         post_title: item.title || '',
+        _campaign_category: item.category || 'homepage',
+        _campaign_weight: Number(item.weight || 10),
+        _campaign_destination_kind: item.destination_kind || 'term',
+        _campaign_destination_id: String(item.destination_id || ''),
+        _campaign_source_location_ids: item.source_location_ids || [],
+        _campaign_approved: Boolean(item.approved),
         _campaign_format: item.format || 'card',
         _campaign_badge_text: item.badge_text || '',
         _campaign_description: item.description || '',
@@ -113,6 +125,16 @@ function toPayload(form) {
         _campaign_start_date: toApiDate(form._campaign_start_date),
         _campaign_end_date: toApiDate(form._campaign_end_date),
     };
+
+    if (form._campaign_category === 'profile_location') {
+        payload._campaign_category = 'profile_location';
+        payload._campaign_format = 'image';
+        payload._campaign_weight = Number(form._campaign_weight);
+        payload._campaign_destination_kind = form._campaign_destination_kind;
+        payload._campaign_destination_id = Number(form._campaign_destination_id);
+        payload._campaign_source_location_ids = form._campaign_source_location_ids;
+        payload._campaign_approved = Boolean(form._campaign_approved);
+    }
 
     if (form._campaign_format === 'image') {
         payload._campaign_image_id = Number(form._campaign_image_id || 0);
@@ -166,6 +188,7 @@ function BannerAdFormModal({
     title,
     platformId,
     initial,
+    category = 'homepage',
     onClose,
     onSubmit,
     isPending,
@@ -173,15 +196,21 @@ function BannerAdFormModal({
     const toast = useToast();
     const [form, setForm] = useState(DEFAULT_FORM);
     const [mediaSearch, setMediaSearch] = useState('');
+    const [destinationSearch, setDestinationSearch] = useState('');
+    const [destinationPage, setDestinationPage] = useState(1);
+    const [sourceLocationLabels, setSourceLocationLabels] = useState({});
     const [uploadFile, setUploadFile] = useState(null);
 
     useEffect(() => {
         if (open) {
-            setForm(initial ? fromCampaign(initial) : DEFAULT_FORM);
+            setForm(initial ? fromCampaign(initial) : { ...DEFAULT_FORM, _campaign_category: category, _campaign_format: category === 'profile_location' ? 'image' : 'card' });
+            setDestinationSearch('');
+            setDestinationPage(1);
+            setSourceLocationLabels({});
             setMediaSearch('');
             setUploadFile(null);
         }
-    }, [initial, open]);
+    }, [initial, open, category]);
 
     const mediaQuery = useQuery({
         queryKey: ['banner-ad-media', platformId, mediaSearch],
@@ -194,6 +223,23 @@ function BannerAdFormModal({
         }).then((response) => response.data),
         enabled: open && form._campaign_format === 'image' && Boolean(platformId),
     });
+
+    const locationCampaign = form._campaign_category === 'profile_location';
+    const destinationQuery = useQuery({
+        queryKey: ['banner-ad-destinations', platformId, destinationSearch, destinationPage],
+        queryFn: () => api.get('/crm/banner-ads/destinations', {
+            params: { platform_id: platformId, search: destinationSearch || undefined, page: destinationPage },
+        }).then((response) => response.data),
+        enabled: open && locationCampaign && Boolean(platformId),
+    });
+
+    useEffect(() => {
+        if (!open || !locationCampaign || !destinationQuery.data) return;
+        setSourceLocationLabels((current) => ({
+            ...current,
+            ...Object.fromEntries((destinationQuery.data.source_locations || []).map((item) => [String(item.id), item.label])),
+        }));
+    }, [open, locationCampaign, destinationQuery.data]);
 
     const uploadMutation = useMutation({
         mutationFn: () => {
@@ -269,6 +315,7 @@ function BannerAdFormModal({
                                                 key={format}
                                                 type="button"
                                                 onClick={() => update('_campaign_format', format)}
+                                                disabled={locationCampaign && format === 'card'}
                                                 className={`rounded-md border px-3 py-2 text-sm font-semibold capitalize transition ${form._campaign_format === format ? 'border-teal-300 bg-teal-50 text-teal-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                                             >
                                                 {format}
@@ -313,7 +360,7 @@ function BannerAdFormModal({
                                         </div>
                                         <div className="space-y-3">
                                             <Field label="Image alt text">
-                                                <input maxLength={125} className="crm-input" value={form._campaign_image_alt} onChange={(event) => update('_campaign_image_alt', event.target.value)} />
+                                                <input required={locationCampaign} maxLength={125} className="crm-input" value={form._campaign_image_alt} onChange={(event) => update('_campaign_image_alt', event.target.value)} />
                                             </Field>
                                             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                                                 <input type="file" accept="image/*" onChange={(event) => setUploadFile(event.target.files?.[0] || null)} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200" />
@@ -353,12 +400,72 @@ function BannerAdFormModal({
                                 </section>
                             )}
 
+                            {locationCampaign ? (
+                                <section className="space-y-4 rounded-lg border border-slate-200 p-4">
+                                    <div>
+                                        <h4 className="font-semibold text-slate-900">Location destination</h4>
+                                        <p className="mt-1 text-sm text-slate-500">Choose a canonical landing page on this website. The public image links directly to this destination.</p>
+                                    </div>
+                                    <Field label="Search locations and pages">
+                                        <input className="crm-input" value={destinationSearch} onChange={(event) => { setDestinationSearch(event.target.value); setDestinationPage(1); }} placeholder="Search by location or page name" />
+                                    </Field>
+                                    {destinationQuery.isError ? <p role="alert" className="text-sm text-rose-700">{destinationQuery.error?.response?.data?.message || 'Could not load destinations.'}</p> : null}
+                                    <Field label="Destination">
+                                        <select required className="crm-input" value={form._campaign_destination_id ? form._campaign_destination_kind + ':' + form._campaign_destination_id : ''} onChange={(event) => {
+                                            const [kind, id] = event.target.value.split(':');
+                                            const destination = (destinationQuery.data?.items || []).find((item) => item.kind === kind && String(item.id) === id);
+                                            setForm((current) => ({ ...current, _campaign_destination_kind: kind || 'term', _campaign_destination_id: id || '', _campaign_cta_url: destination?.url || '', _campaign_approved: false }));
+                                        }}>
+                                            <option value="">{destinationQuery.isLoading ? 'Loading destinations...' : 'Choose a destination'}</option>
+                                            {form._campaign_destination_id && !(destinationQuery.data?.items || []).some((item) => item.kind === form._campaign_destination_kind && String(item.id) === String(form._campaign_destination_id)) ? <option value={form._campaign_destination_kind + ':' + form._campaign_destination_id}>Saved destination · {form._campaign_cta_url || 'search to change'}</option> : null}
+                                            {(destinationQuery.data?.items || []).map((item) => <option key={item.kind + ':' + item.id} value={item.kind + ':' + item.id}>{item.label} · {item.kind === 'term' ? 'Location' : 'Page'}</option>)}
+                                        </select>
+                                    </Field>
+                                    <div className="flex items-center justify-between text-sm">
+                                        <button type="button" className="crm-btn-secondary" disabled={destinationPage <= 1 || destinationQuery.isFetching} onClick={() => setDestinationPage((value) => value - 1)}>Previous</button>
+                                        <span className="text-slate-500">Page {destinationPage}</span>
+                                        <button type="button" className="crm-btn-secondary" disabled={destinationQuery.isFetching || (destinationQuery.data?.pages ? destinationPage >= Number(destinationQuery.data.pages) : !(destinationQuery.data?.items || []).length)} onClick={() => setDestinationPage((value) => value + 1)}>Next</button>
+                                    </div>
+                                    <Field label="Show on profiles from" hint="Choose from the current results. Saved locations remain selected when you search or change pages. Leave empty for all public profiles.">
+                                        <select multiple className="crm-input min-h-28" value={form._campaign_source_location_ids.map(String)} onChange={(event) => {
+                                            const pageIds = new Set((destinationQuery.data?.source_locations || []).map((item) => Number(item.id)));
+                                            const selectedIds = Array.from(event.target.selectedOptions, (option) => Number(option.value));
+                                            setForm((current) => ({
+                                                ...current,
+                                                _campaign_source_location_ids: [...new Set([
+                                                    ...current._campaign_source_location_ids.filter((id) => !pageIds.has(Number(id))),
+                                                    ...selectedIds,
+                                                ])],
+                                            }));
+                                        }}>
+                                            {(destinationQuery.data?.source_locations || []).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                                        </select>
+                                    </Field>
+                                    {form._campaign_source_location_ids.length ? (
+                                        <div className="space-y-2" aria-label="Selected source locations">
+                                            <p className="text-xs font-semibold text-slate-600">Selected locations</p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {form._campaign_source_location_ids.map((id) => {
+                                                    const label = sourceLocationLabels[String(id)] || 'Saved location #' + id;
+                                                    return <button key={id} type="button" aria-label={'Remove source location ' + label} onClick={() => setForm((current) => ({ ...current, _campaign_source_location_ids: current._campaign_source_location_ids.filter((value) => Number(value) !== Number(id)) }))} className="inline-flex min-h-9 items-center gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-1 text-sm text-teal-800">{label}<span aria-hidden="true">×</span></button>;
+                                                })}
+                                            </div>
+                                            <button type="button" onClick={() => update('_campaign_source_location_ids', [])} className="text-sm font-medium text-slate-600 underline">Clear locations · show on all public profiles</button>
+                                        </div>
+                                    ) : null}
+                                    <label className="flex items-start gap-2 text-sm text-slate-700">
+                                        <input type="checkbox" checked={form._campaign_approved} onChange={(event) => update('_campaign_approved', event.target.checked)} className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-600" />
+                                        <span>I have reviewed this destination for relevance, indexability and canonical URL.</span>
+                                    </label>
+                                </section>
+                            ) : null}
+
                             <section className="grid gap-4 sm:grid-cols-2">
                                 <Field label="CTA text">
                                     <input maxLength={30} className="crm-input" value={form._campaign_cta_text} onChange={(event) => update('_campaign_cta_text', event.target.value)} />
                                 </Field>
                                 <Field label="CTA URL">
-                                    <input type="url" className="crm-input" value={form._campaign_cta_url} onChange={(event) => update('_campaign_cta_url', event.target.value)} placeholder="https://example.com" />
+                                    <input type="url" readOnly={locationCampaign} className="crm-input" value={form._campaign_cta_url} onChange={(event) => update('_campaign_cta_url', event.target.value)} placeholder="https://example.com" />
                                 </Field>
                                 {form._campaign_format === 'image' ? (
                                     <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -377,9 +484,15 @@ function BannerAdFormModal({
                                     ))}
                                 </select>
                             </Field>
-                            <Field label="Priority" hint="Lower numbers display first when shuffle is off.">
-                                <input type="number" min="1" className="crm-input" value={form._campaign_priority} onChange={(event) => update('_campaign_priority', event.target.value)} />
-                            </Field>
+                            {locationCampaign ? (
+                                <Field label="Selection weight" hint="Higher weights increase the chance of selection. Five different banners are chosen; no slot is guaranteed.">
+                                    <input required type="number" min="1" max="1000" className="crm-input" value={form._campaign_weight} onChange={(event) => update('_campaign_weight', event.target.value)} />
+                                </Field>
+                            ) : (
+                                <Field label="Priority" hint="Lower numbers display first when shuffle is off.">
+                                    <input type="number" min="1" className="crm-input" value={form._campaign_priority} onChange={(event) => update('_campaign_priority', event.target.value)} />
+                                </Field>
+                            )}
                             <Field label="Start date">
                                 <input type="datetime-local" required={form._campaign_status === 'scheduled'} className="crm-input" value={form._campaign_start_date} onChange={(event) => update('_campaign_start_date', event.target.value)} />
                             </Field>
@@ -451,7 +564,7 @@ function MetricsDialog({ row, onClose }) {
             onConfirm={onClose}
         >
             <div className="grid gap-3 sm:grid-cols-3">
-                <MetricCard label="Impressions" value={number(row?.impressions)} tone="accent" />
+                <MetricCard label={row?.category === 'profile_location' ? 'Visible impressions' : 'Impressions'} value={number(row?.impressions)} tone="accent" />
                 <MetricCard label="Clicks" value={number(row?.clicks)} tone="success" />
                 <MetricCard label="CTR" value={percent(row?.ctr)} tone="slate" />
             </div>
@@ -494,6 +607,9 @@ export default function BannerAds() {
         return normalizePlatformId(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
     const [statusFilter, setStatusFilter] = useState('');
+    const [category, setCategory] = useState('homepage');
+    const [reportFrom, setReportFrom] = useState(() => new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10));
+    const [reportTo, setReportTo] = useState(() => new Date().toISOString().slice(0, 10));
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
     const [formState, setFormState] = useState({ open: false, row: null });
@@ -538,6 +654,11 @@ export default function BannerAds() {
         }
 
         setPlatformId(nextPlatformId);
+        setCategory('homepage');
+        setFormState({ open: false, row: null });
+        setDeleteRow(null);
+        setScheduleRow(null);
+        setMetricsRow(null);
         if (resetPage) {
             setPage(1);
         }
@@ -558,11 +679,12 @@ export default function BannerAds() {
     }, [markets, platformId]);
 
     const listQuery = useQuery({
-        queryKey: ['banner-ads', platformId, statusFilter, page, perPage],
+        queryKey: ['banner-ads', platformId, category, statusFilter, page, perPage],
         queryFn: () => api.get('/crm/banner-ads', {
             params: {
                 platform_id: platformId,
                 status: statusFilter || undefined,
+                category,
                 page,
                 per_page: perPage,
             },
@@ -573,6 +695,7 @@ export default function BannerAds() {
     const invalidateAds = () => {
         queryClient.invalidateQueries({ queryKey: ['banner-ads'] });
         queryClient.invalidateQueries({ queryKey: ['banner-ad-markets'] });
+        queryClient.invalidateQueries({ queryKey: ['banner-ad-report'] });
     };
 
     const saveMutation = useMutation({
@@ -626,9 +749,9 @@ export default function BannerAds() {
     });
 
     const settingsMutation = useMutation({
-        mutationFn: (shuffleMode) => api.patch('/crm/banner-ads/settings', {
+        mutationFn: (changes) => api.patch('/crm/banner-ads/settings', {
             platform_id: Number(platformId),
-            shuffle_mode: Boolean(shuffleMode),
+            ...changes,
         }).then((response) => response.data),
         onSuccess: (response) => {
             toast.success(response?.message || 'Settings updated.');
@@ -643,6 +766,24 @@ export default function BannerAds() {
     const rows = data.items || [];
     const summary = data.summary || {};
     const settings = data.settings || {};
+    const profileSettings = settings.profile_locations || {};
+    const locationView = category === 'profile_location';
+    const reportQuery = useQuery({
+        queryKey: ['banner-ad-report', platformId, category, reportFrom, reportTo],
+        queryFn: () => api.get('/crm/banner-ads/report', { params: { platform_id: platformId, category, from: reportFrom, to: reportTo } }).then((response) => response.data),
+        enabled: canLoadAds && locationView && Boolean(profileSettings.supported) && Boolean(reportFrom && reportTo && reportFrom <= reportTo),
+    });
+    const exportReport = () => {
+        const keys = ['campaign_id', 'revision', 'destination_url', 'pool_revision', 'pool_size', 'weight', 'selections', 'page_views', 'impressions', 'clicks', 'ctr'];
+        const cell = (value) => '"' + String(value ?? '').replaceAll('"', '""').replace(/^[=+@-]/, "'$&") + '"';
+        const csv = [keys.join(','), ...(reportQuery.data?.rows || []).map((row) => keys.map((key) => cell(row[key])).join(','))].join('\n');
+        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'profile-location-banners-' + platformId + '-' + reportFrom + '-' + reportTo + '.csv';
+        link.click();
+        URL.revokeObjectURL(url);
+    };
 
     const columns = useMemo(() => [
         {
@@ -680,7 +821,7 @@ export default function BannerAds() {
                 </span>
             ),
         },
-        { key: 'priority', label: 'Priority' },
+        { key: locationView ? 'weight' : 'priority', label: locationView ? 'Weight' : 'Priority' },
         { key: 'impressions', label: 'Impr.', render: (row) => number(row.impressions) },
         { key: 'clicks', label: 'Clicks', render: (row) => number(row.clicks) },
         { key: 'ctr', label: 'CTR', render: (row) => percent(row.ctr) },
@@ -713,7 +854,7 @@ export default function BannerAds() {
                 </div>
             ),
         },
-    ], [statusMutation]);
+    ], [statusMutation, locationView]);
 
     const pagination = {
         current_page: page,
@@ -731,13 +872,20 @@ export default function BannerAds() {
                     <button
                         type="button"
                         onClick={() => setFormState({ open: true, row: null })}
-                        disabled={!canLoadAds}
+                        disabled={!canLoadAds || listQuery.isError || (locationView && !profileSettings.supported)}
                         className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         Add Ad
                     </button>
                 )}
             />
+
+            <div className="flex gap-1 border-b border-slate-200" aria-label="Campaign categories">
+                {[['homepage', 'Homepage campaigns'], ['profile_location', 'Profile location links']].map(([value, label]) => (
+                    <button type="button" key={value} aria-pressed={category === value} disabled={value === 'profile_location' && !profileSettings.supported && category !== 'profile_location'} onClick={() => { setCategory(value); setPage(1); }} className={'border-b-2 px-4 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ' + (category === value ? 'border-teal-600 text-teal-800' : 'border-transparent text-slate-500 hover:text-slate-800')}>{label}</button>
+                ))}
+            </div>
+            {!profileSettings.supported && !listQuery.isLoading && canLoadAds && !listQuery.isError ? <p className="text-sm text-slate-500">Profile location banners require the updated WordPress Campaigns plugin.</p> : null}
 
             <section className="crm-surface p-4">
                 <div className="grid gap-3 lg:grid-cols-[minmax(220px,320px)_180px_1fr_auto]">
@@ -770,28 +918,45 @@ export default function BannerAds() {
                             </p>
                         ) : (
                             <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 ring-1 ring-emerald-200">
-                                WordPress Banner Ads ready for {selectedMarket?.name || 'selected market'}.
+                                {listQuery.isSuccess ? 'Campaign connection verified for ' + (selectedMarket?.name || 'selected market') + '.' : 'Checking the selected campaign connection...'}
                             </p>
                         )}
                     </div>
-                    <label className="flex items-end justify-start gap-2 pb-2 text-sm font-semibold text-slate-700 lg:justify-end">
+                    {!locationView ? <label className="flex items-end justify-start gap-2 pb-2 text-sm font-semibold text-slate-700 lg:justify-end">
                         <input
                             type="checkbox"
                             checked={Boolean(settings.shuffle_mode)}
                             disabled={!canLoadAds || settingsMutation.isPending}
-                            onChange={(event) => settingsMutation.mutate(event.target.checked)}
+                            onChange={(event) => settingsMutation.mutate({ shuffle_mode: event.target.checked })}
                             className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 disabled:opacity-50"
                         />
                         Shuffle mode
-                    </label>
+                    </label> : null}
                 </div>
             </section>
+
+            {locationView ? (
+                <section className="crm-surface space-y-4 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                            <h3 className="font-semibold text-slate-900">Profile location delivery</h3>
+                            <p className="mt-1 text-sm text-slate-500">Five weighted image links. Selections rotate when cached profiles refresh.</p>
+                        </div>
+                        <div className="flex flex-wrap gap-4">
+                            <label className="flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={Boolean(profileSettings.enabled)} disabled={listQuery.isFetching || listQuery.isError || settingsMutation.isPending || (!profileSettings.cache_ready && !profileSettings.enabled)} onChange={(event) => settingsMutation.mutate({ profile_locations: { enabled: event.target.checked } })} />Enable profile banners</label>
+                            <label className="flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={Boolean(profileSettings.tracking_enabled)} disabled={listQuery.isFetching || listQuery.isError || settingsMutation.isPending} onChange={(event) => settingsMutation.mutate({ profile_locations: { tracking_enabled: event.target.checked } })} />Collect banner analytics</label>
+                        </div>
+                    </div>
+                    <p className={'text-sm ' + (profileSettings.cache_ready ? 'text-slate-600' : 'text-amber-800')}>{profileSettings.cache_ready ? 'Cache configuration is ready.' : 'Delivery stays off until the website cache strategy and invalidation are verified.'} {profileSettings.cache_status?.pending ? 'Campaign changes are awaiting cache invalidation.' : ''}</p>
+                    <p className={'text-sm ' + (Number(profileSettings.pool_size || 0) < 5 ? 'text-amber-800' : 'text-slate-600')}>{number(profileSettings.pool_size)} approved campaigns in the site pool. At least five per eligible group are needed to fill every slot; use more than five to vary inclusion.</p>
+                </section>
+            ) : null}
 
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <MetricCard label="Active" value={number(summary.banner_ads_active)} tone="success" isLoading={listQuery.isLoading} />
                 <MetricCard label="Scheduled" value={number(summary.banner_ads_scheduled)} tone="accent" isLoading={listQuery.isLoading} />
                 <MetricCard label="Paused" value={number(summary.banner_ads_paused)} tone="warning" isLoading={listQuery.isLoading} />
-                <MetricCard label="Impressions" value={number(summary.impressions_total)} tone="slate" isLoading={listQuery.isLoading} />
+                <MetricCard label={locationView ? 'Visible impressions' : 'Impressions'} value={number(summary.impressions_total)} tone="slate" isLoading={listQuery.isLoading} />
                 <MetricCard label="Avg CTR" value={percent(summary.avg_ctr)} tone="default" isLoading={listQuery.isLoading} />
             </div>
 
@@ -813,11 +978,32 @@ export default function BannerAds() {
                 compact
             />
 
+            {locationView ? (
+                <section className="crm-surface space-y-4 p-4">
+                    <div className="flex flex-wrap items-end gap-3">
+                        <div className="mr-auto"><h3 className="font-semibold text-slate-900">Destination performance</h3><p className="mt-1 text-sm text-slate-500">UTC date range. Selections measure inclusion on tracked page views; impressions measure visibility. Compare weights within the same pool revision.</p></div>
+                        <Field label="From"><input type="date" className="crm-input" value={reportFrom} max={reportTo} onChange={(event) => setReportFrom(event.target.value)} /></Field>
+                        <Field label="To"><input type="date" className="crm-input" value={reportTo} min={reportFrom} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setReportTo(event.target.value)} /></Field>
+                        <button type="button" className="crm-btn-secondary" disabled={reportQuery.isFetching || !reportQuery.data?.rows?.length} onClick={exportReport}>Export CSV</button>
+                    </div>
+                    {reportQuery.isError ? <p role="alert" className="text-sm text-rose-700">{reportQuery.error?.response?.data?.message || 'Could not load the destination report.'}</p> : null}
+                    {reportQuery.data && !reportQuery.data.tracking_enabled ? <p className="text-sm text-amber-800">Analytics collection is off. Historical results remain available; current visits are not collected.</p> : null}
+                    <DataTable compact stickyColumns={1} rowIdKey="report_key" columns={[
+                        { key: 'destination_url', label: 'Destination', render: (row) => <span className="block max-w-xs truncate" title={row.destination_url}>{row.destination_url}</span> },
+                        { key: 'weight', label: 'Weight' }, { key: 'selections', label: 'Selected' }, { key: 'page_views', label: 'Tracked page views' },
+                        { key: 'inclusion', label: 'Inclusion', render: (row) => Number(row.page_views) ? percent(100 * Number(row.selections) / Number(row.page_views)) : '—' },
+                        { key: 'impressions', label: 'Visible impressions' }, { key: 'clicks', label: 'Clicks' }, { key: 'ctr', label: 'CTR', render: (row) => percent(row.ctr) },
+                        { key: 'pool_revision', label: 'Pool revision' },
+                    ]} data={(reportQuery.data?.rows || []).map((row, index) => ({ ...row, report_key: index }))} isLoading={reportQuery.isLoading} emptyMessage={reportQuery.isError ? 'Report unavailable.' : 'No measured banner activity in this date range.'} />
+                </section>
+            ) : null}
+
             <BannerAdFormModal
                 open={formState.open}
                 title={formState.row ? 'Edit Banner Ad' : 'Add Banner Ad'}
                 platformId={platformId}
                 initial={formState.row}
+                category={category}
                 onClose={() => setFormState({ open: false, row: null })}
                 isPending={saveMutation.isPending}
                 onSubmit={(payload) => saveMutation.mutate({ row: formState.row, payload })}

@@ -367,6 +367,125 @@ class BannerAdControllerTest extends TestCase
             ->assertJsonPath('remote_status', 403);
     }
 
+    public function test_profile_campaign_fields_round_trip_and_audit(): void
+    {
+        Http::preventStrayRequests();
+        $platform = $this->createPlatform();
+        $user = $this->createUser('marketing', [$platform->id]);
+        $profile = $this->campaignPayload([
+            'id' => 106, 'category' => 'profile_location', 'format' => 'image',
+            'weight' => 30, 'destination_kind' => 'term', 'destination_id' => 82,
+            'source_location_ids' => [12, 15], 'approved' => true, 'revision' => 2,
+            'image_id' => 444, 'image_alt' => 'Explore Nairobi',
+        ]);
+        Http::fake([
+            'https://kenya.example/wp-json/exotic-campaigns/v1/settings' => Http::response([
+                'profile_locations' => ['supported' => true, 'enabled' => false, 'cache_ready' => false],
+            ]),
+            'https://kenya.example/wp-json/exotic-campaigns/v1/campaigns' => Http::response($profile, 201),
+        ]);
+        Sanctum::actingAs($user);
+        $this->postJson('/api/crm/banner-ads', [
+            'platform_id' => $platform->id, 'post_title' => 'Nairobi location',
+            '_campaign_format' => 'image', '_campaign_status' => 'active',
+            '_campaign_image_id' => 444, '_campaign_image_alt' => 'Explore Nairobi',
+            '_campaign_category' => 'profile_location', '_campaign_weight' => 30,
+            '_campaign_destination_kind' => 'term', '_campaign_destination_id' => 82,
+            '_campaign_source_location_ids' => [12, 15], '_campaign_approved' => true,
+        ])->assertCreated()->assertJsonPath('item.weight', 30)
+            ->assertJsonPath('item.category', 'profile_location')
+            ->assertJsonPath('item.source_location_ids', [12, 15])
+            ->assertJsonPath('item.approved', true)
+            ->assertJsonPath('item.revision', 2);
+        Http::assertSent(fn ($request) => $request->method() === 'POST'
+            && $request['_campaign_weight'] === 30 && $request['_campaign_destination_id'] === 82
+            && $request['_campaign_approved'] === true);
+        $this->assertDatabaseHas('audit_log', ['entity_id' => 106, 'action' => CrmAuditAction::BANNER_AD_CREATE]);
+    }
+
+    public function test_profile_list_requires_verified_remote_support_and_forwards_category(): void
+    {
+        Http::preventStrayRequests();
+        $platform = $this->createPlatform();
+        Sanctum::actingAs($this->createUser('marketing', [$platform->id]));
+        $supported = false;
+        Http::fake([
+            'https://kenya.example/wp-json/exotic-campaigns/v1/settings' => function () use (&$supported) {
+                return Http::response(['shuffle_mode' => true, 'profile_locations' => ['supported' => $supported, 'pool_size' => 10]]);
+            },
+            'https://kenya.example/wp-json/exotic-campaigns/v1/campaigns*' => Http::response(['items' => [], 'total' => 0]),
+            'https://kenya.example/wp-json/exotic-campaigns/v1/analytics/summary*' => Http::response(['summary' => []]),
+        ]);
+        $this->getJson("/api/crm/banner-ads?platform_id={$platform->id}&category=profile_location")
+            ->assertStatus(422)->assertJsonPath('message', 'Update the WordPress Campaigns plugin before managing profile location banners.');
+        Http::assertSentCount(1);
+        $supported = true;
+        $this->getJson("/api/crm/banner-ads?platform_id={$platform->id}&category=profile_location")
+            ->assertOk()->assertJsonPath('settings.profile_locations.pool_size', 10);
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/campaigns?') && $request['category'] === 'profile_location');
+    }
+
+    public function test_profile_report_and_destinations_are_market_scoped_reads(): void
+    {
+        Http::preventStrayRequests();
+        $platform = $this->createPlatform();
+        $blocked = $this->createPlatform(['domain' => 'uganda.example', 'name' => 'Uganda']);
+        Sanctum::actingAs($this->createUser('marketing', [$platform->id]));
+        $this->getJson("/api/crm/banner-ads/report?platform_id={$blocked->id}&category=profile_location&from=2026-01-01&to=2026-01-02")->assertForbidden();
+        $this->getJson("/api/crm/banner-ads/destinations?platform_id={$blocked->id}")->assertForbidden();
+        Http::assertNothingSent();
+        Http::fake([
+            'https://kenya.example/wp-json/exotic-campaigns/v1/settings' => Http::response(['profile_locations' => ['supported' => true]]),
+            'https://kenya.example/wp-json/exotic-campaigns/v1/report*' => Http::response([
+                'metrics_version' => 'profile-v1', 'tracking_enabled' => true,
+                'rows' => [['campaign_id' => 9, 'revision' => 2, 'selections' => 20, 'page_views' => 30, 'impressions' => 10, 'clicks' => 2]],
+            ]),
+            'https://kenya.example/wp-json/exotic-campaigns/v1/destinations*' => Http::response([
+                'items' => [['id' => 82, 'kind' => 'term', 'label' => 'Nairobi', 'url' => 'https://kenya.example/nairobi/']],
+                'source_locations' => [['id' => 12, 'label' => 'Mombasa']],
+            ]),
+        ]);
+        $this->getJson("/api/crm/banner-ads/report?platform_id={$platform->id}&category=profile_location&from=2026-01-01&to=2026-01-02")
+            ->assertOk()->assertJsonPath('rows.0.selections', 20)->assertJsonPath('rows.0.impressions', 10);
+        $this->getJson("/api/crm/banner-ads/destinations?platform_id={$platform->id}&search=Nairobi")
+            ->assertOk()->assertJsonPath('items.0.kind', 'term');
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/report?')
+            && $request['from'] === '2026-01-01' && $request['category'] === 'profile_location'
+            && $request->hasHeader('Authorization', 'Basic '.base64_encode('crm-user:secret')));
+    }
+
+    public function test_profile_settings_preserve_shuffle_and_propagate_cache_hold(): void
+    {
+        Http::preventStrayRequests();
+        $platform = $this->createPlatform();
+        Sanctum::actingAs($this->createUser('marketing', [$platform->id]));
+        Http::fake([
+            'https://kenya.example/wp-json/exotic-campaigns/v1/settings' => Http::sequence()
+                ->push(['shuffle_mode' => true, 'profile_locations' => ['supported' => true]])
+                ->push(['shuffle_mode' => true, 'profile_locations' => ['supported' => true]])
+                ->push(['message' => 'Verify cache readiness before enabling profile banners.'], 422),
+        ]);
+        $this->patchJson('/api/crm/banner-ads/settings', [
+            'platform_id' => $platform->id, 'profile_locations' => ['enabled' => true],
+        ])->assertStatus(422)->assertJsonPath('message', 'Verify cache readiness before enabling profile banners.');
+        Http::assertSent(fn ($request) => $request->method() === 'POST'
+            && $request['profile_locations'] === ['enabled' => true] && ! isset($request['shuffle_mode']));
+    }
+
+    public function test_invalid_weight_and_report_range_are_rejected_before_remote_reads(): void
+    {
+        Http::preventStrayRequests();
+        $platform = $this->createPlatform();
+        Sanctum::actingAs($this->createUser('marketing', [$platform->id]));
+        $this->postJson('/api/crm/banner-ads', [
+            'platform_id' => $platform->id, 'post_title' => 'Nairobi', '_campaign_format' => 'image',
+            '_campaign_status' => 'active', '_campaign_image_id' => 444, '_campaign_weight' => 1001,
+        ])->assertUnprocessable()->assertJsonValidationErrors('_campaign_weight');
+        $this->getJson("/api/crm/banner-ads/report?platform_id={$platform->id}&category=profile_location&from=2020-01-01&to=2025-01-02")
+            ->assertUnprocessable();
+        Http::assertNothingSent();
+    }
+
     private function createPlatform(array $overrides = []): Platform
     {
         return Platform::query()->create(array_merge([

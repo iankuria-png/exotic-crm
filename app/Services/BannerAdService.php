@@ -34,15 +34,22 @@ class BannerAdService
 
     public function list(Platform $platform, array $filters = []): array
     {
+        if (($filters['category'] ?? '') === 'profile_location') {
+            $this->assertProfileSupport($platform);
+        }
+
         $campaigns = $this->request($platform, 'get', '/campaigns', [
             'query' => array_filter([
                 'status' => $filters['status'] ?? null,
+                'category' => $filters['category'] ?? null,
                 'page' => $filters['page'] ?? 1,
                 'per_page' => $filters['per_page'] ?? 25,
             ], static fn ($value) => $value !== null && $value !== ''),
         ]);
 
-        $summary = $this->request($platform, 'get', '/analytics/summary');
+        $summary = $this->request($platform, 'get', '/analytics/summary', ['query' => array_filter([
+            'category' => $filters['category'] ?? null,
+        ])]);
         $settings = $this->settings($platform);
 
         return [
@@ -62,11 +69,19 @@ class BannerAdService
 
     public function create(Platform $platform, array $payload): array
     {
+        if (($payload['_campaign_category'] ?? '') === 'profile_location') {
+            $this->assertProfileSupport($platform);
+        }
+
         return $this->normalizeItem($this->request($platform, 'post', '/campaigns', ['json' => $payload]), $platform);
     }
 
     public function update(Platform $platform, int $campaignId, array $payload): array
     {
+        if (($payload['_campaign_category'] ?? '') === 'profile_location') {
+            $this->assertProfileSupport($platform);
+        }
+
         return $this->normalizeItem($this->request($platform, 'patch', "/campaigns/{$campaignId}", ['json' => $payload]), $platform);
     }
 
@@ -82,21 +97,65 @@ class BannerAdService
 
     public function settings(Platform $platform): array
     {
-        $settings = $this->request($platform, 'get', '/settings');
-
-        return [
-            'shuffle_mode' => (bool) ($settings['shuffle_mode'] ?? false),
-        ];
+        return $this->normalizeSettings($this->request($platform, 'get', '/settings'));
     }
 
     public function updateSettings(Platform $platform, array $payload): array
     {
-        $settings = $this->request($platform, 'post', '/settings', ['json' => [
-            'shuffle_mode' => (bool) ($payload['shuffle_mode'] ?? false),
+        $changes = [];
+        if (array_key_exists('shuffle_mode', $payload)) {
+            $changes['shuffle_mode'] = (bool) $payload['shuffle_mode'];
+        }
+        if (array_key_exists('profile_locations', $payload)) {
+            $this->assertProfileSupport($platform);
+            $changes['profile_locations'] = $payload['profile_locations'];
+        }
+
+        return $this->normalizeSettings($this->request($platform, 'post', '/settings', ['json' => $changes]));
+    }
+
+    public function destinations(Platform $platform, array $filters = []): array
+    {
+        $this->assertProfileSupport($platform);
+
+        return $this->request($platform, 'get', '/destinations', ['query' => array_filter([
+            'search' => $filters['search'] ?? null,
+            'page' => $filters['page'] ?? 1,
+        ], static fn ($value) => $value !== null && $value !== '')]);
+    }
+
+    public function report(Platform $platform, array $filters): array
+    {
+        $this->assertProfileSupport($platform);
+
+        return $this->request($platform, 'get', '/report', ['query' => [
+            'category' => $filters['category'] ?? 'profile_location',
+            'from' => $filters['from'],
+            'to' => $filters['to'],
         ]]);
+    }
+
+    private function assertProfileSupport(Platform $platform): void
+    {
+        if (! $this->settings($platform)['profile_locations']['supported']) {
+            throw new BannerAdRemoteException('Update the WordPress Campaigns plugin before managing profile location banners.', 422);
+        }
+    }
+
+    private function normalizeSettings(array $settings): array
+    {
+        $profile = (array) ($settings['profile_locations'] ?? []);
 
         return [
             'shuffle_mode' => (bool) ($settings['shuffle_mode'] ?? false),
+            'profile_locations' => [
+                'supported' => (bool) ($profile['supported'] ?? false),
+                'enabled' => (bool) ($profile['enabled'] ?? false),
+                'tracking_enabled' => (bool) ($profile['tracking_enabled'] ?? false),
+                'cache_ready' => (bool) ($profile['cache_ready'] ?? false),
+                'pool_size' => max(0, (int) ($profile['pool_size'] ?? 0)),
+                'cache_status' => (array) ($profile['cache_status'] ?? []),
+            ],
         ];
     }
 
@@ -289,6 +348,13 @@ class BannerAdService
             'platform_id' => (int) $platform->id,
             'id' => (int) ($item['id'] ?? 0),
             'title' => (string) ($item['title'] ?? ''),
+            'category' => ($item['category'] ?? '') === 'profile_location' ? 'profile_location' : 'homepage',
+            'weight' => max(1, min(1000, (int) ($item['weight'] ?? 10))),
+            'source_location_ids' => array_values(array_map('intval', (array) ($item['source_location_ids'] ?? []))),
+            'destination_kind' => (string) ($item['destination_kind'] ?? 'term'),
+            'destination_id' => (int) ($item['destination_id'] ?? 0),
+            'approved' => (bool) ($item['approved'] ?? false),
+            'revision' => (int) ($item['revision'] ?? 0),
             'format' => $format,
             'badge_text' => (string) ($item['badge_text'] ?? ''),
             'description' => (string) ($item['description'] ?? ''),
