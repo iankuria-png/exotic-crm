@@ -120,6 +120,11 @@ class CollectionSalesFulfillmentService
 
     public function prepare(CollectionReceipt $receipt, User $actor, array $input): array
     {
+        return app(CollectionWriterGuard::class)->forReceiptSale($receipt, fn () => $this->prepareReceiptSale($receipt, $actor, $input));
+    }
+
+    private function prepareReceiptSale(CollectionReceipt $receipt, User $actor, array $input): array
+    {
         $sales = app(CollectionSalesService::class);
         $key = $this->key($receipt, $actor, $input);
         $digest = $sales->inputDigest($input);

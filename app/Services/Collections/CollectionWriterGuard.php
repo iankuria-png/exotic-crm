@@ -19,6 +19,24 @@ class CollectionWriterGuard
 
     private ?string $saleCorrection = null;
 
+    /** @var array{account_id: string, reference: string}|null */
+    private ?array $receiptSale = null;
+
+    /**
+     * Staff activating a receipt from the payments workspace own that receipt's purchase choices,
+     * including the automation's own match for the same payment. Choices for other receipts still block.
+     */
+    public function forReceiptSale(\App\Models\Collections\CollectionReceipt $receipt, Closure $callback): mixed
+    {
+        $previous = $this->receiptSale;
+        $this->receiptSale = ['account_id' => $receipt->account_id, 'reference' => $receipt->reference_norm];
+        try {
+            return $callback();
+        } finally {
+            $this->receiptSale = $previous;
+        }
+    }
+
     public function ownedSaleCorrection(\App\Models\Collections\CollectionSalesItem $item, string $correctionId, Closure $callback): mixed
     {
         $previous = $this->saleCorrection;
@@ -98,7 +116,9 @@ class CollectionWriterGuard
         }
         $pilot = CollectionPurchaseIntent::whereNull('revoked_at')->where('valid_until', '>', now())
             ->where(fn ($q) => $q->where('client_id', $clientId)->orWhere('purchase_snapshot->subsidiary->client_id', $clientId))
-            ->whereIn('account_id', DB::table('collection_accounts')->whereIn('mode', ['assisted', 'auto'])->select('id'))->exists();
+            ->whereIn('account_id', DB::table('collection_accounts')->whereIn('mode', ['assisted', 'auto'])->select('id'))
+            ->when($this->receiptSale, fn ($q) => $q->where(fn ($q) => $q->where('account_id', '!=', $this->receiptSale['account_id'])
+                ->orWhereNull('provider_reference')->orWhere('provider_reference', '!=', $this->receiptSale['reference'])))->exists();
         $saleOwnsClient = $this->saleItem && DB::table('collection_sales_items')->where('id', $this->saleItem)->where('client_id', $clientId)->exists();
         if ($pilot && ! $this->owner && ! $saleOwnsClient) {
             throw new CollectionException('use_collection_payment_workspace');

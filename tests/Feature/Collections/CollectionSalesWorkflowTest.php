@@ -243,6 +243,28 @@ class CollectionSalesWorkflowTest extends CollectionWorkflowTestCase
         $this->postJson('/api/crm/collections/receipts/'.$r->id.'/sales/preview', $input)->assertOk()->assertJsonPath('items.0.client_id', $client->id);
     }
 
+    public function test_live_automation_match_for_the_same_receipt_does_not_block_staff_activation(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $this->fakeWordPress();
+        $intent->update(['revoked_at' => now()]);
+        $account->update(['mode' => 'auto']);
+        $own = $intent->replicate();
+        $own->forceFill(['id' => (string) Str::uuid(), 'authority' => 'matched_catalogue', 'provider_reference' => $r->reference_norm, 'revoked_at' => null, 'valid_until' => now()->addHour()])->save();
+        $other = $own->replicate();
+        $other->forceFill(['id' => (string) Str::uuid(), 'provider_reference' => 'OTHERREF123'])->save();
+        $service = app(\App\Services\Collections\CollectionSalesFulfillmentService::class);
+        try {
+            $service->prepare($r, $actor, $this->accepted($this->input($r, $client, $price), $r, $actor));
+            $this->fail('A live automation choice for another receipt must still own the profile');
+        } catch (\App\Services\Collections\CollectionException $e) {
+            $this->assertSame('use_collection_payment_workspace', $e->reason);
+        }
+        $other->update(['revoked_at' => now()]);
+        $result = $service->prepare($r, $actor, $this->accepted($this->input($r, $client, $price), $r, $actor));
+        $this->assertSame('prepared', $result['session']['state']);
+    }
+
     public function test_shared_unknown_stops_siblings_and_readback_keeps_confirmed_children(): void
     {
         [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
