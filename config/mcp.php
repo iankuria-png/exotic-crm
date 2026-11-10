@@ -64,6 +64,9 @@ return [
         'exotic_client_operations' => ['enabled' => true, 'min_role' => 'sub_admin'],
         'exotic_lifecycle_intelligence' => ['enabled' => true, 'min_role' => 'sub_admin'],
         'exotic_city_performance' => ['enabled' => true, 'min_role' => 'sub_admin'],
+        'exotic_wallet_balance' => ['enabled' => true, 'min_role' => 'sales'],
+        'exotic_recent_payments' => ['enabled' => true, 'min_role' => 'sub_admin'],
+        'exotic_recent_subscriptions' => ['enabled' => true, 'min_role' => 'sub_admin'],
     ],
     'resources' => [
         'exotic://context/who-is-who' => ['enabled' => true, 'path' => 'mcp/who-is-who.md'],

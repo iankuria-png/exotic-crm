@@ -263,6 +263,9 @@ class McpServer
             'exotic_client_operations' => app(McpAnalyticsService::class)->clientOperations($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
             'exotic_lifecycle_intelligence' => app(McpAnalyticsService::class)->lifecycle($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
             'exotic_city_performance' => app(McpAnalyticsService::class)->cityPerformance($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_wallet_balance' => app(McpOperationsFeedService::class)->walletBalances($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_recent_payments' => app(McpOperationsFeedService::class)->recentPayments($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
+            'exotic_recent_subscriptions' => app(McpOperationsFeedService::class)->recentSubscriptions($arguments, McpAuthorizationContext::for($user, (array) $abilities, $this->marketAuth)),
             default => throw McpProtocolException::rpc(-32601, 'Tool not found.', 'tool_not_found', 404),
         };
 
@@ -333,6 +336,9 @@ class McpServer
             'exotic_client_operations' => app(McpAnalyticsService::class)->clientOperations($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
             'exotic_lifecycle_intelligence' => app(McpAnalyticsService::class)->lifecycle($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
             'exotic_city_performance' => app(McpAnalyticsService::class)->cityPerformance($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_wallet_balance' => app(McpOperationsFeedService::class)->walletBalances($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_recent_payments' => app(McpOperationsFeedService::class)->recentPayments($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
+            'exotic_recent_subscriptions' => app(McpOperationsFeedService::class)->recentSubscriptions($arguments, McpAuthorizationContext::for($user, $abilities, $this->marketAuth)),
             default => throw McpProtocolException::rpc(-32601, 'Tool not found.', 'tool_not_found', 404),
         };
     }
