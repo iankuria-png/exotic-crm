@@ -23,6 +23,7 @@ export function StatusPill({ tone = 'neutral', pulse = false, children, classNam
 const paths = {
     check: 'M5 10.5l3.2 3.2L15 7',
     pending: 'M10 17a7 7 0 100-14 7 7 0 000 14zM10 6.8V10l2.2 1.5',
+    wallet: 'M3.5 6.5h12a1.5 1.5 0 011.5 1.5v6.5a1.5 1.5 0 01-1.5 1.5h-12A1.5 1.5 0 012 14.5V5.5A1.5 1.5 0 013.5 4H14M13.5 11.25h.01',
     alert: 'M10 6.5v4.2M10 13.6v.1',
     search: 'M9 15a6 6 0 100-12 6 6 0 000 12zm4.3-1.7L17 17',
     download: 'M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 15.5h12',
@@ -144,4 +145,26 @@ export function ActivationSpeedSummary({ rows }) {
             </div>;
         })}</dl>
     </section>;
+}
+
+export const formatMinor = (minor, currency) => `${currency || ''} ${(Number(minor) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim();
+
+// Balance the provider's credit SMS reported right after this payment. Never computed.
+export function WalletAfter({ balance, className = '' }) {
+    if (!balance) return null;
+    return <p className={`inline-flex items-center gap-1.5 rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600 ring-1 ring-inset ring-slate-200 ${className}`}
+        title={`M-PESA wallet balance stated in the payment SMS${balance.at ? ` · ${exactTime(balance.at)}` : ''}`}>
+        <Icon name="wallet" className="h-3.5 w-3.5 text-slate-500" />
+        <span>Wallet after</span><span className="font-semibold tabular-nums text-slate-900">{formatMinor(balance.minor, balance.currency)}</span>
+    </p>;
+}
+
+export function WalletBalanceSummary({ balances }) {
+    if (!balances?.length) return null;
+    return <section aria-label="Office wallet balance" className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{balances.map(balance => <div key={balance.account_id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4">
+        <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-50 text-teal-800 ring-1 ring-inset ring-teal-200"><Icon name="wallet" className="h-5 w-5" /></span>
+        <div className="min-w-0"><p className="text-xs text-slate-500">{balance.label} · balance</p>
+            <p className="text-xl font-semibold tabular-nums text-slate-900">{formatMinor(balance.minor, balance.currency)}</p>
+            <p className="text-xs text-slate-500">From the latest payment SMS{balance.at ? <> · <time dateTime={balance.at} title={exactTime(balance.at)}>{relative(balance.at)}</time></> : ''}</p></div>
+    </div>)}</section>;
 }

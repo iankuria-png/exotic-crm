@@ -122,3 +122,14 @@ test('automatic activation is labelled without inventing a person', async ({ pag
     await expect(page.getByRole('region', { name: 'Payment to activation time' }).getByText('Automatic')).toBeVisible();
     await page.screenshot({ path: 'output/collection-golive-2026-11-09/activated-automatic.png' });
 });
+
+test('wallet balance from the payment SMS shows in the drawer, on the row and as the latest balance', async ({ page }) => {
+    await setup(page, { used: true });
+    await expect(page.getByRole('dialog').getByText('TZS 2,467,349.62')).toBeVisible();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Office wallet balance' })).toContainText('TZS 2,467,349.62');
+    const row = page.getByRole('row').filter({ hasText: 'FIXTURE0001' });
+    await expect(row).toContainText('Wallet after');
+    await expect(row).toContainText('TZS 2,467,349.62');
+    await page.screenshot({ path: 'output/collection-golive-2026-11-09/wallet-balance.png', fullPage: true });
+});

@@ -132,10 +132,14 @@ class CollectionPaymentController extends Controller
             ->selectRaw('account_id, payer_fingerprint, COUNT(*) AS total')->groupBy('account_id', 'payer_fingerprint')->get()
             ->keyBy(fn ($c) => $c->account_id.':'.$c->payer_fingerprint);
         $activations = app(\App\Services\Collections\CollectionActivationAttribution::class)->forReceipts($rows->getCollection(), $usage);
+        $balances = app(\App\Services\Collections\CollectionWalletBalanceService::class)->forReceipts($rows->getCollection());
         $rows->getCollection()->transform(fn ($r) => $this->present($r, $evidence[$r->id], $r->payer_fingerprint ? (int) ($counts[$r->account_id.':'.$r->payer_fingerprint]->total ?? 0) : null, $usage[$r->id], $activations[$r->id] ?? null));
 
+        $rows->getCollection()->transform(fn ($row) => $row + ['wallet_balance' => $balances[$row['id']] ?? null]);
         $needsAction = null;
+        $wallet = [];
         if (empty($v['client_id'])) {
+            $wallet = app(\App\Services\Collections\CollectionWalletBalanceService::class)->latest($this->access->accountIds($request->user()));
             $pending = CollectionReceipt::whereIn('account_id', $this->access->accountIds($request->user()))
                 ->when(! empty($v['account_id']), fn ($q) => $q->where('account_id', $v['account_id']))
                 ->when(! empty($v['platform_id']), fn ($q) => $q->whereIn('account_id', DB::table('collection_account_platforms')->where('platform_id', $v['platform_id'])->select('account_id')));
@@ -143,7 +147,7 @@ class CollectionPaymentController extends Controller
             $needsAction = $pending->count();
         }
 
-        return response()->json($rows->toArray() + ['counts' => ['needs_action' => $needsAction]]);
+        return response()->json($rows->toArray() + ['counts' => ['needs_action' => $needsAction], 'wallet_balances' => $wallet]);
     }
 
     public function packageRuleEvidence(Request $request, string $account)
@@ -162,6 +166,7 @@ class CollectionPaymentController extends Controller
         $r->load('account', 'allocation.effects', 'sale.items');
         $usage = app(CollectionReceiptStatusService::class)->forReceipts(collect([$r]), true)[$r->id];
         $payload = $this->present($r, null, null, $usage, app(\App\Services\Collections\CollectionActivationAttribution::class)->forReceipts(collect([$r]), [$r->id => $usage])[$r->id] ?? null);
+        $payload['wallet_balance'] = app(\App\Services\Collections\CollectionWalletBalanceService::class)->forReceipts(collect([$r]))[$r->id] ?? null;
         $candidates = app(CollectionDecisionService::class)->candidates($r);
         $payload['candidates'] = $candidates;
         $payload['payer_links'] = CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', $r->payer_fingerprint)->get()->toArray();
