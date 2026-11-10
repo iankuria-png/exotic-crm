@@ -84,3 +84,64 @@ export function ActivatedBy({ activation, compact = false }) {
     </p>;
     return <p className={`flex items-center gap-2 text-xs text-slate-500 ${compact ? '' : 'mt-2'}`}><span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400 ring-1 ring-inset ring-slate-200">?</span>Activator not recorded{when}</p>;
 }
+
+// Payment → activation duration: from the provider's paid time (or phone arrival) to the confirmed activation.
+export function activationMinutes(row) {
+    const activation = row?.activation;
+    const paid = row?.provider_at || row?.received_at;
+    if (!activation?.at || activation.pending || !paid) return null;
+    const minutes = (new Date(activation.at).getTime() - new Date(paid).getTime()) / 60000;
+    return Number.isFinite(minutes) ? minutes : null;
+}
+export function formatDuration(minutes) {
+    if (minutes < 1) return 'under 1 min';
+    const total = Math.round(minutes);
+    if (total < 60) return `${total} min`;
+    const hours = Math.floor(total / 60);
+    if (hours < 24) return total % 60 ? `${hours} h ${total % 60} min` : `${hours} h`;
+    const days = Math.floor(hours / 24);
+    return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
+}
+export const speedTone = minutes => minutes <= 15 ? 'live' : minutes <= 120 ? 'neutral' : 'action';
+export function median(values) {
+    if (!values.length) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+export function TimeToActivate({ row, className = '' }) {
+    const minutes = activationMinutes(row);
+    if (minutes === null) return null;
+    const paid = row.provider_at || row.received_at;
+    const span = `${row.provider_at ? 'Paid' : 'Phone arrival'} ${exactTime(paid)} → activated ${exactTime(row.activation.at)}`;
+    if (minutes < -1) return <p className={`mt-2 text-xs text-slate-500 ${className}`} title={span}>Activated before this payment's time</p>;
+    const tone = tones[speedTone(minutes)];
+    return <p className={`mt-2 ${className}`} title={span} aria-label={`Payment to active in ${formatDuration(Math.max(0, minutes))}. ${span}`}>
+        <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${tone.pill}`}>
+            <Icon name="pending" className="h-3.5 w-3.5" />
+            <span className="font-normal opacity-80">Paid → active</span>
+            <span className="font-semibold tabular-nums">{formatDuration(Math.max(0, minutes))}</span>
+        </span>
+    </p>;
+}
+
+export function ActivationSpeedSummary({ rows }) {
+    const timed = (rows || []).map(row => ({ kind: row.activation?.kind, minutes: activationMinutes(row) })).filter(item => item.minutes !== null && item.minutes >= 0);
+    if (!timed.length) return null;
+    const groups = [
+        ['All activations', timed],
+        ['Automatic', timed.filter(item => item.kind === 'automatic')],
+        ['Customer service', timed.filter(item => item.kind === 'staff')],
+    ];
+    return <section aria-label="Payment to activation time" className="mb-4 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className="text-sm font-semibold text-slate-900">Payment → active</h3><p className="text-xs text-slate-500">Median time for the activated payments shown below</p></div>
+        <dl className="mt-3 grid gap-3 sm:grid-cols-3">{groups.map(([label, items]) => {
+            const value = median(items.map(item => item.minutes));
+            return <div key={label} className="rounded-lg bg-slate-50 px-3 py-2.5">
+                <dt className="flex items-center gap-1.5 text-xs text-slate-500">{label === 'Automatic' && <Icon name="bolt" className="h-3.5 w-3.5 text-teal-700" />}{label}</dt>
+                <dd className="mt-1 flex items-baseline gap-2"><span className={`text-lg font-semibold tabular-nums ${value === null ? 'text-slate-400' : value <= 15 ? 'text-teal-800' : value <= 120 ? 'text-slate-900' : 'text-amber-800'}`}>{value === null ? '—' : formatDuration(value)}</span><span className="text-xs text-slate-500">{items.length} {items.length === 1 ? 'payment' : 'payments'}</span></dd>
+            </div>;
+        })}</dl>
+    </section>;
+}

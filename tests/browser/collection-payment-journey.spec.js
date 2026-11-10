@@ -104,8 +104,12 @@ test('queue shows who activated each subscription: staff by name, automation as 
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     const row = page.getByRole('row').filter({ hasText: 'FIXTURE0001' });
     await expect(row.getByLabel(/Activated by Zeddy Mwakyusa/)).toBeVisible();
+    await expect(row.getByLabel(/Payment to active in 3 min/)).toBeVisible();
+    const summary = page.getByRole('region', { name: 'Payment to activation time' });
+    await expect(summary).toContainText('Customer service');
+    await expect(summary).toContainText('3 min');
     await expect(row.getByRole('button', { name: 'View receipt', exact: true })).toBeVisible();
-    await page.screenshot({ path: 'output/collection-golive-2026-11-09/activated-by-staff.png' });
+    await page.screenshot({ path: 'output/collection-golive-2026-11-09/activated-by-staff.png', fullPage: true });
 });
 
 test('automatic activation is labelled without inventing a person', async ({ page }) => {
@@ -114,5 +118,7 @@ test('automatic activation is labelled without inventing a person', async ({ pag
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     const row = page.getByRole('row').filter({ hasText: 'FIXTURE0001' });
     await expect(row.getByLabel(/Activated automatically/)).toBeVisible();
+    await expect(row.getByLabel(/Payment to active in 2 min/)).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Payment to activation time' }).getByText('Automatic')).toBeVisible();
     await page.screenshot({ path: 'output/collection-golive-2026-11-09/activated-automatic.png' });
 });
