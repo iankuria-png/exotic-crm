@@ -131,7 +131,8 @@ class CollectionPaymentController extends Controller
             ->whereIn('payer_fingerprint', $rows->pluck('payer_fingerprint')->filter()->unique())
             ->selectRaw('account_id, payer_fingerprint, COUNT(*) AS total')->groupBy('account_id', 'payer_fingerprint')->get()
             ->keyBy(fn ($c) => $c->account_id.':'.$c->payer_fingerprint);
-        $rows->getCollection()->transform(fn ($r) => $this->present($r, $evidence[$r->id], $r->payer_fingerprint ? (int) ($counts[$r->account_id.':'.$r->payer_fingerprint]->total ?? 0) : null, $usage[$r->id]));
+        $activations = app(\App\Services\Collections\CollectionActivationAttribution::class)->forReceipts($rows->getCollection(), $usage);
+        $rows->getCollection()->transform(fn ($r) => $this->present($r, $evidence[$r->id], $r->payer_fingerprint ? (int) ($counts[$r->account_id.':'.$r->payer_fingerprint]->total ?? 0) : null, $usage[$r->id], $activations[$r->id] ?? null));
 
         $needsAction = null;
         if (empty($v['client_id'])) {
@@ -150,7 +151,8 @@ class CollectionPaymentController extends Controller
         $this->enabled();
         $r = $this->access->receipt($request->user(), $receipt);
         $r->load('account', 'allocation.effects', 'sale.items');
-        $payload = $this->present($r, null, null, app(CollectionReceiptStatusService::class)->forReceipts(collect([$r]), true)[$r->id]);
+        $usage = app(CollectionReceiptStatusService::class)->forReceipts(collect([$r]), true)[$r->id];
+        $payload = $this->present($r, null, null, $usage, app(\App\Services\Collections\CollectionActivationAttribution::class)->forReceipts(collect([$r]), [$r->id => $usage])[$r->id] ?? null);
         $candidates = app(CollectionDecisionService::class)->candidates($r);
         $payload['candidates'] = $candidates;
         $payload['payer_links'] = CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', $r->payer_fingerprint)->get()->toArray();
@@ -164,7 +166,7 @@ class CollectionPaymentController extends Controller
         return response()->json($payload);
     }
 
-    private function present(CollectionReceipt $r, ?array $payer = null, ?int $capturedCount = null, ?array $usage = null): array
+    private function present(CollectionReceipt $r, ?array $payer = null, ?int $capturedCount = null, ?array $usage = null, ?array $activation = null): array
     {
         $allocation = $r->allocation;
         $p = $allocation?->purchase_snapshot;
@@ -186,7 +188,7 @@ class CollectionPaymentController extends Controller
         return ['id' => $r->id, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
             'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
             'payer' => $payer ?? app(CollectionPayerEvidenceService::class)->forReceipt($r), 'captured_payer_receipts' => $capturedCount,
-            'usage' => $usage, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
+            'usage' => $usage, 'activation' => $activation, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
             'provider_at' => $r->provider_at, 'received_at' => $r->first_received_at, 'created_at' => $r->created_at, 'historical_only' => $r->historical_only,
             'funds_state' => $r->funds_state, 'evidence_level' => $r->evidence_level, 'decision_state' => $sale ? 'sales_'.$sale->state : ($savedChoice && ! $r->historical_only && ! $r->conflicts && in_array($r->funds_state, ['observed', 'statement_verified']) ? 'purchase_saved' : $r->decision_state),
             'sale' => $sale ? ['id' => $sale->id, 'state' => $sale->state, 'items_count' => $sale->items->count(), 'confirmed_count' => $sale->items->where('state', 'confirmed')->count()] : null,

@@ -98,3 +98,21 @@ test('mobile progress wraps inside the receipt and settings remain secondary', a
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     await page.screenshot({ path: 'output/collection-golive-2026-11-09/queue-mobile.png', fullPage: true });
 });
+
+test('queue shows who activated each subscription: staff by name, automation as Automatic', async ({ page }) => {
+    await setup(page, { used: true });
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    const row = page.getByRole('row').filter({ hasText: 'FIXTURE0001' });
+    await expect(row.getByLabel(/Activated by Zeddy Mwakyusa/)).toBeVisible();
+    await expect(row.getByRole('button', { name: 'View receipt', exact: true })).toBeVisible();
+    await page.screenshot({ path: 'output/collection-golive-2026-11-09/activated-by-staff.png' });
+});
+
+test('automatic activation is labelled without inventing a person', async ({ page }) => {
+    await setup(page, { automaticState: 'active_review_pending', savedMatch: true });
+    await expect(page.getByRole('dialog').getByLabel(/Activated automatically/)).toBeVisible();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    const row = page.getByRole('row').filter({ hasText: 'FIXTURE0001' });
+    await expect(row.getByLabel(/Activated automatically/)).toBeVisible();
+    await page.screenshot({ path: 'output/collection-golive-2026-11-09/activated-automatic.png' });
+});

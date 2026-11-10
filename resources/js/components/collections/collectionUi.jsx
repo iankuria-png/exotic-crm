@@ -65,3 +65,22 @@ export const primaryButton = `${buttonBase} bg-teal-700 text-white shadow-sm hov
 export const secondaryButton = `${buttonBase} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50`;
 export const warnButton = `${buttonBase} border border-amber-500 bg-white text-amber-900 hover:bg-amber-50`;
 export const quietButton = `${buttonBase} px-2 text-teal-800 hover:bg-teal-50`;
+
+const initials = name => String(name || '?').trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() || '').join('') || '?';
+const exactTime = value => value ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Dar_es_Salaam', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value)) + ' EAT' : '';
+
+// Who activated the subscription: automation, a named staff member, or an honest "not recorded".
+export function ActivatedBy({ activation, compact = false }) {
+    if (!activation) return null;
+    const when = activation.at ? <time dateTime={activation.at} title={exactTime(activation.at)} className="text-slate-500"> · {relative(activation.at)}</time> : null;
+    const verb = activation.pending ? 'Started by' : 'Activated by';
+    if (activation.kind === 'automatic') return <p className={`flex min-w-0 items-center gap-2 text-xs ${compact ? '' : 'mt-2'}`} aria-label={`${activation.pending ? 'Automatic activation in progress' : 'Activated automatically'}${activation.at ? `, ${exactTime(activation.at)}` : ''}`}>
+        <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-600 text-white"><Icon name="bolt" className="h-3.5 w-3.5" /></span>
+        <span className="min-w-0"><span className="block text-[11px] uppercase tracking-wide text-slate-500">{verb}</span><span className="font-semibold text-teal-900">Automatic</span>{when}</span>
+    </p>;
+    if (activation.kind === 'staff') return <p className={`flex min-w-0 items-center gap-2 text-xs ${compact ? '' : 'mt-2'}`} aria-label={`${verb} ${activation.actor.name}${activation.at ? `, ${exactTime(activation.at)}` : ''}`}>
+        <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-900 ring-1 ring-inset ring-indigo-200">{initials(activation.actor.name)}</span>
+        <span className="min-w-0"><span className="block text-[11px] uppercase tracking-wide text-slate-500">{verb}</span><span className="break-words font-semibold text-slate-900">{activation.actor.name}</span>{when}</span>
+    </p>;
+    return <p className={`flex items-center gap-2 text-xs text-slate-500 ${compact ? '' : 'mt-2'}`}><span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400 ring-1 ring-inset ring-slate-200">?</span>Activator not recorded{when}</p>;
+}

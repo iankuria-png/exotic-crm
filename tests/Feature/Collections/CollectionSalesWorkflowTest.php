@@ -210,6 +210,22 @@ class CollectionSalesWorkflowTest extends CollectionWorkflowTestCase
         $this->assertSame('prepared', $result['session']['state']);
     }
 
+    public function test_queue_names_the_staff_member_who_activated_a_receipt_sale(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $this->fakeWordPress();
+        $this->getJson('/api/crm/collections/receipts')->assertOk()->assertJsonPath('data.0.activation', null);
+        $input = $this->accepted($this->input($r, $client, $price), $r, $actor);
+        $service = app(\App\Services\Collections\CollectionSalesFulfillmentService::class);
+        $service->prepare($r, $actor, $input);
+        $this->getJson('/api/crm/collections/receipts')->assertOk()->assertJsonPath('data.0.activation.kind', 'staff')
+            ->assertJsonPath('data.0.activation.pending', true)->assertJsonPath('data.0.activation.actor.name', $actor->name);
+        $service->resume(\App\Models\Collections\CollectionSalesItem::firstOrFail()->id);
+        $this->getJson('/api/crm/collections/receipts')->assertOk()->assertJsonPath('data.0.activation.kind', 'staff')
+            ->assertJsonPath('data.0.activation.pending', false)->assertJsonPath('data.0.activation.actor.id', $actor->id);
+        $this->getJson('/api/crm/collections/receipts/'.$r->id)->assertOk()->assertJsonPath('activation.actor.name', $actor->name);
+    }
+
     public function test_shared_unknown_stops_siblings_and_readback_keeps_confirmed_children(): void
     {
         [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();

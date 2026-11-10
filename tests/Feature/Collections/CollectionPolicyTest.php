@@ -145,4 +145,17 @@ class CollectionPolicyTest extends CollectionWorkflowTestCase
         $this->assertSame('pilot_ended', $status['live_state']);
         $this->assertSame('expired', $status['pilot']['state']);
     }
+
+    public function test_queue_marks_automatic_activation_without_inventing_a_person(): void
+    {
+        [$account, $device, , , $admin] = $this->purchase();
+        config(['collection.workspace_enabled' => true]);
+        Sanctum::actingAs($admin);
+        $r = $this->received($device);
+        app(CollectionDecisionService::class)->evaluate($r->id);
+        $this->fakeWordPress();
+        app(CollectionFulfillmentService::class)->resume(CollectionAllocation::firstOrFail()->id);
+        $this->getJson('/api/crm/collections/receipts')->assertOk()->assertJsonPath('data.0.activation.kind', 'automatic')
+            ->assertJsonPath('data.0.activation.actor', null)->assertJsonPath('data.0.activation.pending', false);
+    }
 }
