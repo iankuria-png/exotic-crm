@@ -64,10 +64,8 @@ test('stale automatic policy preserves manager entries for review', async ({ pag
 test('a reviewed correction changes one activation without another activate request', async ({ page }) => {
     const state = await setup(page, { correction: true });
     await page.getByRole('button', { name: 'Activate subscription', exact: true }).click();
-    await page.getByRole('button', { name: 'Revert this activation', exact: true }).click();
-    await page.getByLabel('Reason for the correction').fill('Wrong advertiser chosen');
-    await page.getByRole('button', { name: 'Preview correction', exact: true }).click();
-    await page.getByRole('button', { name: 'Confirm correction', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove activation', exact: true }).click();
+    await page.getByRole('form', { name: 'Remove payment activation' }).getByRole('button', { name: 'Remove activation', exact: true }).click();
     await expect(page.getByText('Payment allocation unassigned', { exact: true })).toBeVisible();
     expect(state.mutations.filter(m => m.path.endsWith('/sales/activate'))).toHaveLength(1);
     expect(state.mutations.filter(m => m.path.endsWith('/correction-preview'))).toHaveLength(1);
@@ -77,11 +75,10 @@ test('a reviewed correction changes one activation without another activate requ
 test('unavailable original snapshot explains the correction hold before a write', async ({ page }) => {
     const state = await setup(page, { correction: true, correctionHeld: true });
     await page.getByRole('button', { name: 'Activate subscription', exact: true }).click();
-    await page.getByRole('button', { name: 'Revert this activation', exact: true }).click();
-    await page.getByLabel('Reason for the correction').fill('Wrong advertiser chosen');
-    await page.getByRole('button', { name: 'Preview correction', exact: true }).click();
-    await expect(page.getByText(/original site operation does not contain a complete reversible snapshot/)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Confirm correction', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Remove activation', exact: true }).click();
+    await page.getByRole('form', { name: 'Remove payment activation' }).getByRole('button', { name: 'Remove activation', exact: true }).click();
+    await expect(page.getByText(/original activation cannot be reversed automatically/)).toBeVisible();
+    await expect(page.getByRole('form', { name: 'Remove payment activation' }).getByRole('alert')).toBeVisible();
     expect(state.mutations.filter(m => m.path.includes('/sales/corrections/') && m.path.endsWith('/execute'))).toHaveLength(0);
 });
 

@@ -1,4 +1,5 @@
 import CollectionSubsidiaryProgress, { subsidiaryProgressLabel } from './CollectionSubsidiaryProgress';
+import CollectionActivationCorrection from './CollectionActivationCorrection';
 import CollectionStandingAgreement from './CollectionStandingAgreement';
 import CollectionReceiptTimeline from './CollectionReceiptTimeline';
 import React, { useEffect, useRef, useState } from 'react';
@@ -168,7 +169,6 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
     const [mode, setMode] = useState(null);
     const [error, setError] = useState('');
     const [preview, setPreview] = useState(null);
-    const executeKey = useRef(null);
     const detail = useQuery({ queryKey: ['collection-receipt', user?.id, receiptId], queryFn: async () => (await api.get(`/crm/collections/receipts/${receiptId}`)).data, refetchInterval: poll, refetchOnWindowFocus: true });
     useEffect(() => {
         const trigger = document.activeElement;
@@ -179,6 +179,9 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
     const refresh = () => { queryClient.invalidateQueries({ queryKey: ['collection-receipt', user?.id, receiptId] }); queryClient.invalidateQueries({ queryKey: ['collection-receipts'] }); };
     const action = useMutation({ mutationFn: async ({ path, body }) => (await api.post(path, body)).data, onSuccess: () => { setError(''); refresh(); }, onError: e => { setError(e.response?.data?.message || 'The action could not be confirmed. Refresh to check its saved progress.'); refresh(); } });
     const row = detail.data;
+    useEffect(() => {
+        if (row?.allocation?.state === 'unassigned') { setMode('reassign'); setPreview(null); }
+    }, [row?.id, row?.allocation?.state]);
     const headTone = row ? receiptTone(row) : null;
     const trapTab = event => {
         if (event.key !== 'Tab') return;
@@ -197,12 +200,6 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
         if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
-    async function previewCorrection(intentId, selectedAction, reason) {
-        try {
-            const result = await action.mutateAsync({ path: `/crm/collections/receipts/${receiptId}/correction-preview`, body: { target_intent_id: intentId || undefined, action: selectedAction, reason, expected_version: row.allocation.version } });
-            setPreview(result); executeKey.current = crypto.randomUUID();
-        } catch { /* Error stays beside the preserved form. */ }
-    }
     return <dialog ref={dialog} onKeyDown={trapTab} onCancel={onClose} onClose={onClose} onClick={event => { if (event.target === event.currentTarget) onClose(); }} aria-labelledby="collection-receipt-title" className="m-0 ml-auto h-dvh max-h-dvh w-full max-w-3xl border-0 bg-slate-50 p-0 text-slate-900 shadow-2xl backdrop:bg-slate-900/40">
         <div className="flex h-full flex-col" onClick={e => e.stopPropagation()}><header className="border-b border-slate-200 bg-white px-5 py-4"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">Incoming payment{row ? ` · ${row.account_label}` : ''}</p><h2 id="collection-receipt-title" className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{row ? money(row) : 'Receipt details'}</h2></div><button type="button" className={button} onClick={onClose} autoFocus><Icon name="close" />Close</button></div>
             {row && <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2"><StatusPill tone={headTone.tone} pulse={headTone.pulse}>{row.usage?.state === 'already_recorded' ? 'Existing payment found' : headTone.label}</StatusPill>{row.activation && <TimeToActivate row={row} className="!mt-0" />}<WalletAfter balance={row.wallet_balance} />{row.activation ? <ActivatedBy activation={row.activation} compact /> : row.allocation?.decision_source === 'automatic' && <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-800"><Icon name="bolt" className="h-3.5 w-3.5" />Auto-activated</span>}<span className="text-xs tabular-nums text-slate-500">{row.provider_at ? `Paid ${receiptTime(row.provider_at)}` : `Phone arrival ${receiptTime(row.received_at)}`} · {relative(row.provider_at || row.received_at)}</span><span className="select-all rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">{row.reference}</span></div>}</header>
@@ -210,88 +207,35 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
             {detail.isPending && <p role="status" className="text-sm text-slate-500">Loading receipt evidence…</p>}
             {(detail.isError || error) && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error || 'Receipt could not be refreshed.'} <button className="underline" type="button" onClick={() => detail.refetch()}>Refresh receipt</button></p>}
             {row && <>{row.historical_only && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Historical archive receipt. Activation is disabled for this evidence.</p>}
-                <CollectionMatchEvidence key={`match-${row.id}`} row={row} />
+                {!row.allocation && <CollectionMatchEvidence key={`match-${row.id}`} row={row} />}
                 <CollectionReceiptEvidence usage={row.usage} />
                 {!row.allocation && !row.historical_only && <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><CollectionPurchaseReview key={row.id} row={row} footerTarget={footerTarget} onSaved={refresh} /></div>}
-                {row.allocation && <section aria-label="Activation" className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><h3 className="text-sm font-semibold text-slate-900">Activation</h3>
-                {row.allocation && row.clients?.map(c => <div key={c.id} className="flex items-center justify-between gap-3"><Link className="font-semibold text-teal-700 underline" to={`/clients/${c.id}?tab=payments`}>{c.name}</Link><span className="text-xs text-slate-500">{row.purchase?.subsidiary?.client_id === c.id ? 'Linked free exposure' : 'Paid profile'}</span></div>)}
-                {row.allocation && row.purchase && <p className="text-sm text-slate-700">{row.purchase.tier.toUpperCase()} · {row.purchase.duration_days} days · {money({ amount_minor: row.purchase.amount_minor, currency: row.purchase.currency })}<span className="mt-1 block text-xs text-slate-500">Saved purchase authority · {row.purchase.discount_source ? 'Approved negotiated price' : 'Selected price option'}</span></p>}
-                {!!row.reasons?.filter(reason => reason !== 'reviewed_purchase_authority_required').length && <ul className="space-y-2 text-sm text-slate-600">{row.reasons.filter(reason => reason !== 'reviewed_purchase_authority_required').map(reason => <li key={reason}>{explain(reason)}</li>)}</ul>}
-                {!!row.allocation?.effects?.length && <div className="space-y-2 rounded-lg bg-slate-50 p-3"><h3 className="text-sm font-semibold">Service progress</h3>{row.allocation.effects.filter(e => !e.superseded_at).map(e => <div key={e.id} className="flex flex-wrap justify-between gap-2 text-sm"><span>{['subsidiary_free', 'target_subsidiary'].includes(e.kind) ? 'Tanzania free exposure' : explain(e.kind)}</span><span className={e.state === 'succeeded' ? 'text-teal-800' : 'text-amber-800'}>{e.state === 'succeeded' ? 'Confirmed on site' : explain(e.state)}</span>{e.last_error_code && <p className="w-full text-xs text-slate-500">{explain(e.last_error_code)}</p>}</div>)}</div>}
-                <div className="flex flex-wrap gap-2">{row.decision_state === 'active_review_pending' && <button type="button" className={`${button} !border-teal-700 !bg-teal-700 !text-white`} disabled={action.isPending} onClick={() => action.mutate({ path: `/crm/collections/receipts/${receiptId}/confirm`, body: { expected_version: row.version } })}>Confirm correct</button>}
-                    {row.allocation && !row.historical_only && <button type="button" className={button} onClick={() => { setMode('reassign'); setPreview(null); }}>Change client or package</button>}
-                    {row.allocation && !row.historical_only && <button type="button" className={button} onClick={() => { setMode('undo_effect'); setPreview(null); }}>Undo this activation</button>}
+                {row.allocation && <section aria-label="Activation" className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><h3 className="text-sm font-semibold text-slate-900">{row.allocation.state === 'unassigned' ? 'Payment ready to assign' : 'Activation'}</h3>
+                {row.allocation.state === 'unassigned' && !mode && <p className="text-sm leading-6 text-slate-600">The previous activation has been removed. Assign this payment to the correct profile.</p>}
+                {row.allocation.state !== 'unassigned' && row.clients?.map(c => <div key={c.id} className="flex items-center justify-between gap-3"><Link className="font-semibold text-teal-700 underline" to={`/clients/${c.id}?tab=payments`}>{c.name}</Link><span className="text-xs text-slate-500">{row.purchase?.subsidiary?.client_id === c.id ? 'Linked free exposure' : 'Paid profile'}</span></div>)}
+                {row.allocation.state !== 'unassigned' && row.purchase && <p className="text-sm text-slate-700">{row.purchase.tier.toUpperCase()} · {row.purchase.duration_days} days · {money({ amount_minor: row.purchase.amount_minor, currency: row.purchase.currency })}<span className="mt-1 block text-xs text-slate-500">{row.purchase.discount_source ? 'Approved agreed price' : 'Package currently applied'}</span></p>}
+                {row.allocation.state !== 'unassigned' && !!row.reasons?.filter(reason => reason !== 'reviewed_purchase_authority_required').length && <ul className="space-y-2 text-sm text-slate-600">{row.reasons.filter(reason => reason !== 'reviewed_purchase_authority_required').map(reason => <li key={reason}>{explain(reason)}</li>)}</ul>}
+                {row.allocation.state !== 'unassigned' && !!row.allocation?.effects?.filter(e => !e.superseded_at && ['primary_paid', 'target_paid', 'verification_only', 'subsidiary_free', 'target_subsidiary'].includes(e.kind)).length && <div className="space-y-2 rounded-lg bg-slate-50 p-3"><h3 className="text-sm font-semibold">Service progress</h3>{row.allocation.effects.filter(e => !e.superseded_at && ['primary_paid', 'target_paid', 'verification_only', 'subsidiary_free', 'target_subsidiary'].includes(e.kind)).map(e => <div key={e.id} className="flex flex-wrap justify-between gap-2 text-sm"><span>{['subsidiary_free', 'target_subsidiary'].includes(e.kind) ? 'Tanzania free exposure' : explain(e.kind)}</span><span className={e.state === 'succeeded' ? 'text-teal-800' : 'text-amber-800'}>{e.state === 'succeeded' ? 'Confirmed on site' : explain(e.state)}</span>{e.last_error_code && <p className="w-full text-xs text-slate-500">{explain(e.last_error_code)}</p>}</div>)}</div>}
+                <div className="flex flex-wrap gap-2">{!mode && row.decision_state === 'active_review_pending' && <button type="button" className={`${button} !border-teal-700 !bg-teal-700 !text-white`} disabled={action.isPending} onClick={() => action.mutate({ path: `/crm/collections/receipts/${receiptId}/confirm`, body: { expected_version: row.version } })}>Confirm correct</button>}
+                    {!mode && row.allocation && !row.historical_only && <button type="button" className={button} onClick={() => { setMode('reassign'); setPreview(row.corrections?.find(c => c.request_key && c.state !== 'verified') || null); }}>{row.allocation.state === 'unassigned' ? 'Assign to profile' : 'Change profile or package'}</button>}
+                    {!mode && row.allocation && row.allocation.state !== 'unassigned' && !row.historical_only && <button type="button" className={button} onClick={() => { setMode('undo_effect'); setPreview(null); }}>Undo this activation</button>}
                 </div>
-                {mode && !preview && <CollectionChoiceForm row={row} mode={mode} busy={action.isPending} onCancel={() => setMode(null)} onSubmit={async ({ intentId, reason, action: selectedAction }) => {
-                    if (mode === 'approve') { try { await action.mutateAsync({ path: `/crm/collections/receipts/${receiptId}/approve`, body: { intent_id: intentId, expected_version: row.version } }); setMode(null); } catch {} }
-                    else await previewCorrection(intentId, selectedAction || mode, reason);
-                }} />}
-                {preview && <section className="rounded-lg border border-teal-200 bg-teal-50/40 p-4" aria-label="Correction preview"><h3 className="font-semibold">Review correction</h3><p className="mt-2 text-sm">Money received stays unchanged. One cash payment remains.</p><p className="mt-3 text-sm">From: <strong>{preview.preview.source_client?.name || `Profile ${preview.preview.source_purchase?.client_id || ''}`}</strong></p>{preview.preview.target_client && <p className="mt-1 text-sm">To: <strong>{preview.preview.target_client.name}</strong> · {preview.preview.target_purchase?.tier?.toUpperCase()} · {preview.preview.target_purchase?.duration_days} days</p>}{preview.reason && <p className="mt-2 text-sm text-slate-600">Reason: {preview.reason}</p>}<p className="mt-2 text-sm">{preview.preview.target_purchase ? `Corrected profile receives ${preview.preview.target_purchase.duration_days} purchased days under the approved stacking policy.` : 'Remove only this activation. Keep the funds unassigned for a later reviewed purchase.'}</p>{preview.preview.source_steps.map(step => <p key={step.source_effect_id} className="mt-2 text-sm text-slate-600">Source profile {step.client_id}: preserve earlier and later legitimate coverage. Site changes require exact confirmation.</p>)}{preview.preview.reasons.map(reason => <p className="mt-3 text-sm text-amber-900" key={reason}>{explain(reason)}</p>)}<div className="mt-4 flex gap-3"><button type="button" className={`${button} !border-teal-700 !bg-teal-700 !text-white`} disabled={!preview.preview.can_execute || action.isPending} onClick={async () => { try { const result = await action.mutateAsync({ path: `/crm/collections/corrections/${preview.id}/execute`, body: { preview_version: preview.version, idempotency_key: executeKey.current } }); setPreview(result); if (result.state === 'verified') { setMode(null); setPreview(null); } } catch {} }}>{action.isPending ? 'Checking…' : preview.request_key ? 'Check correction progress' : 'Confirm correction'}</button><button type="button" className={button} disabled={!!preview.request_key} onClick={() => { setPreview(null); setMode(null); }}>Cancel</button></div></section>}
+                {mode && <CollectionActivationCorrection key={mode + (preview?.id || '')} receipt={row} action={mode} initialCorrection={preview}
+                    onUpdated={async () => { await detail.refetch(); refresh(); }} onCancel={() => { setMode(null); setPreview(null); }} />}
+
                 </section>}
                 {row.subsidiary_obligation && <CollectionSubsidiaryProgress row={row} onChanged={refresh} />}
                 <section aria-label="Details and history" className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white px-4">
                 <details className="group py-1"><summary className={accordion}>Payer, receiving message &amp; payment details<Icon name="chevron" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" /></summary><div className="space-y-4 pb-4 pt-1"><CollectionPayerSummary payer={row.payer} /><CollectionMessageCopy key={`messages-${row.id}`} receiptId={row.id} /><dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-xs text-slate-500">Payment code</dt><dd className="mt-0.5 select-all font-mono font-medium">{row.reference}</dd></div><div><dt className="text-xs text-slate-500">Paid at</dt><dd className="mt-0.5">{receiptTime(row.provider_at)}</dd></div><div><dt className="text-xs text-slate-500">First received on phone</dt><dd className="mt-0.5">{receiptTime(row.received_at)}</dd></div></dl><p className="text-xs text-slate-500">{row.evidence_level === 'statement' ? 'Funds verified on a statement.' : 'Funds observed on the receiving phone; statement verification is separate.'}</p></div></details>
+                {row.allocation && <details className="py-1"><summary className={accordion}>Matching evidence<Icon name="chevron" className="h-4 w-4 text-slate-400" /></summary><div className="pb-4"><CollectionMatchEvidence row={row} /></div></details>}
                 {row.timeline && <div className="py-1"><CollectionReceiptTimeline key={`timeline-${row.id}`} receiptId={row.id} timeline={row.timeline} /></div>}
                 <details className="group py-1"><summary className={accordion}>Optional renewal agreement<Icon name="chevron" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" /></summary><div className="pb-4"><CollectionStandingAgreement key={`agreement-${row.id}`} receipt={row} /></div></details>
                 <div className="py-1"><CollectionSettlementSummary accountId={row.account_id} /></div>
-                <details className="group py-1 text-sm"><summary className={accordion}>Receipt reference and correction history<Icon name="chevron" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" /></summary><p className="mt-3 select-all font-mono text-xs">{row.reference}</p><button type="button" className="mt-2 text-xs text-teal-700 underline" onClick={() => navigator.clipboard?.writeText(row.reference)}>Copy reference</button><p className="mt-3 text-xs text-slate-500">Provider time: {row.provider_at ? new Date(row.provider_at).toLocaleString() : 'Unknown'}</p>{row.corrections?.map(c => <div key={c.id} className="mt-3 border-t border-slate-100 pt-3"><p>{explain(c.action)} · {explain(c.state)}</p><p className="mt-1 text-xs text-slate-500">{c.reason}</p>{c.request_key && !['verified', 'previewed'].includes(c.state) && <button className="mt-2 text-xs text-teal-700 underline" type="button" onClick={() => { setPreview(c); executeKey.current = c.request_key; }}>Check saved correction</button>}</div>)}<div className="pb-3" /></details>
+                <details className="group py-1 text-sm"><summary className={accordion}>Receipt reference and correction history<Icon name="chevron" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" /></summary><p className="mt-3 select-all font-mono text-xs">{row.reference}</p><button type="button" className="mt-2 text-xs text-teal-700 underline" onClick={() => navigator.clipboard?.writeText(row.reference)}>Copy reference</button><p className="mt-3 text-xs text-slate-500">Provider time: {row.provider_at ? new Date(row.provider_at).toLocaleString() : 'Unknown'}</p>{row.corrections?.map(c => <div key={c.id} className="mt-3 border-t border-slate-100 pt-3"><p>{explain(c.action)} · {explain(c.state)}</p><p className="mt-1 text-xs text-slate-500">{c.reason}</p>{c.request_key && !['verified', 'previewed'].includes(c.state) && <button className="mt-2 text-xs text-teal-700 underline" type="button" onClick={() => { setPreview(c); setMode(c.action === 'undo_effect' ? 'undo_effect' : 'reassign'); }}>Check saved correction</button>}</div>)}<div className="pb-3" /></details>
                 </section>
             </>}
         </div><div ref={setFooterTarget} className="shrink-0" /></div>
     </dialog>;
-}
-
-function CollectionChoiceForm({ row, mode, busy, onSubmit, onCancel }) {
-    const { user } = useAuth();
-    const [search, setSearch] = useState('');
-    const [sort, setSort] = useState('newest');
-    const [dateFrom, setDateFrom] = useState('');
-    const [dateTo, setDateTo] = useState('');
-    const [clientId, setClientId] = useState('');
-    const [priceId, setPriceId] = useState('');
-    const [quoteId, setQuoteId] = useState('');
-    const [intentId, setIntentId] = useState(row.candidates?.length === 1 ? row.candidates[0].intent_id : '');
-    const [reason, setReason] = useState('');
-    const [remember, setRemember] = useState(false);
-    const [standing, setStanding] = useState(false);
-    const [subsidiaryId, setSubsidiaryId] = useState('');
-    const [error, setError] = useState('');
-    const [saving, setSaving] = useState(false);
-    const choices = useQuery({ queryKey: ['collection-client-search', user?.id, row.id, search], enabled: search.trim().length >= 2 && mode !== 'undo_effect', queryFn: async () => (await api.get(`/crm/collections/receipts/${row.id}/candidates`, { params: { search } })).data });
-    const selectedClient = choices.data?.clients?.find(c => String(c.id) === clientId);
-    const prices = choices.data?.prices?.filter(p => Number(p.product?.platform_id) === Number(selectedClient?.platform_id)) || [];
-    async function submit(event) {
-        event.preventDefault(); setError(''); setSaving(true);
-        try {
-            let selectedIntent = intentId;
-            if (mode !== 'undo_effect' && !selectedIntent) {
-                const validUntil = new Date(Date.now() + (standing ? 30 : 1) * 86400000).toISOString();
-                let payerLink;
-                if (remember || standing) payerLink = (await api.post(`/crm/collections/receipts/${row.id}/payer-links`, { client_id: Number(clientId), auto_allowed: standing, valid_until: validUntil })).data;
-                const quote = choices.data?.quotes?.find(q => String(q.id) === quoteId);
-                const intent = (await api.post(`/crm/collections/receipts/${row.id}/intents`, { client_id: Number(clientId), product_price_id: Number(quote?.product_price_id || priceId), deal_id: quote ? quote.id : undefined,
-                    payer_link_id: payerLink?.id, authority: standing ? 'standing_agreement' : 'reviewed_quote', max_renewals: standing ? 3 : 1, valid_until: validUntil, subsidiary_client_id: subsidiaryId ? Number(subsidiaryId) : undefined })).data;
-                selectedIntent = intent.id; setIntentId(intent.id);
-            }
-            await onSubmit({ intentId: selectedIntent, reason, action: mode === 'reassign' && selectedClient?.id === row.purchase?.client_id ? 'change_package' : mode });
-        } catch (e) { setError(e.response?.data?.message || 'Could not save the purchase choice. Please check it and try again.'); }
-        finally { setSaving(false); }
-    }
-    return <form onSubmit={submit} className="space-y-4 rounded-lg border border-slate-200 p-4" aria-label="Purchase choice"><h3 className="font-semibold">{mode === 'undo_effect' ? 'Undo this activation' : 'Confirm the purchased service'}</h3>
-        {mode !== 'undo_effect' && <><label className="block text-sm">Reviewed purchase<select className="crm-input mt-1" value={intentId} onChange={e => setIntentId(e.target.value)}><option value="">Choose a profile and exact price option</option>{row.candidates?.map(c => <option key={c.intent_id} value={c.intent_id}>Profile {c.client_id} · {c.tier.toUpperCase()} · {c.duration_days} days · {money(c)}</option>)}</select></label>
-            {!intentId && <><label className="block text-sm">Find client by name, profile, advert phone or payment phone<input className="crm-input mt-1" value={search} minLength={2} onChange={e => setSearch(e.target.value)} /></label>{choices.isFetching && <p role="status" className="text-xs text-slate-500">Searching permitted profiles…</p>}{choices.isError && <p role="alert" className="text-sm text-rose-700">Client search failed. Change the search to try again.</p>}
-            <label className="block text-sm">Client<select required className="crm-input mt-1" value={clientId} onChange={e => { setClientId(e.target.value); setQuoteId(''); setPriceId(''); }}><option value="">Select profile</option>{choices.data?.clients?.map(c => <option key={c.id} value={c.id}>{c.name} · Profile {c.wp_post_id}</option>)}</select></label>
-            <label className="block text-sm">Existing approved quote<select className="crm-input mt-1" value={quoteId} onChange={e => { setQuoteId(e.target.value); setPriceId(''); }}><option value="">Use a catalogue price option</option>{choices.data?.quotes?.filter(q => String(q.client_id) === clientId).map(q => <option key={q.id} value={q.id}>{q.plan_type.toUpperCase()} · {q.duration_days} days · {q.currency} {q.amount}{q.discount_source ? ' · Negotiated' : ''}</option>)}</select></label>
-            {!!clientId && <details className="text-sm text-slate-600"><summary className="cursor-pointer">Recent subscription context</summary><p className="mt-2 text-xs text-slate-500">History helps explain a purchase; it does not authorize the next renewal.</p>{choices.data?.recent_subscriptions?.filter(q => String(q.client_id) === clientId).slice(0, 3).map(q => <p className="mt-2 text-xs" key={q.id}>{q.plan_type.toUpperCase()} · {q.duration_days || 'Unknown'} days · {q.currency} {q.amount}{q.discount_source ? ' · Negotiated' : ''} · {new Date(q.activated_at).toLocaleDateString()}</p>)}</details>}
-            {!quoteId && <label className="block text-sm">Exact price and duration<select required className="crm-input mt-1" value={priceId} onChange={e => setPriceId(e.target.value)}><option value="">Select purchased package</option>{prices.map(p => <option key={p.id} value={p.id}>{p.product.name} · {p.duration_days} days · {p.currency} {p.price}</option>)}</select></label>}
-            <p className="text-xs text-slate-500">For a new negotiated price, save an approved quote in Client Detail first. Receiving the same amount does not establish the purchased duration.</p>
-            {Number(selectedClient?.platform_id) === 6 && <label className="block text-sm">Reviewed linked Tanzania profile ID<input type="number" min="1" required className="crm-input mt-1" value={subsidiaryId} onChange={e => setSubsidiaryId(e.target.value)} /></label>}
-            <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={remember} onChange={e => setRemember(e.target.checked)} />Remember this observed payer for this profile after review</label>
-            {['admin', 'sub_admin'].includes(user?.role) && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={standing} onChange={e => setStanding(e.target.checked)} />Authorize this exact renewal for up to 3 payments over 30 days. Automatic account limits still apply.</label>}</>}
-        </>}
-        {mode !== 'approve' && <label className="block text-sm">Correction reason<textarea required minLength={3} maxLength={1000} className="crm-input mt-1" value={reason} onChange={e => setReason(e.target.value)} /></label>}
-        {error && <p role="alert" className="text-sm text-rose-800">{error}</p>}<div className="flex flex-wrap gap-3"><button type="submit" className={`${button} !border-teal-700 !bg-teal-700 !text-white`} disabled={busy || saving}>{saving ? 'Saving…' : mode === 'approve' ? 'Review and activate' : 'Preview correction'}</button><button type="button" className={button} disabled={saving} onClick={onCancel}>Cancel</button></div>
-    </form>;
 }
 
 function CollectionSettlementSummary({ accountId }) {

@@ -24,8 +24,8 @@ class CollectionActivationAttribution
             return [];
         }
         $ids = $receipts->pluck('id')->all();
-        $reserved = DB::table('collection_audit')->whereIn('receipt_id', $ids)->where('action', 'collection_allocation_reserved')
-            ->whereNotNull('actor_id')->orderBy('id')->get(['receipt_id', 'actor_id', 'created_at'])->unique('receipt_id')->keyBy('receipt_id');
+        $reserved = DB::table('collection_audit')->whereIn('receipt_id', $ids)->whereIn('action', ['collection_allocation_reserved', 'correction_verified'])
+            ->whereNotNull('actor_id')->orderByDesc('id')->get(['receipt_id', 'actor_id', 'action', 'created_at'])->unique('receipt_id')->keyBy('receipt_id');
         $actorIds = $reserved->pluck('actor_id');
         foreach ($receipts as $r) {
             if ($r->relationLoaded('sale') && $r->sale) {
@@ -46,7 +46,14 @@ class CollectionActivationAttribution
     {
         $allocation = $r->allocation;
         if ($allocation) {
-            $at = $allocation->effects?->first(fn ($e) => ! $e->superseded_at && $e->state === 'succeeded')?->verified_at ?? $allocation->created_at;
+            if ($allocation->state === 'unassigned') {
+                return null;
+            }
+            $correction = $reserved[$r->id] ?? null;
+            $at = $allocation->effects?->first(fn ($e) => ! $e->superseded_at && $e->state === 'succeeded' && in_array($e->effect_kind, ['primary_paid', 'target_paid', 'verification_only']))?->verified_at ?? $allocation->created_at;
+            if (($correction->action ?? null) === 'correction_verified') {
+                return $this->staff($users[$correction->actor_id] ?? null, $at?->toIso8601String(), ! $this->confirmed($r), 'Payment correction');
+            }
             if ($allocation->decision_source === 'automatic') {
                 return ['kind' => 'automatic', 'actor' => null, 'at' => $at?->toIso8601String(), 'pending' => ! $this->confirmed($r), 'via' => 'Automatic activation'];
             }
@@ -69,7 +76,7 @@ class CollectionActivationAttribution
 
     private function confirmed($r): bool
     {
-        return (bool) $r->allocation?->effects?->contains(fn ($e) => ! $e->superseded_at && $e->state === 'succeeded');
+        return (bool) $r->allocation?->effects?->contains(fn ($e) => ! $e->superseded_at && $e->state === 'succeeded' && in_array($e->effect_kind, ['primary_paid', 'target_paid', 'verification_only']));
     }
 
     private function staff(?User $user, ?string $at, bool $pending, string $via): array

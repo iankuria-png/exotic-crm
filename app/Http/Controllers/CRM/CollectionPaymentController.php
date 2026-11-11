@@ -200,7 +200,7 @@ class CollectionPaymentController extends Controller
         $suggestions = array_values(array_filter(array_map(fn ($candidate) => isset($profiles[$candidate['id']])
             ? ['id' => $candidate['id'], 'name' => $profiles[$candidate['id']]->name, 'score' => $candidate['score']] : null, $suggestions)));
 
-        return ['id' => $r->id, 'subsidiary_obligation' => $obligation ? ['state' => $obligation->state, 'version' => $obligation->version, 'last_error_code' => $obligation->last_error_code] : null, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
+        return ['id' => $r->id, 'subsidiary_obligation' => $obligation && $allocation->state !== 'unassigned' ? ['state' => $obligation->state, 'version' => $obligation->version, 'last_error_code' => $obligation->last_error_code] : null, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
             'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
             'payer' => $payer ?? app(CollectionPayerEvidenceService::class)->forReceipt($r), 'captured_payer_receipts' => $capturedCount,
             'usage' => $usage, 'activation' => $activation, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
@@ -264,7 +264,7 @@ class CollectionPaymentController extends Controller
         $phone = app(CollectionPrivacy::class)->tzPhone($term);
         $payerClients = $phone ? CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone))->whereNull('revoked_at')->where('valid_until', '>', now())->pluck('client_id')->all() : [];
         $clients = $context->selectable()->whereIn('platform_id', $platforms)->where(function ($q) use ($term, $payerClients, $phone) {
-            $q->where('name', 'like', '%'.$term.'%')->orWhere('phone_normalized', 'like', '%'.($phone ?? $term).'%')->orWhere('wp_post_id', $term)->orWhereIn('id', $payerClients);
+            $q->where('name', 'like', '%'.$term.'%')->orWhere('wp_profile_permalink', $term)->orWhere('wp_profile_permalink', rtrim($term, '/').'/')->orWhere('phone_normalized', 'like', '%'.($phone ?? $term).'%')->orWhere('wp_post_id', $term)->orWhereIn('id', $payerClients);
         })->orderBy('name')->limit(20)->get();
 
         return response()->json(['clients' => $context->clientRows($clients), 'prices' => ProductPrice::with('product:id,name,tier,platform_id')->where('is_active', true)->where('currency', $r->currency)
@@ -324,9 +324,18 @@ class CollectionPaymentController extends Controller
         $this->enabled();
         $r = $this->access->receipt($request->user(), $receipt);
         abort_unless($r->allocation, 422);
-        $v = $request->validate(['target_intent_id' => 'nullable|uuid', 'action' => 'required|in:reassign,change_package,undo_effect', 'expected_version' => 'required|integer', 'reason' => 'required|string|min:3|max:1000']);
+        $v = $request->validate(['target_intent_id' => 'nullable|uuid', 'action' => 'required|in:reassign,change_package,undo_effect',
+            'expected_version' => 'required|integer|min:1', 'reason' => 'nullable|string|min:3|max:1000',
+            'client_id' => 'nullable|integer|min:1', 'product_price_id' => 'nullable|integer|min:1']);
+        $reason = trim((string) ($v['reason'] ?? '')) ?: ($v['action'] === 'undo_effect' ? 'Staff removed this payment activation.' : 'Staff corrected the profile or package for this payment.');
+        if ($v['action'] !== 'undo_effect' && empty($v['target_intent_id'])) {
+            abort_unless(! empty($v['client_id']) && ! empty($v['product_price_id']), 422, 'Choose the intended profile and package.');
 
-        return response()->json($corrections->preview($r->allocation, $request->user(), $v['action'], $v['target_intent_id'] ?? null, $v['expected_version'], $v['reason']));
+            return response()->json($corrections->previewPurchase($r->allocation, $request->user(), (int) $v['client_id'],
+                (int) $v['product_price_id'], (int) $v['expected_version'], $reason));
+        }
+
+        return response()->json($corrections->preview($r->allocation, $request->user(), $v['action'], $v['target_intent_id'] ?? null, $v['expected_version'], $reason));
     }
 
     public function executeCorrection(Request $request, string $correction, CollectionCorrectionService $corrections)

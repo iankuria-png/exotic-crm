@@ -24,9 +24,60 @@ use Illuminate\Support\Str;
 
 class CollectionCorrectionService
 {
+    /** A staff correction chooses a profile and package directly; purchase authority is internal. */
+    public function previewPurchase(CollectionAllocation $allocation, User $actor, int $clientId, int $priceId, int $version, string $reason): CollectionCorrection
+    {
+        $this->authorize($allocation, $actor);
+        if ($allocation->version !== $version) {
+            throw new CollectionException('correction_preview_stale_or_held', 409);
+        }
+        $client = Client::findOrFail($clientId);
+        $independent = ($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent';
+        $purchases = app(CollectionPurchaseService::class);
+        $intent = $purchases->prepare($allocation->receipt->account, $client, $actor, [
+            'product_price_id' => $priceId, 'authority' => 'reviewed_quote',
+            'subsidiary_client_id' => (int) $clientId === (int) $allocation->purchase_snapshot['client_id'] ? data_get($allocation->purchase_snapshot, 'subsidiary.client_id') : null,
+            'provider_reference' => $allocation->receipt->reference_norm, 'valid_until' => now()->addMinutes(15),
+        ], ! $independent);
+        if ($independent) {
+            $intent->purchase_snapshot = array_merge($intent->purchase_snapshot, [
+                'subsidiary_mode' => 'independent', 'subsidiary_platform_id' => $allocation->purchase_snapshot['subsidiary_platform_id'],
+            ]);
+        }
+        // Keep an existing approved discount when staff keeps the purchased price option.
+        $original = $allocation->purchase_snapshot;
+        if ((int) $priceId === (int) $original['product_price_id'] && ! empty($original['discount_approved_by'])
+            && ! empty($original['discount_source']) && ! empty($original['original_amount'])
+            && (int) $original['catalogue_minor'] === (int) $intent->purchase_snapshot['catalogue_minor']) {
+            $intent->purchase_snapshot = array_merge($intent->purchase_snapshot, array_intersect_key($original, array_flip([
+                'amount_minor', 'discount_approved_by', 'discount_source', 'original_amount', 'discount_percentage',
+            ])));
+        }
+        $purchases->validate($intent, $allocation->receipt, false);
+        if ((int) $client->platform_id !== (int) $allocation->purchase_snapshot['platform_id']) {
+            throw new CollectionException('cross_market_correction_requires_recovery', 422);
+        }
+        DB::transaction(function () use ($allocation, $version, $intent, $purchases, $actor) {
+            $current = CollectionAllocation::lockForUpdate()->findOrFail($allocation->id);
+            if ($current->version !== $version) {
+                throw new CollectionException('correction_preview_stale_or_held', 409);
+            }
+            $intent->save();
+            $purchases->audit($allocation->receipt, $actor->id, 'purchase_authority_reviewed', [
+                'intent_id' => $intent->id, 'purchase' => $intent->purchase_snapshot, 'purpose' => 'payment_correction',
+            ]);
+        });
+        $action = (int) $clientId === (int) $allocation->purchase_snapshot['client_id'] ? 'change_package' : 'reassign';
+
+        return $this->preview($allocation, $actor, $action, $intent->id, $version, $reason);
+    }
+
     public function preview(CollectionAllocation $allocation, User $actor, string $action, ?string $targetIntentId, int $version, string $reason): CollectionCorrection
     {
         $this->authorize($allocation, $actor);
+        if ($action === 'undo_effect' && $allocation->state === 'unassigned') {
+            throw new CollectionException('activation_already_removed', 409);
+        }
         if ($allocation->version !== $version || ! in_array($action, ['undo_effect', 'reassign', 'change_package']) || trim($reason) === '') {
             throw new CollectionException('correction_version_or_action_invalid', 422);
         }
