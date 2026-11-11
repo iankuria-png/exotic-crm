@@ -1,4 +1,4 @@
-import CollectionSubsidiaryProgress from './CollectionSubsidiaryProgress';
+import CollectionSubsidiaryProgress, { subsidiaryProgressLabel } from './CollectionSubsidiaryProgress';
 import CollectionStandingAgreement from './CollectionStandingAgreement';
 import CollectionReceiptTimeline from './CollectionReceiptTimeline';
 import React, { useEffect, useRef, useState } from 'react';
@@ -149,7 +149,7 @@ function ReceiptRow({ row, onOpen }) {
                 {!row.clients?.length && row.match_suggestions?.map(candidate => <p key={candidate.id} className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-slate-600"><Link to={`/clients/${candidate.id}`} className="font-medium text-teal-800 underline">{candidate.name}</Link><span className={`rounded-full px-1.5 py-0.5 font-semibold tabular-nums ${candidate.score > 80 ? 'bg-teal-50 text-teal-900' : 'bg-amber-50 text-amber-900'}`}>Saved match score {candidate.score} / 100</span><span>{row.match_needs_choice ? 'Staff choice required' : 'Suggested profile'}</span></p>)}
                 {row.purchase && <p className="mt-1 text-xs text-slate-500">{row.purchase.tier.toUpperCase()} · {row.purchase.duration_days} days</p>}</div></td>
         <td className="px-4 py-4 max-md:p-0"><StatusPill tone={status.tone} pulse={status.pulse}>{status.label}</StatusPill>
-            {row.subsidiary_obligation && !['succeeded', 'already_active', 'canceled'].includes(row.subsidiary_obligation.state) && <p className="mt-2 text-xs font-medium text-amber-900">TZ active · Tanzania {row.subsidiary_obligation.state === 'copying' ? 'copying' : 'needs completion'}</p>}
+            {row.subsidiary_obligation && !['succeeded', 'already_active', 'canceled'].includes(row.subsidiary_obligation.state) && <p className="mt-2 text-xs font-medium text-amber-900">TZ active · {subsidiaryProgressLabel(row.subsidiary_obligation.state, row.subsidiary_obligation.last_error_code)}</p>}
             {!row.activation && automatic && <p className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-teal-800"><Icon name="bolt" className="h-3.5 w-3.5" />Auto-activated</p>}
             {recorded && match && <p className="mt-2 text-xs text-slate-600">{match.client && <Link className="font-medium text-teal-800 underline" to={`/clients/${match.client.id}?tab=deals`}>{match.client.name}</Link>}{match.deal && <span className="block mt-0.5">{match.deal.plan_type?.toUpperCase()} · {match.deal.status === 'active' && new Date(match.deal.expires_at).getTime() > Date.now() ? 'Active' : match.deal.status} · expires {receiptTime(match.deal.expires_at)}</span>}</p>}
             <ActivatedBy activation={row.activation} />

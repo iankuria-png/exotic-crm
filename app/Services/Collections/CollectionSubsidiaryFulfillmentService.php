@@ -190,9 +190,23 @@ class CollectionSubsidiaryFulfillmentService
         $target = Platform::findOrFail($o->target_platform_id);
         $preview = app(SubsidiaryTrialService::class)->previewForDeal($main, $target, $options['client_id'] ?? null,
             $options + ['duration_mode' => 'match_primary', 'copy' => true, 'collection_obligation_id' => $o->id]);
-        if ($preview['config_errors'] || ! in_array($preview['resolution']['kind'], ['existing', 'create_if_needed', 'already_active'])
-            || ! in_array($preview['copy_preview']['status'] ?? 'off', ['off', 'ready']) || ! empty($preview['duration']['error'])) {
-            throw new CollectionException('subsidiary_profile_setup_required');
+        if ($preview['config_errors']) {
+            throw new CollectionException('subsidiary_market_configuration_required');
+        }
+        if (! in_array($preview['resolution']['kind'], ['existing', 'create_if_needed', 'already_active'])) {
+            throw new CollectionException($preview['resolution']['kind'] === 'ambiguous'
+                ? 'subsidiary_multiple_profiles_require_selection' : 'subsidiary_profile_unavailable');
+        }
+        if (! empty($preview['duration']['error'])) {
+            throw new CollectionException('subsidiary_period_requires_review');
+        }
+        $copy = $preview['copy_preview'] ?? ['status' => 'off'];
+        if (! in_array($copy['status'], ['off', 'ready'])) {
+            throw new CollectionException(match ($copy['status']) {
+                'needs_selection' => 'subsidiary_location_or_currency_required',
+                'blocked' => 'subsidiary_profile_copy_blocked',
+                default => 'subsidiary_profile_copy_unavailable',
+            });
         }
         $request = Request::create('/collection-subsidiary', 'POST');
         $request->setUserResolver(fn () => $actor);

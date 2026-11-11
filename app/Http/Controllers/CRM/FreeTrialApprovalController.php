@@ -272,6 +272,9 @@ class FreeTrialApprovalController extends Controller
             $clientIds = $target ? [$target->id] : [];
             abort_unless($target || ! empty($input['create_confirmed']), 422, 'Confirm creation of a WordPress subsidiary profile.');
             $input['subsidiary_seed'] = $preview['will_create'] ?? ['name' => $deal->client->name, 'phone_normalized' => app(\App\Services\SubsidiaryClientResolver::class)->targetPhone($deal->client, Platform::findOrFail($market)), 'email' => $deal->client->email, 'city' => $deal->client->city];
+            if ($preview['resolution']['kind'] === 'create_if_needed') {
+                $input['subsidiary_seed']['separate_account'] = true;
+            }
             if (! $target && $copyStatus !== 'off') {
                 // A paired new profile is only created with its complete public copy.
                 $promotion += app(\App\Services\SubsidiaryProfileCopyService::class)->terms($preview['copy_preview'], $input['subsidiary_seed'], (string) ($input['request_key'] ?? \Illuminate\Support\Str::uuid()));

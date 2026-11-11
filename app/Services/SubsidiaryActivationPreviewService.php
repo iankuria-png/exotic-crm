@@ -64,7 +64,7 @@ class SubsidiaryActivationPreviewService
             if ($phone) {
                 $q->orWhere('phone_normalized', $phone);
             }
-            if ($email) {
+            if (! $phone && $email) {
                 $q->orWhereRaw('LOWER(email) = ?', [$email]);
             }
             if ($selected) {
@@ -77,9 +77,7 @@ class SubsidiaryActivationPreviewService
         $client = $selected ? $candidates->firstWhere('id', $selected) : ($candidates->count() === 1 ? $candidates->first() : null);
         abort_if($selected && ! $client, 422, 'The selected profile does not belong to this market.');
         $ambiguous = ! $selected && ($candidates->count() > 1 || ($client && $phone && $client->phone_normalized !== $phone));
-        if ($client && ! $selected && $email && $this->email($client->email) && $email !== $this->email($client->email)) {
-            $ambiguous = true;
-        }
+        // The advertiser phone identifies the paired profile. Each website may use a different login email.
         $removed = $client && ($client->profile_removal_requested_at || $client->profile_reverted_at || ! $client->wp_post_id || ! $client->wp_user_id
             || app(SubsidiaryProfileCopyService::class)->incompleteTarget($client)); // An unfinished copied profile is never a ready existing match.
         $coverage = $client ? $this->coverage($client) : null;

@@ -30,7 +30,15 @@ class CollectionSubsidiaryController extends Controller
     {
         $o = $this->owner($request, $receipt);
 
+        $trial = $o->trial_request_id ? \App\Models\FreeTrialRequest::find($o->trial_request_id) : null;
+        $job = \Illuminate\Support\Facades\DB::table('collection_outbox')->where('kind', 'subsidiary')->where('subject_id', $o->id)->orderByDesc('id')->first();
+
         return response()->json(['id' => $o->id, 'version' => $o->version, 'state' => $o->state, 'last_error_code' => $o->last_error_code,
+            'profile_ready' => (bool) $trial?->client_id,
+            'profile_action' => $trial?->client_id ? ($trial->activation_result_json['profile_origin'] ?? 'existing') : ($trial ? 'creating' : 'finding'),
+            'duration_days' => $o->interval['duration_days'] ?? $o->allocation->purchase_snapshot['duration_days'],
+            'automation' => ['attempts' => (int) ($job?->attempts ?? 0),
+                'next_retry_at' => $job && ! $job->completed_at ? \Illuminate\Support\Carbon::parse($job->available_at)->toIso8601String() : null],
             'deal_id' => $o->source_deal_id, 'target_platform_id' => $o->target_platform_id, 'trial_request_id' => $o->trial_request_id,
             'summary' => app(SubsidiaryActivationSummaryService::class)->read(Deal::findOrFail($o->source_deal_id), $request->user())]);
     }
