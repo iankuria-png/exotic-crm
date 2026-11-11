@@ -105,6 +105,7 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
         } finally { setBusy(false); }
     }
 
+    const unchanged = !removing && !removed && !locked && target && Number(target.id) === Number(source.client_id) && Number(price) === Number(source.product_price_id);
     const label = locked ? 'Check correction progress' : removing ? 'Remove activation' : removed ? 'Assign payment' : target && Number(target.id) !== Number(source.client_id) ? 'Move activation' : 'Update package';
     return <form onSubmit={submit} aria-label={removing ? 'Remove payment activation' : 'Change profile or package'} className="space-y-4 border-t border-slate-200 pt-4">
         <div><h4 className="text-sm font-semibold text-slate-900">{removing ? 'Remove this activation' : removed ? 'Assign this payment' : 'Change profile or package'}</h4>
@@ -135,7 +136,8 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
         {saved && !saved.preview.can_execute && <div role="alert" className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-950">{saved.preview.reasons.map(code => <p key={code}>{explain(code)}</p>)}</div>}
         {status && <p role="status" className="text-sm text-teal-900">{status}</p>}
         {error && <p role="alert" className="text-sm text-rose-800">{error}</p>}
-        <div className="flex flex-wrap gap-3"><button type="submit" className={primaryButton} disabled={busy || (!locked && !removing && (!target || !price || options.isError))}>{busy ? 'Applying correction…' : label}</button>
+        {unchanged && <p className="text-xs text-slate-500">Choose a different profile or package to apply a change.</p>}
+        <div className="flex flex-wrap gap-3"><button type="submit" className={primaryButton} disabled={busy || unchanged || (!locked && !removing && (!target || !price || options.isError))}>{busy ? 'Applying correction…' : label}</button>
             <button type="button" className={secondaryButton} disabled={busy} onClick={onCancel}>{locked ? 'Close' : 'Cancel'}</button></div>
     </form>;
 }

@@ -58,6 +58,8 @@ class CollectionPaymentController extends Controller
         if (! empty($v['state'])) {
             if (in_array($v['state'], ['needs_action', 'already_recorded'], true)) {
                 app(CollectionReceiptStatusService::class)->filter($q, $v['state']);
+            } elseif ($v['state'] === 'reversed') {
+                $q->whereIn('funds_state', ['reversed', 'disputed']);
             } elseif ($v['state'] === 'purchase_saved') {
                 $q->whereDoesntHave('allocation')->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
                     ->where(fn ($q) => $q->whereNull('conflicts')->orWhereJsonLength('conflicts', 0))
@@ -147,7 +149,9 @@ class CollectionPaymentController extends Controller
             $needsAction = $pending->count();
         }
 
-        return response()->json($rows->toArray() + ['counts' => ['needs_action' => $needsAction], 'wallet_balances' => $wallet]);
+        $reversals = empty($v['client_id']) ? $this->reversalAlerts($this->access->accountIds($request->user())) : [];
+
+        return response()->json($rows->toArray() + ['counts' => ['needs_action' => $needsAction], 'wallet_balances' => $wallet, 'reversals' => $reversals]);
     }
 
     public function packageRuleEvidence(Request $request, string $account)
@@ -174,6 +178,9 @@ class CollectionPaymentController extends Controller
         $payload['timeline'] = app(\App\Services\Collections\CollectionAuditTimeline::class)->forReceipt($r, isset($timelineInput['timeline_before']) ? (int) $timelineInput['timeline_before'] : null);
         $payload['history'] = DB::table('collection_audit')->where('receipt_id', $r->id)->orderByDesc('id')->limit(50)->get();
         $payload['corrections'] = $r->allocation ? CollectionCorrection::where('allocation_id', $r->allocation->id)->orderByDesc('created_at')->get() : [];
+        $review = DB::table('collection_audit as a')->leftJoin('users as u', 'u.id', '=', 'a.actor_id')->where('a.receipt_id', $r->id)
+            ->where('a.action', 'like', 'reversal_reviewed%')->orderByDesc('a.id')->first(['a.context', 'a.created_at', 'u.name']);
+        $payload['reversal_review'] = $review ? (json_decode((string) $review->context, true) ?: []) + ['at' => \Illuminate\Support\Carbon::parse($review->created_at)->toIso8601String(), 'by' => $review->name] : null;
         $payload['field_provenance'] = $r->field_provenance;
         $payload['conflicts'] = $r->conflicts;
 
@@ -360,6 +367,7 @@ class CollectionPaymentController extends Controller
 
         return response()->json(['unread_receipts' => (clone $events)->count('id'), 'cursor' => $max,
             'device_needs_attention' => $health['needs_attention'],
+            'device_attention' => collect($health['devices'])->contains(fn ($d) => ($d['state'] ?? null) === 'account_review') ? 'wallet' : ($health['needs_attention'] ? 'phone' : null),
             'last_contact_at' => collect($health['devices'])->pluck('last_contact_at')->filter()->max()]);
     }
 
@@ -391,6 +399,40 @@ class CollectionPaymentController extends Controller
         $this->enabled();
 
         return response()->json($automation->recordSignoff($request->user(), $account, $request->all()));
+    }
+
+    /** Payments the provider reversed or put on hold in the last 30 days, with whether service is still running and whether staff reviewed it. */
+    private function reversalAlerts(array $accountIds): array
+    {
+        $rows = CollectionReceipt::with(['allocation.effects', 'sale.items'])->whereIn('account_id', $accountIds)->whereIn('funds_state', ['reversed', 'disputed'])
+            ->where('updated_at', '>=', now()->subDays(30))->orderByDesc('updated_at')->limit(20)->get();
+        $reviewed = DB::table('collection_audit')->whereIn('receipt_id', $rows->pluck('id'))->where('action', 'like', 'reversal_reviewed%')
+            ->orderBy('id')->get(['receipt_id', 'action', 'context', 'created_at'])->keyBy('receipt_id');
+
+        return $rows->map(function (CollectionReceipt $r) use ($reviewed) {
+            $active = (bool) $r->allocation?->effects?->contains(fn ($e) => ! $e->superseded_at && $e->state === 'succeeded' && in_array($e->effect_kind ?? $e->kind ?? '', ['primary_paid', 'target_paid'], true))
+                || in_array($r->sale?->state, ['confirmed', 'partial'], true);
+            $review = $reviewed[$r->id] ?? null;
+
+            return ['id' => $r->id, 'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
+                'funds_state' => $r->funds_state, 'flagged_at' => $r->updated_at?->toIso8601String(), 'service_active' => $active,
+                'reviewed' => $review ? ['decision' => json_decode((string) $review->context, true)['decision'] ?? null, 'at' => \Illuminate\Support\Carbon::parse($review->created_at)->toIso8601String()] : null];
+        })->values()->all();
+    }
+
+    public function reviewReversal(Request $request, int $receipt)
+    {
+        $this->enabled();
+        $r = $this->access->receipt($request->user(), $receipt);
+        $v = $request->validate(['decision' => 'required|in:keep_service', 'note' => 'required|string|min:3|max:500']);
+        if (! in_array($r->funds_state, ['reversed', 'disputed'], true)) {
+            throw new \App\Services\Collections\CollectionException('receipt_not_reversed', 422);
+        }
+        DB::table('collection_audit')->insertOrIgnore(['receipt_id' => $r->id, 'account_id' => $r->account_id, 'actor_id' => $request->user()->id,
+            'action' => 'reversal_reviewed_service_kept', 'context' => json_encode(['decision' => 'Keep service active', 'note' => $v['note'], 'actor' => $request->user()->name]),
+            'dedupe_key' => 'reversal-review:'.$r->id, 'created_at' => now()]);
+
+        return response()->json(['reviewed' => true]);
     }
 
     public function readArrivals(Request $request)

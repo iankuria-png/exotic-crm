@@ -263,7 +263,7 @@ class FieldSalesController extends Controller
 
         return response()->json([
             'data' => $query->paginate((int) $request->input('per_page', 50)),
-            'agents' => User::query()->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)->orderBy('name')->get(['id', 'name', 'email']),
+            'agents' => $this->fieldAgents()->orderBy('name')->get(['id', 'name', 'email']),
             'markets' => Platform::query()->orderBy('name')->get(['id', 'name', 'currency_code']),
             'summary' => $this->buildCommissionSummary($validated),
             'leaderboard' => $this->buildAgentLeaderboard($validated),
@@ -417,14 +417,24 @@ class FieldSalesController extends Controller
     }
 
     /**
+     * Field agents for reporting: the field-sales role plus anyone who earned field commission or was credited
+     * with a field activation, so a later role change (e.g. promotion) never hides their history.
+     */
+    private function fieldAgents()
+    {
+        return User::query()->where(fn ($q) => $q->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+            ->orWhereIn('id', Commission::query()->select('agent_user_id')->whereNotNull('agent_user_id'))
+            ->orWhereIn('id', Deal::query()->select('activated_by_field_agent')->whereNotNull('activated_by_field_agent')));
+    }
+
+    /**
      * Per-agent scoreboard: how much business each field agent brought in,
      * not just what they earned. GMV is the activated non-trial deal value
      * credited to the agent, kept split by currency so markets never mix.
      */
     private function buildAgentLeaderboard(array $validated): array
     {
-        $agents = User::query()
-            ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+        $agents = $this->fieldAgents()
             ->orderBy('name')
             ->get(['id', 'name', 'email']);
 
@@ -523,8 +533,7 @@ class FieldSalesController extends Controller
 
     private function buildAcquisitionFunnel(array $validated): array
     {
-        $fieldSalesIds = User::query()
-            ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+        $fieldSalesIds = $this->fieldAgents()
             ->pluck('id')
             ->all();
 
@@ -677,8 +686,7 @@ class FieldSalesController extends Controller
         $from = !empty($validated['date_from']) ? \Illuminate\Support\Carbon::parse($validated['date_from'])->startOfDay() : now()->startOfMonth();
         $to = !empty($validated['date_to']) ? \Illuminate\Support\Carbon::parse($validated['date_to'])->endOfDay() : now()->endOfDay();
 
-        $agents = User::query()
-            ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+        $agents = $this->fieldAgents()
             ->orderBy('name')
             ->get(['id', 'name', 'email']);
 

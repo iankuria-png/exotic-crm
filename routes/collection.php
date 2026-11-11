@@ -28,6 +28,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('receipts/{receipt}/payer-links', [CollectionPaymentController::class, 'reviewPayer'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/approve', [CollectionPaymentController::class, 'approve'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/confirm', [CollectionPaymentController::class, 'confirm'])->whereNumber('receipt');
+        Route::post('receipts/{receipt}/reversal-review', [CollectionPaymentController::class, 'reviewReversal'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/correction-preview', [CollectionPaymentController::class, 'correctionPreview'])->whereNumber('receipt');
         Route::post('corrections/{correction}/execute', [CollectionPaymentController::class, 'executeCorrection']);
         Route::get('arrivals', [CollectionPaymentController::class, 'arrivals']);

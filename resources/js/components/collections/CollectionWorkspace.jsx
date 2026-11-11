@@ -14,7 +14,7 @@ import CollectionMessageCopy from './CollectionMessageCopy';
 import CollectionReceiptEvidence, { receiptTime } from './CollectionReceiptEvidence';
 import { ActivatedBy, ActivationSpeedSummary, Icon, StatusPill, TimeToActivate, WalletAfter, WalletBalanceSummary, relative, tones } from './collectionUi';
 
-const states = { purchase_saved: 'Choice saved · Review activation', sales_draft: 'Allocations saved · Review activation', sales_prepared: 'Waiting to activate', sales_activating: 'Activating subscriptions', sales_partial: 'Partly active', sales_confirmed: 'Active · Confirmed', sales_needs_review: 'Sale needs checking', collecting: 'Waiting for payment details', historical: 'Historical · no activation', ready_auto: 'Ready for automatic activation', dispatching: 'Activation processing', active_review_pending: 'Active · Review needed', reviewed: 'Reviewed', needs_review: 'Needs a sales decision', uncertain: 'Checking site confirmation', correcting: 'Correction in progress', unassigned: 'Money received · Unassigned', dependent_pending: 'Active · Tanzania exposure pending' };
+const states = { reversed: 'Reversed by M-PESA', purchase_saved: 'Choice saved · Review activation', sales_draft: 'Allocations saved · Review activation', sales_prepared: 'Waiting to activate', sales_activating: 'Activating subscriptions', sales_partial: 'Partly active', sales_confirmed: 'Active · Confirmed', sales_needs_review: 'Sale needs checking', collecting: 'Waiting for payment details', historical: 'Historical · no activation', ready_auto: 'Ready for automatic activation', dispatching: 'Activation processing', active_review_pending: 'Active · Review needed', reviewed: 'Reviewed', needs_review: 'Needs a sales decision', uncertain: 'Checking site confirmation', correcting: 'Correction in progress', unassigned: 'Money received · Unassigned', dependent_pending: 'Active · Tanzania exposure pending' };
 const reasons = {
     multiple_exact_package_matches: 'More than one configured package matches this amount. Choose the purchased package.',
     no_exact_catalogue_package_match: 'No current configured package exactly matches this payment. Review the agreed price and service.',
@@ -64,7 +64,7 @@ export function CollectionArrivalBadge() {
         if (arrivals.data?.cursor) api.post('/crm/collections/arrivals/read', { cursor: arrivals.data.cursor }).then(() => client.invalidateQueries({ queryKey: ['collection-arrivals'] })).catch(() => {});
     }} aria-label={`Incoming payments: ${arrivals.data?.unread_receipts || 0} unread${arrivals.isError ? ', status unavailable' : arrivals.data?.device_needs_attention ? ', receiving phone needs attention' : ''}`}>
         Incoming payments <span className="ml-1 rounded bg-teal-50 px-1.5 py-0.5 text-teal-800">{arrivals.isError ? 'Status unavailable' : arrivals.data?.unread_receipts || 0}</span>
-        {!!arrivals.data?.device_needs_attention && <span className="ml-1 whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-amber-950">Phone needs attention</span>}
+        {!!arrivals.data?.device_needs_attention && <span className="ml-1 whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-amber-950">{arrivals.data?.device_attention === 'wallet' ? 'Wallet needs review' : 'Phone needs attention'}</span>}
     </Link>;
 }
 
@@ -110,6 +110,7 @@ export default function CollectionWorkspace({ platformId, clientId }) {
             <div className="flex flex-wrap items-center gap-x-4"><details><summary className="cursor-pointer py-2 text-sm font-medium text-slate-600">More status filters</summary><label className="mt-2 block max-w-sm text-sm text-slate-600">Review state<select className="crm-input mt-1 w-full" value={state} onChange={e => { setState(e.target.value); setPage(1); }}><option value="">All receipts</option><option value="needs_action">Needs action</option><option value="already_recorded">Already recorded</option>{Object.entries(states).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></details>
                 {filtered && <button type="button" className="py-2 text-sm font-medium text-teal-800 underline" onClick={clearFilters}>Clear filters</button>}</div>
         </div>
+        {!clientId && <ReversalAlerts reversals={rows.data?.reversals} onOpen={selectReceipt} />}
         {(rows.isError || exportError) && <p role="alert" className="mb-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{exportError || 'Incoming payments could not be refreshed. The last loaded rows may be out of date.'} <button type="button" className="underline" onClick={() => rows.refetch()}>Retry</button></p>}
         {rows.isPending ? <div role="status" aria-label="Loading receiving receipts" className="divide-y divide-slate-100 rounded-xl border border-slate-200">{[0, 1, 2, 3].map(i => <div key={i} className="grid gap-4 p-4 sm:grid-cols-4"><div className="h-10 rounded bg-slate-100 motion-safe:animate-pulse" /><div className="h-10 rounded bg-slate-100 motion-safe:animate-pulse" /><div className="h-10 rounded bg-slate-100 motion-safe:animate-pulse" /><div className="h-10 rounded bg-slate-100 motion-safe:animate-pulse" /></div>)}<span className="sr-only">Loading receiving receipts…</span></div>
             : !rows.data?.data?.length ? <div className="flex flex-col items-center rounded-xl border border-dashed border-slate-300 px-6 py-12 text-center"><span className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500"><Icon name="inbox" className="h-5 w-5" /></span><p className="mt-3 font-medium text-slate-900">{state === 'needs_action' && !filtered ? 'Nothing needs action' : 'No payments in this view'}</p><p className="mt-1 max-w-sm text-sm text-slate-500">{filtered ? 'No incoming receipts match these filters.' : state === 'needs_action' ? 'Every captured payment is matched, activated or already recorded.' : 'No incoming receipts match this view. New receiving messages will appear here.'}</p>{filtered && <button type="button" className={`${button} mt-4`} onClick={clearFilters}>Clear filters</button>}</div>
@@ -124,6 +125,8 @@ export default function CollectionWorkspace({ platformId, clientId }) {
 
 const progressing = ['dispatching', 'uncertain', 'correcting', 'dependent_pending', 'sales_activating', 'sales_partial', 'ready_auto', 'sales_prepared'];
 export function receiptTone(row) {
+    if (row.funds_state === 'reversed') return { tone: 'danger', label: 'Reversed by M-PESA' };
+    if (row.funds_state === 'disputed') return { tone: 'danger', label: 'On hold by M-PESA' };
     if (row.usage && ['already_recorded'].includes(row.usage.state)) return { tone: 'neutral', label: 'Already recorded' };
     if (row.usage?.state === 'conflict') return { tone: 'danger', label: 'Code needs checking' };
     if (row.historical_only) return { tone: 'neutral', label: states.historical };
@@ -154,6 +157,7 @@ function ReceiptRow({ row, onOpen }) {
             {!row.activation && automatic && <p className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-teal-800"><Icon name="bolt" className="h-3.5 w-3.5" />Auto-activated</p>}
             {recorded && match && <p className="mt-2 text-xs text-slate-600">{match.client && <Link className="font-medium text-teal-800 underline" to={`/clients/${match.client.id}?tab=deals`}>{match.client.name}</Link>}{match.deal && <span className="block mt-0.5">{match.deal.plan_type?.toUpperCase()} · {match.deal.status === 'active' && new Date(match.deal.expires_at).getTime() > Date.now() ? 'Active' : match.deal.status} · expires {receiptTime(match.deal.expires_at)}</span>}</p>}
             <ActivatedBy activation={row.activation} />
+            {['reversed', 'disputed'].includes(row.funds_state) && <p className="mt-2 text-xs font-medium text-rose-800">{row.funds_state === 'reversed' ? 'Money returned to the payer.' : 'M-PESA is holding this money.'} Review any service it activated.</p>}
             <TimeToActivate row={row} />
             {row.usage?.state === 'conflict' && <p className="mt-2 text-xs text-rose-800">An existing payment uses this code. Check it before recording another.</p>}
             {row.historical_only && <p className="mt-1 text-xs text-slate-500">Reconciliation only</p>}</td>
@@ -206,7 +210,7 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
         <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
             {detail.isPending && <p role="status" className="text-sm text-slate-500">Loading receipt evidence…</p>}
             {(detail.isError || error) && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error || 'Receipt could not be refreshed.'} <button className="underline" type="button" onClick={() => detail.refetch()}>Refresh receipt</button></p>}
-            {row && <>{row.historical_only && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Historical archive receipt. Activation is disabled for this evidence.</p>}
+            {row && <>{['reversed', 'disputed'].includes(row.funds_state) && <ReversalNotice row={row} onReviewed={refresh} />}{row.historical_only && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Historical archive receipt. Activation is disabled for this evidence.</p>}
                 {!row.allocation && <CollectionMatchEvidence key={`match-${row.id}`} row={row} />}
                 <CollectionReceiptEvidence usage={row.usage} />
                 {!row.allocation && !row.historical_only && <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><CollectionPurchaseReview key={row.id} row={row} footerTarget={footerTarget} onSaved={refresh} /></div>}
@@ -216,9 +220,10 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
                 {row.allocation.state !== 'unassigned' && row.purchase && <p className="text-sm text-slate-700">{row.purchase.tier.toUpperCase()} · {row.purchase.duration_days} days · {money({ amount_minor: row.purchase.amount_minor, currency: row.purchase.currency })}<span className="mt-1 block text-xs text-slate-500">{row.purchase.discount_source ? 'Approved agreed price' : 'Package currently applied'}</span></p>}
                 {row.allocation.state !== 'unassigned' && !!row.reasons?.filter(reason => reason !== 'reviewed_purchase_authority_required').length && <ul className="space-y-2 text-sm text-slate-600">{row.reasons.filter(reason => reason !== 'reviewed_purchase_authority_required').map(reason => <li key={reason}>{explain(reason)}</li>)}</ul>}
                 {row.allocation.state !== 'unassigned' && !!row.allocation?.effects?.filter(e => !e.superseded_at && ['primary_paid', 'target_paid', 'verification_only', 'subsidiary_free', 'target_subsidiary'].includes(e.kind)).length && <div className="space-y-2 rounded-lg bg-slate-50 p-3"><h3 className="text-sm font-semibold">Service progress</h3>{row.allocation.effects.filter(e => !e.superseded_at && ['primary_paid', 'target_paid', 'verification_only', 'subsidiary_free', 'target_subsidiary'].includes(e.kind)).map(e => <div key={e.id} className="flex flex-wrap justify-between gap-2 text-sm"><span>{['subsidiary_free', 'target_subsidiary'].includes(e.kind) ? 'Tanzania free exposure' : explain(e.kind)}</span><span className={e.state === 'succeeded' ? 'text-teal-800' : 'text-amber-800'}>{e.state === 'succeeded' ? 'Confirmed on site' : explain(e.state)}</span>{e.last_error_code && <p className="w-full text-xs text-slate-500">{explain(e.last_error_code)}</p>}</div>)}</div>}
+                {['uncertain', 'correcting', 'dispatching', 'reserved'].includes(row.allocation.state) && <p role="status" className="rounded-lg bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">CRM is confirming the result with the site. Do not activate this payment again. Changes unlock once the site confirms.</p>}
                 <div className="flex flex-wrap gap-2">{!mode && row.decision_state === 'active_review_pending' && <button type="button" className={`${button} !border-teal-700 !bg-teal-700 !text-white`} disabled={action.isPending} onClick={() => action.mutate({ path: `/crm/collections/receipts/${receiptId}/confirm`, body: { expected_version: row.version } })}>Confirm correct</button>}
-                    {!mode && row.allocation && !row.historical_only && <button type="button" className={button} onClick={() => { setMode('reassign'); setPreview(row.corrections?.find(c => c.request_key && c.state !== 'verified') || null); }}>{row.allocation.state === 'unassigned' ? 'Assign to profile' : 'Change profile or package'}</button>}
-                    {!mode && row.allocation && row.allocation.state !== 'unassigned' && !row.historical_only && <button type="button" className={button} onClick={() => { setMode('undo_effect'); setPreview(null); }}>Undo this activation</button>}
+                    {!mode && row.allocation && !row.historical_only && <button type="button" className={button} disabled={['uncertain', 'correcting', 'dispatching', 'reserved'].includes(row.allocation.state) && !row.corrections?.some(c => c.request_key && c.state !== 'verified')} onClick={() => { setMode('reassign'); setPreview(row.corrections?.find(c => c.request_key && c.state !== 'verified') || null); }}>{row.allocation.state === 'unassigned' ? 'Assign to profile' : 'Change profile or package'}</button>}
+                    {!mode && row.allocation && row.allocation.state !== 'unassigned' && !row.historical_only && <button type="button" className={button} disabled={['uncertain', 'correcting', 'dispatching', 'reserved'].includes(row.allocation.state)} onClick={() => { setMode('undo_effect'); setPreview(null); }}>Undo this activation</button>}
                 </div>
                 {mode && <CollectionActivationCorrection key={mode + (preview?.id || '')} receipt={row} action={mode} initialCorrection={preview}
                     onUpdated={async () => { await detail.refetch(); refresh(); }} onCancel={() => { setMode(null); setPreview(null); }} />}
@@ -251,4 +256,45 @@ function CollectionSettlementSummary({ accountId }) {
         {query.isError && <p role="alert" className="mt-3 text-xs text-rose-800">Reconciliation could not be loaded. <button className="underline" type="button" onClick={() => query.refetch()}>Retry</button></p>}
         {data && <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">{[['Received', 'gross_received_minor'], ['Statement credits', 'statement_gross_minor'], ['Remitted to Exotic', 'remitted_minor'], ['Closing amount due', 'closing_due_minor']].map(([label, field]) => <div key={field}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 font-medium">{money({ currency: data.currency, amount_minor: data[field] })}</dd></div>)}</dl>}
     </details>;
+}
+
+function ReversalAlerts({ reversals, onOpen }) {
+    const open = (reversals || []).filter(item => !item.reviewed);
+    if (!reversals?.length) return null;
+    return <section aria-label="Reversed payments" className={`mb-4 rounded-xl border p-4 ${open.length ? 'border-rose-200 bg-rose-50/70' : 'border-slate-200 bg-white'}`}>
+        <div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className={`text-sm font-semibold ${open.length ? 'text-rose-900' : 'text-slate-800'}`}>{open.length ? `${open.length} ${open.length === 1 ? 'payment was' : 'payments were'} reversed by M-PESA` : 'Reversed payments reviewed'}</h3>
+            <p className="text-xs text-slate-600">Other payments keep activating normally.</p></div>
+        <ul className="mt-3 space-y-2">{reversals.map(item => <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 ring-1 ring-inset ring-slate-200">
+            <div className="min-w-0 text-sm"><span className="font-semibold tabular-nums text-slate-900">{item.currency} {(item.principal_minor / 100).toLocaleString()}</span> <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs">{item.reference}</span>
+                <span className="ml-2 text-xs text-slate-600">{item.funds_state === 'reversed' ? 'Reversed' : 'On hold'} {relative(item.flagged_at)}</span>
+                <span className={`ml-2 text-xs font-medium ${item.reviewed ? 'text-slate-600' : item.service_active ? 'text-rose-800' : 'text-slate-600'}`}>{item.reviewed ? `Reviewed · ${item.reviewed.decision}` : item.service_active ? 'Service still active' : 'No active service'}</span></div>
+            <button type="button" className={item.reviewed ? button : `${button} !border-rose-700 !bg-rose-700 !text-white hover:!bg-rose-800`} onClick={() => onOpen(item.id)}>{item.reviewed ? 'View' : 'Review'}</button>
+        </li>)}</ul>
+    </section>;
+}
+
+function ReversalNotice({ row, onReviewed }) {
+    const [note, setNote] = useState('');
+    const [error, setError] = useState('');
+    const [saving, setSaving] = useState(false);
+    const review = row.reversal_review;
+    async function keep(event) {
+        event.preventDefault();
+        if (note.trim().length < 3) { setError('Say why the service stays active, for example “Customer paid again in cash”.'); return; }
+        setSaving(true); setError('');
+        try { await api.post(`/crm/collections/receipts/${row.id}/reversal-review`, { decision: 'keep_service', note: note.trim() }); onReviewed(); }
+        catch (e) { setError(e.response?.data?.message || 'The decision could not be saved. Try again.'); }
+        finally { setSaving(false); }
+    }
+    return <section aria-label="Payment reversed" className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+        <p className="font-semibold text-rose-900">{row.funds_state === 'reversed' ? 'M-PESA reversed this payment' : 'M-PESA put this payment on hold'}</p>
+        <p className="mt-1 text-sm text-rose-950">{row.funds_state === 'reversed' ? 'The money went back to the payer and is no longer in the office wallet.' : 'The money may be returned to the payer.'} Other payments keep activating normally.</p>
+        {review ? <p className="mt-3 rounded-lg bg-white px-3 py-2 text-sm text-slate-700 ring-1 ring-inset ring-rose-100"><span className="font-medium">Reviewed · {review.decision}</span>{review.by ? ` by ${review.by}` : ''} · {relative(review.at)}{review.note ? <span className="block text-xs text-slate-500">“{review.note}”</span> : null}</p>
+            : row.allocation || row.sale ? <form onSubmit={keep} className="mt-3 space-y-2">
+                <p className="text-sm text-rose-950">Decide what happens to the service it activated: use <strong>Undo this activation</strong> below to remove it, or keep it and record why.</p>
+                <label className="block text-sm font-medium text-slate-800">Reason to keep the service<input className="crm-input mt-1 w-full" value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Customer paid again in cash" /></label>
+                {error && <p role="alert" className="text-sm text-rose-800">{error}</p>}
+                <button type="submit" className={button} disabled={saving}>{saving ? 'Saving…' : 'Keep service active'}</button>
+            </form> : <p className="mt-2 text-sm text-rose-950">No service was activated from this payment, so nothing else is needed.</p>}
+    </section>;
 }
