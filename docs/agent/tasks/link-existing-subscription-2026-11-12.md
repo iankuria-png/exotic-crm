@@ -39,7 +39,7 @@ Private local test/build/browser logs: output/subscription-link-2026-11-12/; scr
 
 ## Delivery and next action
 
-Release is prepared for commit/push to origin/main; Ian deploys. No live linking has been performed by Codex.
+Source/build90c52338701fa9630f6f1c3d88918c243616f8c7 is PUSHED to origin/main and remote SHA verified. Ian deploys; CS confirms the live link. No live linking has been performed by Codex.
 
 After the normal cPanel pull:
 
