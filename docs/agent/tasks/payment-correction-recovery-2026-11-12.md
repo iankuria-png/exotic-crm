@@ -32,7 +32,7 @@ Plan: `plans/payment-correction-recovery-2026-11-12/plan.mdx` and generated HTML
 
 PHP8.2 focused MySQL suite PASS:33tests/616assertions (correction review, direct form/access, manual sales and paired automation). The WordPress fake now enforces immutable compensation preimages and saved-operation payloads. Browser CLI PASS:10 existing correction checks +25 recovery/polling/duplicate/mobile/keyboard checks. Retained desktop and390px screenshots visually inspected. PHP syntax, Pint, diff checks and production Vite build PASS. The existing large-chunk advisory remains; no build failure. Production assets: app-CQaFIekW.js and app-DUB2ICOD.css. No schema, configuration, credential, callback, public URL or WordPress plugin change. Existing Ads/STK behavior remains untouched.
 
-Delivery status: local implementation; scoped commit/push pending final checks. Production remains unchanged by this session. No customer-data repair has been applied.
+Delivery status: source/build97662a1cfec9a1506795a26eeb58cfd34e402ada PUSHED to origin/main and remote SHA verified. This handoff records the result; Ian deploys. Production remains unchanged by this session. No customer-data repair has been applied.
 
 ## Ian deployment
 
