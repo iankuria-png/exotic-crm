@@ -10,6 +10,8 @@ use App\Services\Collections\CollectionActivationAttribution;
 use App\Services\Collections\CollectionCorrectionService;
 use App\Services\Collections\CollectionDecisionService;
 use App\Services\Collections\CollectionFulfillmentService;
+use App\Services\Collections\CollectionReceiptStatusService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 
@@ -45,6 +47,115 @@ class CollectionInlineCorrectionTest extends CollectionWorkflowTestCase
         return $this->postJson('/api/crm/collections/receipts/'.$r->id.'/correction-preview', [
             'expected_version' => $a->version, 'action' => 'reassign', 'client_id' => $client->id, 'product_price_id' => $price->id,
         ])->assertOk()->assertJsonPath('preview.can_execute', true);
+    }
+
+    private function relatedPayment($r, Client $client, string $reference, array $overrides = []): Payment
+    {
+        $payment = Payment::findOrFail($r->allocation->payment_id)->replicate();
+        $payment->fill(array_merge(['client_id' => $client->id, 'deal_id' => null,
+            'transaction_reference' => $reference, 'reference_root' => $reference, 'reference_number' => $reference,
+            'transaction_uuid' => (string) Str::uuid(), 'confirmed_by' => auth()->id()], $overrides));
+        // Reproduce an older/manual record arriving outside the guarded correction workflow.
+        $id = DB::table('payments')->insertGetId($payment->getAttributes());
+
+        return Payment::findOrFail($id);
+    }
+
+    public function test_related_manual_code_is_visible_and_holds_reassignment_but_allows_undo(): void
+    {
+        [$r, $a, $source, $price, $actor] = $this->active();
+        $target = $this->target($source);
+        $extra = $this->relatedPayment($r, $target, $r->reference_norm.' /1');
+        $this->getJson('/api/crm/collections/receipts/'.$r->id)->assertOk()
+            ->assertJsonPath('related_payments.complete', true)
+            ->assertJsonPath('related_payments.matches.0.client.name', $target->name)
+            ->assertJsonPath('related_payments.matches.0.recorded_by', $actor->name);
+        $this->postJson('/api/crm/collections/receipts/'.$r->id.'/correction-preview', [
+            'expected_version' => $a->version, 'action' => 'reassign', 'client_id' => $target->id, 'product_price_id' => $price->id,
+        ])->assertOk()->assertJsonPath('preview.can_execute', false)->assertJsonPath('preview.reasons.0', 'related_payment_requires_review');
+        $undo = app(CollectionCorrectionService::class)->preview($a, $actor, 'undo_effect', null, $a->version, 'Wrong match');
+        $this->assertTrue($undo->preview['can_execute']);
+        $result = app(CollectionCorrectionService::class)->execute($undo, $actor, $undo->version, (string) Str::uuid());
+        $this->assertSame('verified', $result->state);
+        $this->assertSame($target->id, $extra->fresh()->client_id);
+        $this->assertDatabaseCount('payments', 2);
+    }
+
+    public function test_related_evidence_excludes_unrelated_prefixes_sandbox_test_and_other_markets(): void
+    {
+        [$r, $a, $source] = $this->active();
+        $target = $this->target($source);
+        $this->relatedPayment($r, $target, $r->reference_norm.'X/1');
+        $this->relatedPayment($r, $target, $r->reference_norm.'/1', ['provider_environment' => 'sandbox']);
+        $this->relatedPayment($r, $target, $r->reference_norm.'/2', ['record_classification' => 'test']);
+        $market = \App\Models\Platform::factory()->create();
+        $this->relatedPayment($r, $target, $r->reference_norm.'/3', ['platform_id' => $market->id]);
+        $related = app(CollectionReceiptStatusService::class)->relatedPayments($r);
+        $this->assertSame(['complete' => true, 'matches' => []], $related);
+    }
+
+    public function test_related_record_inserted_after_preview_prevents_execution(): void
+    {
+        [$r, $a, $source, $price, $actor] = $this->active();
+        $target = $this->target($source);
+        $preview = $this->preview($r, $a, $target, $price)->json();
+        $this->relatedPayment($r, $target, $r->reference_norm);
+        $this->postJson('/api/crm/collections/corrections/'.$preview['id'].'/execute', [
+            'preview_version' => $preview['version'], 'idempotency_key' => (string) Str::uuid(),
+        ])->assertStatus(409)->assertJsonPath('reason', 'related_payment_requires_review');
+        $this->assertSame(1, $this->posts);
+    }
+
+    public function test_resumed_correction_checks_related_records_before_new_target_dispatch(): void
+    {
+        [$r, $a, $source, $price, $actor] = $this->active();
+        $target = $this->target($source);
+        $preview = $this->preview($r, $a, $target, $price)->json();
+        $key = (string) Str::uuid();
+        $this->loseResponse = true;
+        $first = $this->postJson('/api/crm/collections/corrections/'.$preview['id'].'/execute', [
+            'preview_version' => $preview['version'], 'idempotency_key' => $key,
+        ])->assertStatus(202)->assertJsonPath('state', 'uncertain')->json();
+        $this->relatedPayment($r, $target, $r->reference_norm.'/1');
+        $this->postJson('/api/crm/collections/corrections/'.$first['id'].'/execute', [
+            'preview_version' => $first['version'], 'idempotency_key' => $key,
+        ])->assertStatus(202)->assertJsonPath('state', 'uncertain');
+        $this->assertSame(2, $this->posts);
+        $this->assertSame('0', $this->remote[99]['meta']['escort_expire']);
+        $this->assertDatabaseMissing('collection_benefit_effects', ['effect_kind' => 'target_paid']);
+    }
+
+    public function test_truncated_prefix_candidates_hold_assignment_even_without_an_exact_related_match(): void
+    {
+        [$r, $a, $source, $price] = $this->active();
+        $target = $this->target($source);
+        for ($i = 0; $i < 26; $i++) {
+            $this->relatedPayment($r, $target, $r->reference_norm.'OTHER'.$i);
+        }
+        $this->assertSame(['complete' => false, 'matches' => []], app(CollectionReceiptStatusService::class)->relatedPayments($r));
+        $this->postJson('/api/crm/collections/receipts/'.$r->id.'/correction-preview', [
+            'expected_version' => $a->version, 'action' => 'reassign', 'client_id' => $target->id, 'product_price_id' => $price->id,
+        ])->assertOk()->assertJsonPath('preview.can_execute', false)->assertJsonPath('preview.reasons.0', 'related_payment_requires_review');
+        $this->assertSame(1, $this->posts);
+    }
+
+    public function test_related_record_does_not_prevent_readback_of_an_already_committed_target(): void
+    {
+        [$r, $a, $source, $price] = $this->active();
+        $target = $this->target($source);
+        $preview = $this->preview($r, $a, $target, $price)->json();
+        $key = (string) Str::uuid();
+        $body = ['preview_version' => $preview['version'], 'idempotency_key' => $key];
+        $path = '/api/crm/collections/corrections/'.$preview['id'].'/execute';
+        $this->loseResponse = true;
+        $this->postJson($path, $body)->assertStatus(202)->assertJsonPath('state', 'uncertain');
+        $this->loseResponse = true;
+        $this->postJson($path, $body)->assertStatus(202)->assertJsonPath('state', 'uncertain');
+        $this->assertSame(3, $this->posts);
+        $this->relatedPayment($r, $target, $r->reference_norm.'/1');
+        $this->postJson($path, $body)->assertStatus(202)->assertJsonPath('state', 'verified');
+        $this->assertSame(3, $this->posts);
+        $this->assertSame($target->id, $a->fresh()->purchase_snapshot['client_id']);
     }
 
     public function test_sales_can_move_activation_with_profile_and_price_and_replay_the_same_cash_once(): void

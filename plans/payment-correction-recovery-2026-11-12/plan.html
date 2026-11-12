@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Finish payment corrections without duplicate activations — plan</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+--bg:#0a0a0b;--bg2:#101013;--card:#131317;--card2:#17171c;--line:#26262e;
+--line2:#33333d;--ink:#ededf2;--mut:#9a9aa8;--mut2:#6e6e7d;--acc:#7c5cff;
+--acc2:#a48bff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--info:#58a6ff;
+--r:10px;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+--wf-paper:#0d0d10;--wf-card:#17171c;--wf-ink:#ededf2;--wf-muted:#8b8b99;
+--wf-line:#2c2c36;--wf-accent:#7c5cff;--wf-accent-soft:#241d47;
+--wf-warn:#d29922;--wf-ok:#3fb950;--wf-radius:8px;
+}
+@media(prefers-color-scheme:light){:root{
+--bg:#fbfbfd;--bg2:#fff;--card:#fff;--card2:#f7f7fa;--line:#e3e3ea;
+--line2:#d0d0da;--ink:#16161c;--mut:#5c5c6b;--mut2:#8a8a99;--acc:#6247d6;
+--acc2:#7c5cff;--wf-paper:#fff;--wf-card:#f7f7fa;--wf-ink:#16161c;
+--wf-muted:#5c5c6b;--wf-line:#e3e3ea;--wf-accent:#6247d6;--wf-accent-soft:#efecff;
+}}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:minmax(0,1fr);max-width:1180px;margin:0 auto;padding:0 28px 120px}
+@media(min-width:1080px){.shell{grid-template-columns:232px minmax(0,1fr);gap:56px;padding-left:32px}}
+nav.toc{display:none}
+@media(min-width:1080px){nav.toc{display:block;position:sticky;top:0;align-self:start;
+max-height:100vh;overflow:auto;padding:96px 0 40px;font-size:13px}}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:5px 10px;
+border-left:2px solid transparent;border-radius:0 4px 4px 0}
+nav.toc a:hover{color:var(--ink);background:var(--card);border-left-color:var(--acc)}
+nav.toc a.l3{padding-left:22px;font-size:12.5px;color:var(--mut2)}
+header.hero{padding:72px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+color:var(--acc2);margin-bottom:18px}
+h1{font-size:clamp(30px,4.2vw,44px);line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;font-weight:660}
+.obj{font-size:18px;color:var(--mut);max-width:70ch;margin:0 0 26px;line-height:1.6}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 12px/1 var(--sans);color:var(--mut);background:var(--card);
+border:1px solid var(--line);border-radius:999px;padding:7px 13px}
+.chip b{color:var(--ink);font-weight:600}
+main h2{font-size:24px;letter-spacing:-.02em;margin:56px 0 14px;padding-top:10px;font-weight:640}
+main h3{font-size:17px;margin:34px 0 10px;font-weight:620;letter-spacing:-.01em}
+main h4{font-size:15px;margin:0 0 8px;font-weight:620}
+main p{margin:0 0 14px;max-width:76ch}
+main ul,main ol{margin:0 0 16px;padding-left:22px;max-width:76ch}
+main li{margin:5px 0}
+a{color:var(--acc2)}
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+blockquote{margin:0 0 16px;padding:2px 0 2px 18px;border-left:3px solid var(--line2);color:var(--mut)}
+code{font-family:var(--mono);font-size:.875em;background:var(--card2);
+border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre.code{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);
+padding:14px 16px;overflow-x:auto;margin:0 0 16px}
+pre.code code{background:none;border:0;padding:0;font-size:12.75px;line-height:1.6}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{text-align:left;font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+.blk{margin:30px 0;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.bh{font:600 11.5px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+color:var(--mut);padding:14px 18px;border-bottom:1px solid var(--line);background:var(--card2)}
+.bh code{background:none;border:0;padding:0;text-transform:none;letter-spacing:0;
+font-size:12.5px;color:var(--ink)}
+.bb{padding:18px}
+.bb>.tw,.bb>*:last-child{margin-bottom:0}
+.cap{color:var(--mut2);font-size:13px;margin:10px 0 0!important}
+.tag{font:500 10.5px/1 var(--mono);color:var(--mut2);border:1px solid var(--line);
+border-radius:4px;padding:3px 6px;text-transform:uppercase;letter-spacing:.07em}
+.pill{display:inline-block;font:600 10.5px/1 var(--mono);border-radius:999px;
+padding:4px 9px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.p-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.p-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.p-bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.p-mut{color:var(--mut);background:var(--card2)}
+.callout{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
+margin:22px 0;padding:15px 17px;border:1px solid var(--line);border-left-width:3px;
+border-radius:var(--r);background:var(--card)}
+.callout .ct{font:600 10.5px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.callout .cb>*:last-child{margin-bottom:0}
+.t-note{border-left-color:var(--info)} .t-note .ct{color:var(--info)}
+.t-decision{border-left-color:var(--acc)} .t-decision .ct{color:var(--acc2)}
+.t-risk{border-left-color:var(--bad)} .t-risk .ct{color:var(--bad)}
+.t-warn{border-left-color:var(--warn)} .t-warn .ct{color:var(--warn)}
+.t-ok{border-left-color:var(--ok)} .t-ok .ct{color:var(--ok)}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+li.step{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 0;
+border-bottom:1px solid var(--line)}
+li.step:first-child{padding-top:0} li.step:last-child{border-bottom:0;padding-bottom:0}
+.sn{width:28px;height:28px;border-radius:8px;background:var(--wf-accent-soft);
+color:var(--acc2);font:600 12.5px/28px var(--mono);text-align:center}
+.sc h4{margin:3px 0 8px}
+.sm{display:grid;grid-template-columns:64px 1fr;gap:10px;font-size:13px;margin-top:5px}
+.sm .k{font:600 10.5px/1.7 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut2)}
+.sm .v{color:var(--mut)}
+.ty{font:500 12px/1 var(--mono);color:var(--acc2)}
+.rels{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.rel{font:500 11.5px/1 var(--mono);color:var(--mut);background:var(--card2);
+border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+.ep-h{display:flex;align-items:center;gap:11px;margin-bottom:12px;flex-wrap:wrap}
+.verb{font:700 11px/1 var(--mono);letter-spacing:.08em;padding:6px 9px;border-radius:6px;color:#0a0a0b}
+.v-GET{background:var(--info)} .v-POST{background:var(--ok)}
+.v-PUT,.v-PATCH{background:var(--warn)} .v-DELETE{background:var(--bad)}
+.v-HEAD,.v-OPTIONS{background:var(--mut)}
+.path{font-size:13.5px;background:none;border:0;padding:0}
+.sub{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin:14px 0 7px}
+table.ac{font-family:var(--mono);font-size:12.5px}
+table.ac td{padding:2px 10px;border:0;vertical-align:top}
+.ln{color:var(--mut2);text-align:right;user-select:none;width:1%;padding-right:14px!important}
+.cd code{background:none;border:0;padding:0;white-space:pre}
+.cl.hl{background:var(--wf-accent-soft)}
+.cl.hl .ln{color:var(--acc2)}
+.nt{font-family:var(--sans);color:var(--mut);font-size:12.5px;width:34%}
+.an b{color:var(--ink)}
+.diff{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line);
+border-radius:var(--r);overflow:hidden;font-family:var(--mono);font-size:12.5px}
+@media(min-width:760px){.diff{grid-template-columns:1fr 1fr}}
+.dcol{background:var(--bg2);padding-bottom:10px}
+.dh{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:11px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.dl{padding:1px 14px;white-space:pre-wrap;word-break:break-word}
+.d-del{background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.d-add{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.dg{padding:6px 2px;overflow-x:auto}
+.dg svg{max-width:100%;height:auto}
+.wfw{display:flex;justify-content:center}
+.wf{background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:12px;
+overflow:hidden;width:100%}
+.wf.s-desktop{max-width:100%} .wf.s-tablet{max-width:720px}
+.wf.s-mobile{max-width:378px} .wf.s-panel{max-width:440px}
+.wfbar{display:flex;gap:6px;padding:10px 13px;border-bottom:1px solid var(--wf-line);
+background:var(--wf-card)}
+.wfbar i{width:9px;height:9px;border-radius:50%;background:var(--wf-line)}
+.wfb{padding:16px;color:var(--wf-ink);font-size:13.5px}
+.cmp{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.cmp{grid-template-columns:1fr 1fr}}
+.ccol{border:1px solid var(--line);border-radius:var(--r);padding:15px;background:var(--bg2)}
+.ch{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin-bottom:11px}
+.ccol>*:last-child{margin-bottom:0}
+ol.qs{list-style:none;margin:0;padding:0}
+li.q{padding:16px 0;border-bottom:1px solid var(--line)}
+li.q:first-child{padding-top:0} li.q:last-child{border-bottom:0;padding-bottom:0}
+.qh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.qn{font:700 11px/1 var(--mono);color:var(--acc2)}
+.qt{font-weight:600;flex:1;min-width:200px}
+ul.opts{list-style:none;margin:11px 0 0;padding:0}
+ul.opts li{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;
+padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin:0 0 7px;background:var(--bg2)}
+.box{width:14px;height:14px;border:1.5px solid var(--line2);border-radius:3px;margin-top:4px}
+.box.m{border-radius:3px} .ol{font-size:14px}
+.od{display:block;color:var(--mut);font-size:13px;margin-top:2px}
+.freeform{border:1px dashed var(--line2);border-radius:8px;padding:15px;
+color:var(--mut2);font-size:13px;margin-top:11px}
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+color:var(--mut2);font-size:12.5px}
+@media print{
+ nav.toc{display:none}.shell{grid-template-columns:1fr;max-width:none;padding:0}
+ .blk,.callout,.tw{break-inside:avoid}body{background:#fff;color:#000}
+}
+</style>
+</head><body>
+<div class="shell">
+<nav class="toc"><a class="l2" href="#verification-and-deployment">Verification and deployment</a><a class="l2" href="#plan-audit">Plan audit</a><a class="l2" href="#open-questions">Open questions</a></nav>
+<div>
+<header class="hero">
+<div class="eyebrow">Implementation plan</div>
+<h1>Finish payment corrections without duplicate activations</h1>
+<p class="obj">Give customer service one clear correction action, truthful website progress and safe recovery of the exact empty-expiry undo defect.</p>
+<div class="meta"><span class="chip">Status <b>shipping authorized by Ian; audit before implementation</b></span><span class="chip">Owner <b>Ian Kuria</b></span><span class="chip">Date <b>2026-11-12</b></span><span class="chip">Scope <b>CRM collection allocation correction backend and receipt drawer, related payment evidence, regression checks and compiled assets</b></span><span class="chip">Non-goals <b>Production deployment or live customer data changes; Automatic merging or refunding duplicate payment records; WordPress plugin changes or changes to legacy Ads and STK callbacks</b></span></div>
+</header>
+<main><p>Receipt 326 automatically activated didah at 07:31 EAT and its Tanzania exposure at 07:32. Joanne manually activated Sabrina at 09:15 using <code>DKC633H05T /1</code>. Her undo at 09:18 remains uncertain: CRM converted an empty original expiry string into <code>&quot;0&quot;</code>, while WordPress requires the exact immutable original preimage. Native SELECT-only reads confirm the two original effects still exist, the compensation operation does not, and Sabrina is active. Two completed CRM payment records need a separately reviewed reconciliation.</p>
+<section class="blk"><header class="bh">Saved undo needs attention</header><div class="bb"><div class="wfw"><div class="wf s-panel"><div class="wfbar"><i></i><i></i><i></i></div><div class="wfb"><div style='display:grid;gap:14px'><div style='color:var(--wf-muted);font-size:12px'>INCOMING PAYMENT · TZ OFFICE M-PESA WALLET</div><strong style='font-size:24px'>TZS 35,000</strong><div style='padding:16px;border:1px solid var(--wf-line);border-radius:var(--wf-radius);background:var(--wf-card)'><strong>Removal needs checking</strong><p>didah · VIP · 7 days</p><p>Paid subscription: removal not confirmed</p><p>Tanzania exposure: removal has not started</p><p>The payment stays recorded. Finish the saved correction before making another change.</p><button style='padding:10px;background:var(--wf-accent);color:var(--wf-paper);border:0;border-radius:var(--wf-radius)'>Check saved correction</button></div><div style='padding:14px;border:1px solid var(--wf-warn);border-radius:var(--wf-radius)'><strong>A related payment code is already recorded</strong><p>Sabrina · VIP active · Recorded by Joanne Yengo</p><p>Review this record before assigning the payment again.</p><a href='#'>View Sabrina subscription</a></div></div></div></div></div><p class="cap">Illustrates the observed case. Existing CRM navigation, receipt drawer, teal controls and profile links remain. Completion is shown only after the server verifies both removals.</p></div></section>
+<p>The existing single-form profile/package correction remains the main flow. A saved correction takes precedence over starting a new correction and uses its original action and idempotency key. Automatic receipt polling refreshes a mounted form&#x27;s saved server result without resetting user choices. Pending source/target steps use customer-service labels, not compensation codes. Completion remains visible after the form closes. A successful undo leaves funds unassigned and does not imply that payment records have been reconciled.</p>
+<p>Legacy recovery is tightly bounded: only source-compensation effects whose restore snapshot equals the original snapshot after applying the old expiry normalization qualify. Verify immutable v2 source identity and preimage, unchanged current fingerprint, correction ownership and absence of a saved compensation result. Repair only the exact invalid restore payload, retain the same operation ID, audit the repair and retry through existing guarded fulfillment. A saved result, unrelated metadata difference, changed coverage or unsupported source remains on the existing read/review path; no blind retries of uncertain activations.</p>
+<p>Related payment codes are advisory evidence, selected only from the receipt account&#x27;s bound markets and a numeric <code>/n</code> suffix of the exact reference. Existing exact-reference matches are also checked for other completed records. Ignore cancelled/test/sandbox records; return bounded results with incomplete coverage explicit. Preview, new execute and resume/applyTarget immediately before any new target dispatch block assignment when related successful records exist or candidate coverage is truncated. A reserved request key never bypasses this guard; already committed targets retain readback/finalization. Undo can still finish. Completion copy says to review the other payment record before assigning when this hold remains. No code normalization or money mutation is introduced. Race-free general reconciliation of separately entered manual payments is outside this release.</p>
+<section class="blk"><header class="bh">Implementation steps</header><div class="bb"><ol class="steps"><li class="step"><div class="sn">1</div><div class="sc"><h4>Preserve the immutable original and recover the known rejected undo</h4><div class="sm"><span class="k">Reuses</span><span class="v">CollectionCorrectionService sourceStep/resume, CollectionCorrectionOwnership and CollectionFulfillmentService dispatchEffect</span></div><div class="sm"><span class="k">Adds</span><span class="v">unchanged restoration snapshot and narrowly proven legacy normalization repair; exact-id retry and audit; shared WordPress fixture enforces the real immutable preimage contract</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Collections/CollectionCorrectionService.php; tests/Feature/Collections/CollectionWorkflowTestCase.php; tests/Feature/Collections/CollectionCorrectionReviewTest.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">empty versus missing versus zero expiry; legacy rejected undo; committed lost response; drift refusal; paired service; one payment and no duplicate site operation</span></div></div></li><li class="step"><div class="sn">2</div><div class="sc"><h4>Expose pending progress and related-record holds</h4><div class="sm"><span class="k">Reuses</span><span class="v">CollectionPaymentController show, account scope and CollectionReceiptStatusService reference evidence</span></div><div class="sm"><span class="k">Adds</span><span class="v">bounded related successful payment evidence and preview/execute guard; correction effect error codes on detail; no schema changes</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Collections/CollectionReceiptStatusService.php; app/Http/Controllers/CRM/CollectionPaymentController.php; tests/Feature/Collections/CollectionInlineCorrectionTest.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">numeric suffix and exact-reference extra records, cross-account/market denial, unrelated prefixes, test/sandbox exclusions, incomplete results, undo allowed and reassignment held</span></div></div></li><li class="step"><div class="sn">3</div><div class="sc"><h4>Finish the saved correction in the receipt drawer</h4><div class="sm"><span class="k">Reuses</span><span class="v">CollectionWorkspace, CollectionActivationCorrection, existing query polling and shared buttons</span></div><div class="sm"><span class="k">Adds</span><span class="v">prominent saved-correction action with original mode/key; step labels, useful holds and visible completion; related-payment links; polling updates pending forms</span></div><div class="sm"><span class="k">Files</span><span class="v">resources/js/components/collections/CollectionWorkspace.jsx; resources/js/components/collections/CollectionActivationCorrection.jsx; resources/js/components/collections/CollectionReceiptEvidence.jsx</span></div><div class="sm"><span class="k">Verify</span><span class="v">browser fixture: reopen pending undo, repeated checks same key, no new preview, lost response, polling completion, duplicate warning, desktop/mobile keyboard and no overflow</span></div></div></li><li class="step"><div class="sn">4</div><div class="sc"><h4>Build and push the scoped release for Ian</h4><div class="sm"><span class="k">Reuses</span><span class="v">authorized existing detached checkout at e1112734 and portable ship workflow</span></div><div class="sm"><span class="k">Adds</span><span class="v">matching production assets, task/checkpoint and separate WP changelog commit</span></div><div class="sm"><span class="k">Files</span><span class="v">public/build/; docs/agent/tasks/payment-correction-recovery-2026-11-12.md; plans/payment-correction-recovery-2026-11-12/</span></div><div class="sm"><span class="k">Verify</span><span class="v">PHP8.2 focused MySQL suite and lint, browser fixture interactions, npm run build, scoped Git diff, origin main SHA readback; Ian deploys manually</span></div></div></li></ol></div></section>
+<section class="blk"><header class="bh">Endpoint</header><div class="bb"><div class="ep"><div class="ep-h"><span class="verb v-POST">POST</span><code class="path">/api/crm/collections/corrections/{correction}/execute</code></div><div class="sm"><span class="k">Auth</span><span class="v">Existing Sanctum/session/active/role middleware; service rechecks receipt-account and both market access, allocation ownership, writer gate and idempotency key.</span></div><div class="sub">Request</div><pre class="code"><code>{
+  &quot;preview_version&quot;: &quot;integer&quot;,
+  &quot;idempotency_key&quot;: &quot;original UUID&quot;
+}</code></pre><div class="sm"><span class="k">Response</span><span class="v">Existing correction row; its uncertain/verified state and saved effects drive UI. No route/schema change.</span></div><div class="sm"><span class="k">Errors</span><span class="v">Existing ownership/version/gate holds; related_payment_requires_review prevents a new target activation when another successful record is present.</span></div></div></div></section>
+<section class="blk"><header class="bh">Risks</header><div class="bb"><div class="tw"><table><thead><tr><th>Risk</th><th>Impact</th><th>Likelihood</th><th>Mitigation</th></tr></thead><tbody><tr><td>An uncertain operation is replayed after a real commit</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Read the exact operation first. Repair only an absent operation with the provably invalid old-normalization restore payload, immutable original and unchanged site fingerprint; retain operation ID and owner guards.</td></tr><tr><td>Related codes are mistaken for the same cash receipt</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Evidence is advisory and blocks assignment only; no merge, cancellation, refund or extra service is automatic. Preserve both existing payment records and Sabrina&#x27;s service.</td></tr><tr><td>Concurrent work is included in the release</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Use the already authorized clean e1112734 checkout; preserve dirty main and existing state edits; stage task-owned files only and verify origin fast-forward before push.</td></tr></tbody></table></div></div></section>
+<h2 id="verification-and-deployment">Verification and deployment</h2>
+<p>Run PHP8.2 <code>artisan test</code> with an isolated disposable local MySQL database and a filter for CollectionCorrectionReviewTest, CollectionInlineCorrectionTest and CollectionAccessTest; extend focused coverage for related evidence. Exercise the existing local receipt component fixture through Playwright CLI, with all API calls intercepted. Inspect retained screenshots at 1440px and 390px, keyboard focus, meaningful progress/holds and the saved request key. Build production assets only after those checks. No production apply is authorized by this release; after Ian pulls, verify served assets and the affected receipt with read-only Fleet Ops, then separately review any requested business-data reconciliation.</p>
+<h2 id="plan-audit">Plan audit</h2>
+<p>Round 1: NOT READY. Addressed dispatch-time guard for resumed corrections, fail-closed truncated evidence and duplicate-aware completion copy. Round 2: READY. Implementation retains nonidentity proof, exact source/compensation tuple and operation IDs; repair changes only restore_snapshot and uses the existing result readback path. Ian&#x27;s 12 November instruction authorizes shipping the simpler correct UI and says he will deploy it. Do not add another approval gate for implementation within that scope.</p>
+<section class="blk" id="open-questions"><header class="bh">Open questions</header><div class="bb"><ol class="qs"></ol></div></section></main>
+<footer>Rendered from <code>plan.mdx</code> · review surface only — no code was written to produce this.</footer>
+</div></div></body></html>

@@ -178,6 +178,7 @@ class CollectionPaymentController extends Controller
         $payload['timeline'] = app(\App\Services\Collections\CollectionAuditTimeline::class)->forReceipt($r, isset($timelineInput['timeline_before']) ? (int) $timelineInput['timeline_before'] : null);
         $payload['history'] = DB::table('collection_audit')->where('receipt_id', $r->id)->orderByDesc('id')->limit(50)->get();
         $payload['corrections'] = $r->allocation ? CollectionCorrection::where('allocation_id', $r->allocation->id)->orderByDesc('created_at')->get() : [];
+        $payload['related_payments'] = $r->allocation ? app(CollectionReceiptStatusService::class)->relatedPayments($r) : null;
         $review = DB::table('collection_audit as a')->leftJoin('users as u', 'u.id', '=', 'a.actor_id')->where('a.receipt_id', $r->id)
             ->where('a.action', 'like', 'reversal_reviewed%')->orderByDesc('a.id')->first(['a.context', 'a.created_at', 'u.name']);
         $payload['reversal_review'] = $review ? (json_decode((string) $review->context, true) ?: []) + ['at' => \Illuminate\Support\Carbon::parse($review->created_at)->toIso8601String(), 'by' => $review->name] : null;
@@ -218,7 +219,7 @@ class CollectionPaymentController extends Controller
             'match_suggestions' => $suggestions, 'match_needs_choice' => (bool) ($matching['needs_choice'] ?? false),
             'reviewed_at' => $r->reviewed_at, 'version' => $r->version, 'clients' => $clients, 'purchase' => $p,
             'allocation' => $allocation ? ['id' => $allocation->id, 'state' => $allocation->state, 'version' => $allocation->version, 'payment_id' => $allocation->payment_id,
-                'decision_source' => $allocation->decision_source, 'effects' => $allocation->effects->map(fn ($e) => ['id' => $e->id, 'client_id' => $e->client_id,
+                'decision_source' => $allocation->decision_source, 'effects' => $allocation->effects->map(fn ($e) => ['id' => $e->id, 'client_id' => $e->client_id, 'correction_id' => $e->correction_id,
                     'kind' => $e->effect_kind, 'state' => $e->state, 'platform_id' => $e->platform_id, 'interval' => $e->contribution,
                     'superseded_at' => $e->superseded_at, 'last_error_code' => $e->last_error_code])] : null,
             'reasons' => array_merge(data_get($r->candidate_snapshot, 'reasons', []), $r->conflicts ?? [])];

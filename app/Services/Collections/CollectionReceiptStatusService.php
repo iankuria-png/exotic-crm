@@ -3,6 +3,7 @@
 namespace App\Services\Collections;
 
 use App\Models\Client;
+use App\Models\Collections\CollectionReceipt;
 use App\Models\Deal;
 use App\Models\Payment;
 use Illuminate\Database\Eloquent\Builder;
@@ -127,6 +128,50 @@ class CollectionReceiptStatusService
         }
 
         return $out;
+    }
+
+    /** Advisory candidates only: a suffixed code never proves another cash receipt. */
+    public function relatedPayments(CollectionReceipt $receipt): array
+    {
+        $references = [$receipt->reference_norm, ...DB::table('collection_receipt_aliases')
+            ->where('receipt_id', $receipt->id)->where('account_id', $receipt->account_id)->pluck('reference')->all()];
+        $references = array_values(array_unique($references));
+        $platformIds = DB::table('collection_account_platforms')->where('account_id', $receipt->account_id)->pluck('platform_id');
+        $payments = Payment::with(['client', 'deal', 'confirmedBy'])->whereIn('platform_id', $platformIds)
+            ->where('id', '!=', $receipt->allocation?->payment_id ?? 0)
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->where(fn ($q) => $q->whereNull('record_classification')->orWhere('record_classification', 'live'))
+            ->where(fn ($q) => $q->whereNull('provider_environment')->orWhere('provider_environment', '!=', 'sandbox'))
+            ->where(function ($q) use ($references) {
+                foreach ($references as $reference) {
+                    $prefix = str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $reference).'%';
+                    foreach (['reference_root', 'transaction_reference', 'reference_number'] as $column) {
+                        $q->orWhereRaw($column." LIKE ? ESCAPE '!'", [$prefix]);
+                    }
+                }
+            })->orderBy('id')->limit(26)->get();
+        $matches = $payments->filter(function (Payment $payment) use ($references) {
+            if ($payment->isClassifiedTest() || data_get($payment->payment_data, 'test_mode')) {
+                return false;
+            }
+            foreach ($references as $reference) {
+                foreach ([$payment->reference_root, $payment->transaction_reference, $payment->reference_number] as $candidate) {
+                    if (preg_match('~^'.preg_quote($reference, '~').'(?:\s*/\s*[1-9][0-9]*)?$~D', (string) $candidate)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        });
+
+        return ['complete' => $payments->count() < 26, 'matches' => $matches->take(25)->map(fn (Payment $payment) => [
+            'payment_id' => $payment->id, 'reference' => $payment->transaction_reference ?: $payment->reference_root,
+            'status' => $payment->status, 'amount' => $payment->amount, 'currency' => $payment->currency,
+            'client' => $payment->client ? ['id' => $payment->client->id, 'name' => $payment->client->name] : null,
+            'deal' => $payment->deal?->only(['id', 'status', 'plan_type', 'activated_at', 'expires_at']),
+            'recorded_by' => $payment->confirmedBy?->name,
+        ])->values()->all()];
     }
 
     public function clients(Collection $clients): array

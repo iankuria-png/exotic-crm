@@ -19,7 +19,7 @@ use Laravel\Sanctum\Sanctum;
 
 class CollectionSubsidiaryAutomationTest extends CollectionWorkflowTestCase
 {
-    private function paired(bool $existing = true): array
+    private function paired(bool $existing = true, bool $emptyExpiry = false): array
     {
         [$account, $device, $source, $intent, $actor] = $this->purchase(true, 6);
         $source->update(['name' => 'Paired fixture', 'phone_normalized' => '255700000001', 'email' => 'source@login.test',
@@ -45,6 +45,16 @@ class CollectionSubsidiaryAutomationTest extends CollectionWorkflowTestCase
             'name' => 'Paired fixture', 'phone_normalized' => $source->phone_normalized, 'email' => 'different@login.test',
             'profile_reverted_at' => null, 'profile_removal_requested_at' => null, 'profile_status' => 'private', 'is_high_risk' => false]) : null;
         $this->remote[88] = $this->snapshot(88, 66);
+        if ($emptyExpiry) {
+            foreach ([77, 88] as $post) {
+                $snapshot = $this->remote[$post];
+                $snapshot['meta']['escort_expire'] = '';
+                $snapshot['meta_present'] = array_values(array_diff($snapshot['meta_present'], ['escort_expire']));
+                unset($snapshot['fingerprint']);
+                $snapshot['fingerprint'] = hash('sha256', json_encode($snapshot));
+                $this->remote[$post] = $snapshot;
+            }
+        }
         $receipt = $this->received($device);
         app(CollectionDecisionService::class)->evaluate($receipt->id);
         $this->assertTrue(CollectionAllocation::exists(), json_encode($receipt->fresh()->candidate_snapshot));
@@ -79,6 +89,39 @@ class CollectionSubsidiaryAutomationTest extends CollectionWorkflowTestCase
         $this->assertDatabaseCount('clients', 2);
         $this->assertSame(1, $owner->allocation->effects()->where('effect_kind', 'subsidiary_free')->count());
         $this->assertSame('active_review_pending', $owner->allocation->fresh()->state);
+    }
+
+    public function test_undo_recovers_legacy_empty_expiry_payloads_on_both_paid_and_paired_profiles(): void
+    {
+        $this->compensationV2 = true;
+        [$owner, $source, $target, $client, $actor] = $this->paired(true, true);
+        $this->resolveTo($client, 'existing');
+        app(CollectionSubsidiaryFulfillmentService::class)->resume($owner->id);
+        $allocation = $owner->allocation->fresh();
+        $paymentCount = \App\Models\Payment::count();
+        $service = app(\App\Services\Collections\CollectionCorrectionService::class);
+        $correction = $service->preview($allocation, $actor, 'undo_effect', null, $allocation->version, 'Wrong paid profile and paired exposure');
+        $this->assertTrue($correction->preview['can_execute'], json_encode($correction->preview));
+        $preview = $correction->preview;
+        $this->assertCount(2, $preview['source_steps']);
+        foreach ($preview['source_steps'] as &$step) {
+            $step['target_state']['restore_snapshot']['meta']['escort_expire'] = '0';
+        }
+        unset($step);
+        $correction->update(['preview' => $preview]);
+        $key = (string) \Illuminate\Support\Str::uuid();
+        $result = $service->execute($correction, $actor, $correction->version, $key);
+        $this->assertSame('verified', $result->state, json_encode(DB::table('collection_audit')->get()));
+        foreach ([77, 88] as $post) {
+            $this->assertSame('', $this->remote[$post]['meta']['escort_expire']);
+            $this->assertSame('private', $this->remote[$post]['post_status']);
+        }
+        $this->assertSame('unassigned', $allocation->fresh()->state);
+        $this->assertDatabaseCount('payments', $paymentCount);
+        $this->assertSame(1, \App\Models\Payment::where('amount', '>', 0)->count());
+        $this->assertSame(4, $this->posts);
+        $service->execute($result, $actor, $result->version, $key);
+        $this->assertSame(4, $this->posts);
     }
 
     public function test_missing_profile_is_created_and_activated_without_a_staff_setup_step(): void

@@ -119,17 +119,25 @@ abstract class CollectionWorkflowTestCase extends CollectionTestCase
 
                 return Http::response(['version' => 1, 'capabilities' => ['compensate' => $this->compensationV2 ? 2 : 0, 'durable_correction_owner' => $this->compensationV2 ? 1 : 0], 'operation' => $this->operations[$query['operation_id'] ?? ''] ?? null, 'snapshot' => $this->remote[$post]]);
             }
+            $payloadHash = hash('sha256', json_encode($request->data()));
+            if ($saved = ($this->operations[$request['operation_id']] ?? null)) {
+                return Http::response($saved, ($saved['_fixture_payload_hash'] ?? null) === $payloadHash ? 200 : 409);
+            }
+            if (($request->data()['operation_kind'] ?? '') === 'compensate') {
+                $source = $this->operations[$request['source_operation_id']] ?? null;
+                $digest = fn ($value) => app(\App\Services\Collections\CollectionSalesService::class)->digest($value);
+                if (! $source || $digest($request['restore_snapshot']) !== $digest($source['before_state'])) {
+                    return Http::response(['code' => 'subscription_review', 'message' => 'Compensation differs from the immutable original preimage.'], 409);
+                }
+            }
             $this->assertSame($this->remote[$post]['fingerprint'], $request['expected_fingerprint']);
             $beforeState = $this->remote[$post];
             $this->posts++;
             $this->remote[$post] = $this->snapshot($post, (int) $request['wp_user_id'], (int) $request['target_expiry'], $request['product_type'], (int) $request['crm_deal_id']);
             if (isset($request['restore_snapshot'])) {
-                $restored = $request['restore_snapshot'];
-                unset($restored['fingerprint']);
-                $restored['fingerprint'] = hash('sha256', json_encode($restored));
-                $this->remote[$post] = $restored;
+                $this->remote[$post] = $request['restore_snapshot'];
             }
-            $result = ['contract_version' => 2, 'before_state' => $beforeState, 'correction_id' => $request->data()['correction_id'] ?? null, 'owner_generation' => $request->data()['owner_generation'] ?? null, 'state' => 'succeeded', 'operation_id' => $request['operation_id'], 'post_id' => $post, 'escort_expire' => $request['target_expiry'],
+            $result = ['_fixture_payload_hash' => $payloadHash, 'contract_version' => 2, 'before_state' => $beforeState, 'correction_id' => $request->data()['correction_id'] ?? null, 'owner_generation' => $request->data()['owner_generation'] ?? null, 'state' => 'succeeded', 'operation_id' => $request['operation_id'], 'post_id' => $post, 'escort_expire' => $request['target_expiry'],
                 'product_type' => $request['product_type'], 'applied_at' => now()->toIso8601String(), 'snapshot' => $this->remote[$post]];
             $this->operations[$request['operation_id']] = $result;
             if ($this->loseResponse) {

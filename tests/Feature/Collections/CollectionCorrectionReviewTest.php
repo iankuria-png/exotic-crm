@@ -4,6 +4,7 @@ namespace Tests\Feature\Collections;
 
 use App\Models\Client;
 use App\Models\Collections\CollectionAllocation;
+use App\Models\Collections\CollectionBenefitEffect;
 use App\Models\Collections\CollectionPurchaseIntent;
 use App\Models\Payment;
 use App\Services\Collections\CollectionCorrectionService;
@@ -17,9 +18,17 @@ use Illuminate\Support\Str;
 
 class CollectionCorrectionReviewTest extends CollectionWorkflowTestCase
 {
-    private function activated(): array
+    private function activated(bool $emptyExpiry = false): array
     {
         [$account, $device, $client, $intent, $user] = $this->purchase();
+        if ($emptyExpiry) {
+            $original = $this->remote[77];
+            $original['meta']['escort_expire'] = '';
+            $original['meta_present'] = array_values(array_diff($original['meta_present'], ['escort_expire']));
+            unset($original['fingerprint']);
+            $original['fingerprint'] = hash('sha256', json_encode($original));
+            $this->remote[77] = $original;
+        }
         $this->fakeWordPress();
         $r = $this->received($device);
         app(CollectionDecisionService::class)->evaluate($r->id);
@@ -163,5 +172,83 @@ class CollectionCorrectionReviewTest extends CollectionWorkflowTestCase
         $this->assertFalse($c->preview['can_execute']);
         $this->assertContains('untracked_entitlement_change_requires_recovery', $c->preview['reasons']);
         $this->assertSame(1, $this->posts);
+    }
+
+    public function test_undo_restores_empty_and_absent_metadata_exactly_as_wordpress_requires(): void
+    {
+        [$account, $r, $client, $intent, $user, $a] = $this->activated(true);
+        $this->compensationV2 = true;
+        $original = $a->effects()->where('effect_kind', 'primary_paid')->firstOrFail()->before_state;
+        $c = app(CollectionCorrectionService::class)->preview($a, $user, 'undo_effect', null, $a->version, 'Wrong profile');
+        $this->assertSame($original, $c->preview['source_steps'][0]['target_state']['restore_snapshot']);
+        $result = app(CollectionCorrectionService::class)->execute($c, $user, $c->version, (string) Str::uuid());
+        $this->assertSame('verified', $result->state);
+        $this->assertSame($original, $this->remote[77]);
+        $this->assertDatabaseCount('payments', 1);
+        $this->assertSame(2, $this->posts);
+    }
+
+    private function stalledEmptyExpiryUndo(): array
+    {
+        [$account, $r, $client, $intent, $user, $a] = $this->activated(true);
+        $this->compensationV2 = true;
+        $c = app(CollectionCorrectionService::class)->preview($a, $user, 'undo_effect', null, $a->version, 'Wrong profile');
+        $key = (string) Str::uuid();
+        $this->unavailablePost = 77;
+        $c = app(CollectionCorrectionService::class)->execute($c, $user, $c->version, $key);
+        $this->unavailablePost = null;
+        $effect = CollectionBenefitEffect::where('correction_id', $c->id)->firstOrFail();
+        $target = $effect->target_state;
+        $target['restore_snapshot']['meta']['escort_expire'] = '0';
+        $effect->update(['target_state' => $target, 'state' => 'effect_unknown', 'last_error_code' => 'operation_result_unavailable']);
+
+        return [$a, $user, $c, $key, $effect];
+    }
+
+    public function test_existing_invalid_empty_expiry_undo_recovers_the_same_operation_once(): void
+    {
+        [$a, $user, $c, $key, $effect] = $this->stalledEmptyExpiryUndo();
+        $result = app(CollectionCorrectionService::class)->execute($c, $user, $c->version, $key);
+        $this->assertSame('verified', $result->state, json_encode(DB::table('collection_audit')->get()));
+        $this->assertSame('unassigned', $a->fresh()->state);
+        $this->assertSame('', $this->remote[77]['meta']['escort_expire']);
+        $this->assertSame('succeeded', $this->operations[$effect->id]['state']);
+        $this->assertSame(2, $this->posts);
+        app(CollectionCorrectionService::class)->execute($result, $user, $result->version, $key);
+        $this->assertSame(2, $this->posts);
+        $this->assertDatabaseCount('payments', 1);
+        $this->assertDatabaseHas('collection_audit', ['receipt_id' => $a->receipt_id, 'action' => 'correction_preimage_recovered']);
+    }
+
+    public function test_legacy_recovery_refuses_changed_coverage_and_other_payload_differences(): void
+    {
+        [$a, $user, $c, $key, $effect] = $this->stalledEmptyExpiryUndo();
+        $target = $effect->target_state;
+        $target['restore_snapshot']['meta']['needs_payment'] = '1';
+        $effect->update(['target_state' => $target]);
+        $result = app(CollectionCorrectionService::class)->execute($c, $user, $c->version, $key);
+        $this->assertSame('uncertain', $result->state);
+        $this->assertSame(1, $this->posts);
+        $target['restore_snapshot'] = CollectionBenefitEffect::findOrFail($target['source_operation_id'])->before_state;
+        $target['restore_snapshot']['meta']['escort_expire'] = '0';
+        $effect->update(['target_state' => $target]);
+        $this->remote[77] = $this->snapshot(77, 55, now()->addDays(30)->timestamp, 'vip', 999);
+        $result = app(CollectionCorrectionService::class)->execute($result, $user, $result->version, $key);
+        $this->assertSame('uncertain', $result->state);
+        $this->assertSame(1, $this->posts);
+        $this->assertDatabaseMissing('collection_audit', ['action' => 'correction_preimage_recovered']);
+    }
+
+    public function test_valid_unknown_compensation_is_never_replayed_without_a_saved_result(): void
+    {
+        [$a, $user, $c, $key, $effect] = $this->stalledEmptyExpiryUndo();
+        $source = CollectionBenefitEffect::findOrFail($effect->target_state['source_operation_id']);
+        $target = $effect->target_state;
+        $target['restore_snapshot'] = $source->before_state;
+        $effect->update(['target_state' => $target]);
+        $result = app(CollectionCorrectionService::class)->execute($c, $user, $c->version, $key);
+        $this->assertSame('uncertain', $result->state);
+        $this->assertSame(1, $this->posts);
+        $this->assertDatabaseMissing('collection_audit', ['action' => 'correction_preimage_recovered']);
     }
 }
