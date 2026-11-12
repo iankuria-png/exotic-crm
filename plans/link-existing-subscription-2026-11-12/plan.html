@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Link a temporary-code subscription to its original receipt — plan</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+--bg:#0a0a0b;--bg2:#101013;--card:#131317;--card2:#17171c;--line:#26262e;
+--line2:#33333d;--ink:#ededf2;--mut:#9a9aa8;--mut2:#6e6e7d;--acc:#7c5cff;
+--acc2:#a48bff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--info:#58a6ff;
+--r:10px;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+--wf-paper:#0d0d10;--wf-card:#17171c;--wf-ink:#ededf2;--wf-muted:#8b8b99;
+--wf-line:#2c2c36;--wf-accent:#7c5cff;--wf-accent-soft:#241d47;
+--wf-warn:#d29922;--wf-ok:#3fb950;--wf-radius:8px;
+}
+@media(prefers-color-scheme:light){:root{
+--bg:#fbfbfd;--bg2:#fff;--card:#fff;--card2:#f7f7fa;--line:#e3e3ea;
+--line2:#d0d0da;--ink:#16161c;--mut:#5c5c6b;--mut2:#8a8a99;--acc:#6247d6;
+--acc2:#7c5cff;--wf-paper:#fff;--wf-card:#f7f7fa;--wf-ink:#16161c;
+--wf-muted:#5c5c6b;--wf-line:#e3e3ea;--wf-accent:#6247d6;--wf-accent-soft:#efecff;
+}}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:minmax(0,1fr);max-width:1180px;margin:0 auto;padding:0 28px 120px}
+@media(min-width:1080px){.shell{grid-template-columns:232px minmax(0,1fr);gap:56px;padding-left:32px}}
+nav.toc{display:none}
+@media(min-width:1080px){nav.toc{display:block;position:sticky;top:0;align-self:start;
+max-height:100vh;overflow:auto;padding:96px 0 40px;font-size:13px}}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:5px 10px;
+border-left:2px solid transparent;border-radius:0 4px 4px 0}
+nav.toc a:hover{color:var(--ink);background:var(--card);border-left-color:var(--acc)}
+nav.toc a.l3{padding-left:22px;font-size:12.5px;color:var(--mut2)}
+header.hero{padding:72px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+color:var(--acc2);margin-bottom:18px}
+h1{font-size:clamp(30px,4.2vw,44px);line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;font-weight:660}
+.obj{font-size:18px;color:var(--mut);max-width:70ch;margin:0 0 26px;line-height:1.6}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 12px/1 var(--sans);color:var(--mut);background:var(--card);
+border:1px solid var(--line);border-radius:999px;padding:7px 13px}
+.chip b{color:var(--ink);font-weight:600}
+main h2{font-size:24px;letter-spacing:-.02em;margin:56px 0 14px;padding-top:10px;font-weight:640}
+main h3{font-size:17px;margin:34px 0 10px;font-weight:620;letter-spacing:-.01em}
+main h4{font-size:15px;margin:0 0 8px;font-weight:620}
+main p{margin:0 0 14px;max-width:76ch}
+main ul,main ol{margin:0 0 16px;padding-left:22px;max-width:76ch}
+main li{margin:5px 0}
+a{color:var(--acc2)}
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+blockquote{margin:0 0 16px;padding:2px 0 2px 18px;border-left:3px solid var(--line2);color:var(--mut)}
+code{font-family:var(--mono);font-size:.875em;background:var(--card2);
+border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre.code{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);
+padding:14px 16px;overflow-x:auto;margin:0 0 16px}
+pre.code code{background:none;border:0;padding:0;font-size:12.75px;line-height:1.6}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{text-align:left;font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+.blk{margin:30px 0;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.bh{font:600 11.5px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+color:var(--mut);padding:14px 18px;border-bottom:1px solid var(--line);background:var(--card2)}
+.bh code{background:none;border:0;padding:0;text-transform:none;letter-spacing:0;
+font-size:12.5px;color:var(--ink)}
+.bb{padding:18px}
+.bb>.tw,.bb>*:last-child{margin-bottom:0}
+.cap{color:var(--mut2);font-size:13px;margin:10px 0 0!important}
+.tag{font:500 10.5px/1 var(--mono);color:var(--mut2);border:1px solid var(--line);
+border-radius:4px;padding:3px 6px;text-transform:uppercase;letter-spacing:.07em}
+.pill{display:inline-block;font:600 10.5px/1 var(--mono);border-radius:999px;
+padding:4px 9px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.p-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.p-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.p-bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.p-mut{color:var(--mut);background:var(--card2)}
+.callout{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
+margin:22px 0;padding:15px 17px;border:1px solid var(--line);border-left-width:3px;
+border-radius:var(--r);background:var(--card)}
+.callout .ct{font:600 10.5px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.callout .cb>*:last-child{margin-bottom:0}
+.t-note{border-left-color:var(--info)} .t-note .ct{color:var(--info)}
+.t-decision{border-left-color:var(--acc)} .t-decision .ct{color:var(--acc2)}
+.t-risk{border-left-color:var(--bad)} .t-risk .ct{color:var(--bad)}
+.t-warn{border-left-color:var(--warn)} .t-warn .ct{color:var(--warn)}
+.t-ok{border-left-color:var(--ok)} .t-ok .ct{color:var(--ok)}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+li.step{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 0;
+border-bottom:1px solid var(--line)}
+li.step:first-child{padding-top:0} li.step:last-child{border-bottom:0;padding-bottom:0}
+.sn{width:28px;height:28px;border-radius:8px;background:var(--wf-accent-soft);
+color:var(--acc2);font:600 12.5px/28px var(--mono);text-align:center}
+.sc h4{margin:3px 0 8px}
+.sm{display:grid;grid-template-columns:64px 1fr;gap:10px;font-size:13px;margin-top:5px}
+.sm .k{font:600 10.5px/1.7 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut2)}
+.sm .v{color:var(--mut)}
+.ty{font:500 12px/1 var(--mono);color:var(--acc2)}
+.rels{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.rel{font:500 11.5px/1 var(--mono);color:var(--mut);background:var(--card2);
+border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+.ep-h{display:flex;align-items:center;gap:11px;margin-bottom:12px;flex-wrap:wrap}
+.verb{font:700 11px/1 var(--mono);letter-spacing:.08em;padding:6px 9px;border-radius:6px;color:#0a0a0b}
+.v-GET{background:var(--info)} .v-POST{background:var(--ok)}
+.v-PUT,.v-PATCH{background:var(--warn)} .v-DELETE{background:var(--bad)}
+.v-HEAD,.v-OPTIONS{background:var(--mut)}
+.path{font-size:13.5px;background:none;border:0;padding:0}
+.sub{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin:14px 0 7px}
+table.ac{font-family:var(--mono);font-size:12.5px}
+table.ac td{padding:2px 10px;border:0;vertical-align:top}
+.ln{color:var(--mut2);text-align:right;user-select:none;width:1%;padding-right:14px!important}
+.cd code{background:none;border:0;padding:0;white-space:pre}
+.cl.hl{background:var(--wf-accent-soft)}
+.cl.hl .ln{color:var(--acc2)}
+.nt{font-family:var(--sans);color:var(--mut);font-size:12.5px;width:34%}
+.an b{color:var(--ink)}
+.diff{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line);
+border-radius:var(--r);overflow:hidden;font-family:var(--mono);font-size:12.5px}
+@media(min-width:760px){.diff{grid-template-columns:1fr 1fr}}
+.dcol{background:var(--bg2);padding-bottom:10px}
+.dh{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:11px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.dl{padding:1px 14px;white-space:pre-wrap;word-break:break-word}
+.d-del{background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.d-add{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.dg{padding:6px 2px;overflow-x:auto}
+.dg svg{max-width:100%;height:auto}
+.wfw{display:flex;justify-content:center}
+.wf{background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:12px;
+overflow:hidden;width:100%}
+.wf.s-desktop{max-width:100%} .wf.s-tablet{max-width:720px}
+.wf.s-mobile{max-width:378px} .wf.s-panel{max-width:440px}
+.wfbar{display:flex;gap:6px;padding:10px 13px;border-bottom:1px solid var(--wf-line);
+background:var(--wf-card)}
+.wfbar i{width:9px;height:9px;border-radius:50%;background:var(--wf-line)}
+.wfb{padding:16px;color:var(--wf-ink);font-size:13.5px}
+.cmp{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.cmp{grid-template-columns:1fr 1fr}}
+.ccol{border:1px solid var(--line);border-radius:var(--r);padding:15px;background:var(--bg2)}
+.ch{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin-bottom:11px}
+.ccol>*:last-child{margin-bottom:0}
+ol.qs{list-style:none;margin:0;padding:0}
+li.q{padding:16px 0;border-bottom:1px solid var(--line)}
+li.q:first-child{padding-top:0} li.q:last-child{border-bottom:0;padding-bottom:0}
+.qh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.qn{font:700 11px/1 var(--mono);color:var(--acc2)}
+.qt{font-weight:600;flex:1;min-width:200px}
+ul.opts{list-style:none;margin:11px 0 0;padding:0}
+ul.opts li{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;
+padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin:0 0 7px;background:var(--bg2)}
+.box{width:14px;height:14px;border:1.5px solid var(--line2);border-radius:3px;margin-top:4px}
+.box.m{border-radius:3px} .ol{font-size:14px}
+.od{display:block;color:var(--mut);font-size:13px;margin-top:2px}
+.freeform{border:1px dashed var(--line2);border-radius:8px;padding:15px;
+color:var(--mut2);font-size:13px;margin-top:11px}
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+color:var(--mut2);font-size:12.5px}
+@media print{
+ nav.toc{display:none}.shell{grid-template-columns:1fr;max-width:none;padding:0}
+ .blk,.callout,.tw{break-inside:avoid}body{background:#fff;color:#000}
+}
+</style>
+</head><body>
+<div class="shell">
+<nav class="toc"><a class="l2" href="#durable-behavior">Durable behavior</a><a class="l2" href="#verification-and-deployment">Verification and deployment</a><a class="l2" href="#audit">Audit</a><a class="l2" href="#open-questions">Open questions</a></nav>
+<div>
+<header class="hero">
+<div class="eyebrow">Implementation plan</div>
+<h1>Link a temporary-code subscription to its original receipt</h1>
+<p class="obj">Let customer service reconcile an existing active subscription with the received payment code without extending service or counting the cash twice.</p>
+<div class="meta"><span class="chip">Status <b>shipping follow-up authorized by Ian; independent audit before implementation</b></span><span class="chip">Owner <b>Ian Kuria</b></span><span class="chip">Date <b>2026-11-12</b></span><span class="chip">Scope <b>Existing unassigned collection allocation plus one related full-value manual subscription payment, reviewed linking UI/API, audit and compiled CRM assets</b></span><span class="chip">Non-goals <b>Production deployment or live linking by Codex; Ian deploys and CS confirms links; Automatic matching, bulk merging, refunds, new service, paired exposure grants or customer messages; Shared/split payments, partial amounts, pending or expired subscriptions and arbitrary unrelated codes</b></span></div>
+</header>
+<main><p>Receipt326 now has its wrong paid and paired activation removed. The original automatic payment42594 is unassigned. Sabrina remains active on manual payment42603/deal37267, using <code>DKC633H05T /1</code>. Ian asks for a direct, clean action to link that existing subscription to <code>DKC633H05T</code>. Fleet Ops read f8e6 confirms the undo is verified and production source is d5653a16. This extends the authorized ship workstream; Ian still deploys.</p>
+<section class="blk"><header class="bh">Customer service — found a temporary code</header><div class="bb"><div class="wfw"><div class="wf s-panel"><div class="wfbar"><i></i><i></i><i></i></div><div class="wfb"><div style='display:grid;gap:16px'><div style='color:var(--wf-muted);font-size:12px'>INCOMING PAYMENT · TZ OFFICE M-PESA WALLET</div><strong style='font-size:24px'>TZS 35,000</strong><div style='padding:18px;border:1px solid var(--wf-line);border-radius:var(--wf-radius);background:var(--wf-card)'><strong>Link an existing subscription</strong><p>We found Sabrina’s active subscription using a temporary code.</p><div style='padding:12px;border:1px solid var(--wf-line);border-radius:var(--wf-radius)'><strong>Sabrina</strong><p>VIP · 7 days · Expires 19 Nov 2026</p><p>Recorded by Joanne Yengo</p><p>Temporary code: DKC633H05T /1</p><p>Received code: DKC633H05T</p></div><p>Keep the current subscription and link it to this payment.</p><button style='padding:11px;background:var(--wf-accent);color:var(--wf-paper);border:0;border-radius:var(--wf-radius)'>Link Sabrina’s subscription</button></div></div></div></div></div><p class="cap">One clear action replaces the warning and disabled assignment button. Existing CRM receipt drawer and teal controls remain.</p></div></section>
+<section class="blk"><header class="bh">Review once, then confirm</header><div class="bb"><div class="wfw"><div class="wf s-panel"><div class="wfbar"><i></i><i></i><i></i></div><div class="wfb"><div style='padding:18px;border:1px solid var(--wf-line);border-radius:var(--wf-radius);background:var(--wf-card)'><strong>Link Sabrina’s subscription</strong><p>TZS 35,000 · VIP · 7 days</p><dl><dt>Temporary code</dt><dd>DKC633H05T /1</dd><dt>Use received code</dt><dd>DKC633H05T</dd><dt>Subscription expires</dt><dd>19 Nov 2026, 23:59 EAT · unchanged</dd></dl><p>No extra days or additional payment. The duplicate unassigned record stays in the audit history and is excluded from successful cash totals.</p><button style='padding:11px;background:var(--wf-accent);color:var(--wf-paper);border:0;border-radius:var(--wf-radius)'>Confirm link</button><button style='margin-left:10px;padding:10px;border:1px solid var(--wf-line);border-radius:var(--wf-radius);background:var(--wf-card);color:var(--wf-ink)'>Back</button></div></div></div></div></div></section>
+<h2 id="durable-behavior">Durable behavior</h2>
+<p>Keep Sabrina’s existing payment42603 and deal37267 as the canonical payment/service pair so commissions, manual proof and activation attribution remain attached. Replace that payment’s three current reference fields with the original received code; retain every previous reference in the audited link record and payment metadata. Mark the old, unassigned automatic payment42594 canceled with <code>resolution_code=duplicate_receipt_link</code>, resolved review state and a pointer to42603. Preserve its amount, references, original fulfillment operation and historical source effects. The receipt principal and funds/statement evidence do not change. Successful cash reports count only42603. Add Payment::withoutReceiptDuplicates() for this distinct audited disposition and apply it to statement-reconciliation buildPaymentMap, daily-review current listing/duplicate detection; historical unit reads remain noncash and readable, collection reference evidence and existing-cash resolution. Other canceled/exception records retain their current behavior. Fresh statement previews of the original code must resolve exactly to42603; historical uploaded batches remain historical evidence. No row is deleted and no provider or WordPress mutation is called.</p>
+<p>Reuse <code>collection_corrections</code> with action <code>link_existing</code> for the persisted preview, before-state evidence and unique request key. New dedicated routes/service execute this action; ordinary correction execute/resume explicitly refuse it. The transaction moves the allocation’s payment_id and operation_id to a new local verification-only operation on42603, records a succeeded verification_only effect with the already-active native snapshot, updates the purchase snapshot to Sabrina, and marks allocation/receipt reviewed. Original intent stays revoked; no new purchase authority, grant, price recalculation or exposure reservation is created. Release only the review exposure counter, preserving statement-verification risk.</p>
+<p>Link metadata lives in the correction preview/audit and allocation purchase_snapshot.receipt_link, with canonical/duplicate payment IDs, old/new codes, actor/time, preserved activation provenance and exact checked expiry. Same request/correction replays return the completed link without another write. A different request key cannot change a completed preview. Old and canonical managed payment rows remain protected from unrelated generic writers. The duplicate guard reads the persisted/original duplicate-link metadata, so clearing that metadata and reopening the status in the same save is refused. The original activation remains attributed to Joanne; the linker is shown separately.</p>
+<p>Eligibility requires an accessible, verified receiving account and conflict-free positive receipt; unassigned allocation after all old active effects are superseded and every accepted correction/owner is finished/released; one bounded related successful manual payment matching the full amount, currency and original market; coherent active non-trial deal/client/product-price tuple; current WordPress user/post, tier, expiry and crm_deal_id matching the existing deal. Fill missing legacy payment user/post IDs only from this verified tuple; conflicting populated IDs hold. Reject test/sandbox/wallet payments, bundles/reference_sequence, other receipt owners, selected-payment fulfillment operations, any nonclosed recovery case or disputed attribution on either payment, drift or truncated/multiple candidate evidence. Identify legacy manual payments through deal.origin=manual and a staff confirmer, allowing the observed source=gateway/null-provider metadata only when no authenticated payment_receipt_observations or billing_provider_transactions exist. The original completed fulfillment operation is retained as history. Existing closed recovery cases are retained; any open case holds linking rather than relying on cancellation to close it. Native reads are GET-only. Link eligibility does not depend on a fresh purchase authority or current catalogue availability, because it adds no service.</p>
+<p>Preview pins receipt/allocation versions, payment/deal/client digests and native fingerprint for10minutes. Execute reacquires target lifecycle lock, refreshes native proof outside the short SQL transaction, then locks account, receipt, allocation, correction, both payment rows in numeric order, target deal/client and revalidates the pinned state/ownership and candidate uniqueness before any financial write. Retain all existing guard/model hooks. Account locking serializes concurrent collection/manual cash writes; selected payment ownership/unique allocation and operation constraints prevent a second receipt from claiming it. Failed/stale execution rolls back completely; a lost response retries the same key.</p>
+<p>The linked presenter suppresses obsolete original Tanzania obligations and ordinary activation correction actions for this verification-only service, and points to the existing subscription for further changes. It shows linked state, original/temporary code, preserved expiry, original activator and separate linking actor. No auto-pairing is dispatched. The old subsidiary worker already rejects its superseded source effect; regress this.</p>
+<section class="blk"><header class="bh">Implementation steps</header><div class="bb"><ol class="steps"><li class="step"><div class="sn">1</div><div class="sc"><h4>Implement a reviewed receipt-to-existing-subscription link</h4><div class="sm"><span class="k">Reuses</span><span class="v">CollectionCorrection, account/receipt access, related-payment detection, lifecycle/writer locks, audit, verification-only operation/effect and exposure review release</span></div><div class="sm"><span class="k">Adds</span><span class="v">CollectionSubscriptionLinkService and dedicated controller/routes; exact eligibility/native proof; atomic canonical-reference reassignment plus duplicate closeout; ordinary correction rejection of link_existing; managed duplicate protection</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Collections/CollectionSubscriptionLinkService.php (new); app/Http/Controllers/CRM/CollectionSubscriptionLinkController.php (new); routes/collection.php; app/Services/Collections/CollectionCorrectionService.php; app/Services/Collections/CollectionWriterGuard.php; app/Models/Payment.php; app/Services/PaymentReconciliationAuditService.php; app/Services/Reconciliation/DailyPaymentReviewService.php; app/Services/Collections/CollectionDecisionService.php; app/Services/Collections/CollectionReceiptStatusService.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">isolated MySQL: two successful records become one reportable successful payment, amount/expiry/deal/proof preserved, native GET-only, same-key replay, different-key conflict, drift/rollback/concurrency ownership and scope refusal</span></div></div></li><li class="step"><div class="sn">2</div><div class="sc"><h4>Present the canonical linked subscription and original attribution</h4><div class="sm"><span class="k">Reuses</span><span class="v">CollectionPaymentController presenter, CollectionActivationAttribution, saved audit and payment detail links</span></div><div class="sm"><span class="k">Adds</span><span class="v">receipt_link summary; linked activation attribution from the existing exact payment event; separate linked-by actor; old subsidiary summary hidden; meaningful holds for unsupported candidates</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Http/Controllers/CRM/CollectionPaymentController.php; app/Services/Collections/CollectionActivationAttribution.php; tests/Feature/Collections/CollectionSubscriptionLinkTest.php (new)</span></div><div class="sm"><span class="k">Verify</span><span class="v">receipt/queue show Sabrina and Joanne’s actual activation time; link actor/time separate; no original-source subsidiary or automatic claims; generic payment writes remain held</span></div></div></li><li class="step"><div class="sn">3</div><div class="sc"><h4>Replace the warning-only state with the linking flow</h4><div class="sm"><span class="k">Reuses</span><span class="v">receipt drawer, React Query refresh, existing secondary/primary controls and related record evidence</span></div><div class="sm"><span class="k">Adds</span><span class="v">CollectionSubscriptionLink component: choose candidate, native preview, confirm, saved-result retry and linked completion; no disabled Assign control competing with an eligible link</span></div><div class="sm"><span class="k">Files</span><span class="v">resources/js/components/collections/CollectionSubscriptionLink.jsx (new); resources/js/components/collections/CollectionWorkspace.jsx; resources/js/components/collections/collectionUi.jsx</span></div><div class="sm"><span class="k">Verify</span><span class="v">CLI browser fixture: exactly one preview and confirm, no activation POST, lost response same key, stale/error/back states, linked card after refresh, keyboard and390px no overflow</span></div></div></li><li class="step"><div class="sn">4</div><div class="sc"><h4>Build and ship the scoped follow-up for Ian</h4><div class="sm"><span class="k">Reuses</span><span class="v">authorized existing checkout, portable ship and separate WP changelog workflow</span></div><div class="sm"><span class="k">Adds</span><span class="v">regressions, matching production JS/CSS/manifest, task/state evidence and local changelog</span></div><div class="sm"><span class="k">Files</span><span class="v">tests/Feature/Collections/CollectionSubscriptionLinkTest.php (new); public/build/; docs/agent/tasks/link-existing-subscription-2026-11-12.md (new)</span></div><div class="sm"><span class="k">Verify</span><span class="v">focused PHP8.2 MySQL suite, syntax/Pint, browser screenshots, npm run build, preserved historical bundles, scoped commits and origin main readback; no production apply</span></div></div></li></ol></div></section>
+<section class="blk"><header class="bh">Endpoint</header><div class="bb"><div class="ep"><div class="ep-h"><span class="verb v-POST">POST</span><code class="path">/api/crm/collections/receipts/{receipt}/subscription-link-preview</code></div><div class="sm"><span class="k">Auth</span><span class="v">Existing collections Sanctum/session/active/admin-sub_admin-sales middleware; receiving-account access requires every bound market, plus selected client market access.</span></div><div class="sub">Request</div><pre class="code"><code>{
+  &quot;payment_id&quot;: &quot;integer&quot;,
+  &quot;expected_version&quot;: &quot;receipt integer version&quot;,
+  &quot;expected_allocation_version&quot;: &quot;integer&quot;
+}</code></pre><div class="sm"><span class="k">Response</span><span class="v">Persisted CollectionCorrection action=link_existing, preview.can_execute/reasons, selected client, exact old/new code, amount and unchanged expiry. Held preview is reviewable and cannot execute.</span></div><div class="sm"><span class="k">Errors</span><span class="v">403/404 scope;409 changed receipt; held reason for unsupported/shared/ambiguous or unconfirmed subscription.</span></div></div></div></section>
+<section class="blk"><header class="bh">Endpoint</header><div class="bb"><div class="ep"><div class="ep-h"><span class="verb v-POST">POST</span><code class="path">/api/crm/collections/subscription-links/{link}/execute</code></div><div class="sm"><span class="k">Auth</span><span class="v">Same middleware/account/client scope, action ownership, persisted exact preview, current funds and native proof, version and idempotency key checks.</span></div><div class="sub">Request</div><pre class="code"><code>{
+  &quot;preview_version&quot;: &quot;integer&quot;,
+  &quot;idempotency_key&quot;: &quot;UUID retained across retries&quot;
+}</code></pre><div class="sm"><span class="k">Response</span><span class="v">Same link row with verified state and receipt_link summary; original activation and payment amount preserved.</span></div><div class="sm"><span class="k">Errors</span><span class="v">409 stale preview/version, different key, ambiguous/claimed payment, changed native subscription; all writes roll back.</span></div></div></div></section>
+<section class="blk"><header class="bh">Risks</header><div class="bb"><div class="tw"><table><thead><tr><th>Risk</th><th>Impact</th><th>Likelihood</th><th>Mitigation</th></tr></thead><tbody><tr><td>Marking the wrong receipt row as duplicate hides real money</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Support only an unassigned original receipt after verified undo, one explicit full-value related manual payment, exact same market and live active native service. Review UI shows both codes, amount and profile. Preserve both records and immutable before-state audit; no automatic linking.</td></tr><tr><td>A generic correction or stale worker treats the link as another service operation</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Dedicated link action/routes; generic execute/resume reject it. Allocation reviewed and new verification-only owner stop fulfill replay; superseded original subsidiary source remains blocked. Test those routes/workers explicitly.</td></tr><tr><td>A network retry changes the references twice or misattributes activation</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Existing unique correction request key plus locked versions/ownership; same-key completed response is returned. Keep target payment/deal and exact original activation event intact; linker is separate.</td></tr></tbody></table></div></div></section>
+<h2 id="verification-and-deployment">Verification and deployment</h2>
+<p>Use the existing isolated MySQL socket/database fixture configuration for feature tests. Test the actual new preview/execute API through sales/admin scope, reportable revenue count, protected payment saves, original/target effect and worker behavior, preserved manual proof/commission/activation timestamps, same-key replay and changed native snapshot. The UI smoke uses the existing local collection fixture with every API call intercepted; inspect390px and1440px screenshots, tab focus, retry key and inline completion after receipt reload. Build matching assets and push only the scoped source/docs. No migration is needed because the existing correction/audit/metadata schema carries the link. Ian deploys and CS performs the reviewed business operation.</p>
+<h2 id="audit">Audit</h2>
+<p>Round1 NOT READY: addressed fresh statement matching of archived duplicates, refusal of either payment’s open recovery/dispute, actual gateway-labelled legacy manual provenance, and persisted-metadata writer protection. Round2 and implementation review READY. Persisted duplicate protection executes before the payment-purpose early return; original activation and new verification/link timestamps stay separate. This is the requested continuation of the authorized simpler-correction release, with no Codex production mutation.</p>
+<section class="blk" id="open-questions"><header class="bh">Open questions</header><div class="bb"><ol class="qs"></ol></div></section></main>
+<footer>Rendered from <code>plan.mdx</code> · review surface only — no code was written to produce this.</footer>
+</div></div></body></html>

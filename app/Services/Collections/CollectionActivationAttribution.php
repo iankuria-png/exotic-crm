@@ -46,6 +46,13 @@ class CollectionActivationAttribution
     {
         $allocation = $r->allocation;
         if ($allocation) {
+            if ($link = data_get($allocation->purchase_snapshot, 'receipt_link')) {
+                $activation = $link['activation'];
+                $kind = $activation['state'] === 'staff' ? 'staff' : ($activation['state'] === 'automatic' ? 'automatic' : 'unknown');
+
+                return ['kind' => $kind, 'actor' => $kind === 'staff' ? $activation['actor'] : null,
+                    'at' => $activation['activated_at'] ?? $link['deal']['activated_at'], 'pending' => false, 'via' => 'Linked existing subscription'];
+            }
             if ($allocation->state === 'unassigned') {
                 return null;
             }

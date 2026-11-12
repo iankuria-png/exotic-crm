@@ -208,7 +208,7 @@ class CollectionPaymentController extends Controller
         $suggestions = array_values(array_filter(array_map(fn ($candidate) => isset($profiles[$candidate['id']])
             ? ['id' => $candidate['id'], 'name' => $profiles[$candidate['id']]->name, 'score' => $candidate['score']] : null, $suggestions)));
 
-        return ['id' => $r->id, 'subsidiary_obligation' => $obligation && $allocation->state !== 'unassigned' ? ['state' => $obligation->state, 'version' => $obligation->version, 'last_error_code' => $obligation->last_error_code] : null, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
+        return ['id' => $r->id, 'receipt_link' => $p['receipt_link'] ?? null, 'subsidiary_obligation' => $obligation && $allocation->state !== 'unassigned' && empty($p['receipt_link']) ? ['state' => $obligation->state, 'version' => $obligation->version, 'last_error_code' => $obligation->last_error_code] : null, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
             'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
             'payer' => $payer ?? app(CollectionPayerEvidenceService::class)->forReceipt($r), 'captured_payer_receipts' => $capturedCount,
             'usage' => $usage, 'activation' => $activation, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
@@ -222,7 +222,7 @@ class CollectionPaymentController extends Controller
                 'decision_source' => $allocation->decision_source, 'effects' => $allocation->effects->map(fn ($e) => ['id' => $e->id, 'client_id' => $e->client_id, 'correction_id' => $e->correction_id,
                     'kind' => $e->effect_kind, 'state' => $e->state, 'platform_id' => $e->platform_id, 'interval' => $e->contribution,
                     'superseded_at' => $e->superseded_at, 'last_error_code' => $e->last_error_code])] : null,
-            'reasons' => array_merge(data_get($r->candidate_snapshot, 'reasons', []), $r->conflicts ?? [])];
+            'reasons' => empty($p['receipt_link']) ? array_merge(data_get($r->candidate_snapshot, 'reasons', []), $r->conflicts ?? []) : []];
     }
 
     public function reviewContext(Request $request, int $receipt, CollectionReviewContextService $context)

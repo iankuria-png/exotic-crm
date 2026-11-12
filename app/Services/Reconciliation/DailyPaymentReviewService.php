@@ -36,7 +36,7 @@ class DailyPaymentReviewService
         $launch = DB::table('payment_review_settings')->where('key', 'launch_date')->value('value');
         $from = ! empty($filters['earlier_unresolved']) ? Carbon::parse($launch, $zone)->startOfDay() : $day->copy();
         // NULL sources are common in legacy manual entries.
-        $q = Payment::query()->businessVisible()->whereIn('platform_id', $markets)
+        $q = Payment::query()->businessVisible()->withoutReceiptDuplicates()->whereIn('platform_id', $markets)
             ->where(fn ($q) => $q->whereNull('purpose')->orWhere('purpose', 'subscription'))
             ->where('amount', '>', 0)->where(fn ($q) => $q->whereNull('source')->orWhere('source', '!=', 'wallet'));
         $dateSql = 'COALESCE((SELECT b.created_at FROM manual_payment_bundles b WHERE b.id=payments.manual_payment_bundle_id), payments.completed_at, payments.created_at)';
@@ -198,7 +198,7 @@ class DailyPaymentReviewService
             if (! $p->currency || (float) $p->amount <= 0) {
                 $blockers[] = 'Amount or currency is invalid';
             }
-            if ($p->isSandboxTest() || $p->isClassifiedTest() || in_array($p->resolution_code, ['reversed', 'invalid_reference']) || ! in_array($p->purpose, [null, 'subscription'], true) || $p->source === 'wallet' || $p->deal?->is_free_trial) {
+            if ($p->isSandboxTest() || $p->isClassifiedTest() || in_array($p->resolution_code, ['reversed', 'invalid_reference', Payment::RESOLUTION_RECEIPT_DUPLICATE]) || ! in_array($p->purpose, [null, 'subscription'], true) || $p->source === 'wallet' || $p->deal?->is_free_trial) {
                 $blockers[] = 'This is not eligible subscription cash';
             }
             if (! in_array($p->status, Payment::SUCCESSFUL_STATUSES) && ! ($p->manualSubmission?->activated_on_submit && $p->manualSubmission?->review_decision !== 'rejected' && $p->deal?->status === 'active' && ! in_array($p->status, ['failed', 'reversed']))) {
@@ -207,7 +207,7 @@ class DailyPaymentReviewService
             $ref = trim((string) ($p->transaction_reference ?: $p->reference_number));
             if ($ref === '') {
                 $blockers[] = 'Receipt reference is missing';
-            } elseif (Payment::businessVisible()->where('platform_id', $p->platform_id)->where('amount', '>', 0)->whereNotIn('id', $payments->pluck('id'))
+            } elseif (Payment::businessVisible()->withoutReceiptDuplicates()->where('platform_id', $p->platform_id)->where('amount', '>', 0)->whereNotIn('id', $payments->pluck('id'))
                 ->where(fn ($q) => $q->where('transaction_reference', $ref)->orWhere('reference_number', $ref))->exists()) {
                 $blockers[] = 'Receipt reference also appears on another record';
             }
@@ -249,7 +249,7 @@ class DailyPaymentReviewService
             'business_date' => $date?->copy()->timezone(config('reconciliation.timezone'))->toDateString(),
             'channel' => $manual ? 'manual' : ($first->provider_key ? 'provider' : 'other'),
             'financial_status' => $bundle?->status ?: ($first->manualSubmission?->activated_on_submit && $first->manualSubmission?->review_decision !== 'rejected' && $first->deal?->status === 'active' && ! in_array($first->status, ['failed', 'reversed']) ? 'proof_active' : $first->status),
-            'is_current_cash' => $payments->every(fn ($p) => (float) $p->amount > 0 && ! $p->isSandboxTest() && ! $p->isClassifiedTest() && ! in_array($p->resolution_code, ['reversed', 'invalid_reference']) && $p->source !== 'wallet' && in_array($p->purpose, [null, 'subscription'], true) && ! $p->deal?->is_free_trial && (in_array($p->status, Payment::SUCCESSFUL_STATUSES) || ($p->manualSubmission?->activated_on_submit && $p->manualSubmission?->review_decision !== 'rejected' && $p->deal?->status === 'active' && ! in_array($p->status, ['failed', 'reversed'])))),
+            'is_current_cash' => $payments->every(fn ($p) => (float) $p->amount > 0 && ! $p->isSandboxTest() && ! $p->isClassifiedTest() && ! in_array($p->resolution_code, ['reversed', 'invalid_reference', Payment::RESOLUTION_RECEIPT_DUPLICATE]) && $p->source !== 'wallet' && in_array($p->purpose, [null, 'subscription'], true) && ! $p->deal?->is_free_trial && (in_array($p->status, Payment::SUCCESSFUL_STATUSES) || ($p->manualSubmission?->activated_on_submit && $p->manualSubmission?->review_decision !== 'rejected' && $p->deal?->status === 'active' && ! in_array($p->status, ['failed', 'reversed'])))),
             'recorder_ids' => $recorders, 'recorders' => User::whereIn('id', $recorders)->get(['id', 'name'])->toArray(),
             'review_id' => $review?->id, 'review_version' => $review?->version ?? 0, 'source_digest' => $digest,
             'financial_digest' => $financialDigest, 'review_status' => $status, 'stale' => (bool) $stale, 'flag_reason' => $review?->flag_reason,

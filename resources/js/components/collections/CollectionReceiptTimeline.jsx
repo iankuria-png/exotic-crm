@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import api from '../../services/api';
 
 const actions = {
+    existing_subscription_linked: 'Existing subscription linked to received payment',
     payer_relationship_reviewed: 'Payer relationship reviewed', purchase_authority_reviewed: 'Exact purchase approved',
     purchase_choice_saved: 'Purchase choice saved', receipt_sale_prepared: 'Activation prepared', receipt_sale_confirmed: 'Site confirmed activation',
     correction_reserved: 'Correction started', correction_verified: 'Correction confirmed', correction_held: 'Correction needs checking',

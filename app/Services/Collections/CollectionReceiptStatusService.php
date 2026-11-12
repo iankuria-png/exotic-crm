@@ -19,15 +19,16 @@ class CollectionReceiptStatusService
             $q->selectRaw('1')->from('collection_account_platforms as bound')
                 ->whereColumn('bound.account_id', 'collection_receipts.account_id')
                 ->whereColumn('bound.platform_id', $alias.'.platform_id');
-        })->where(function ($q) use ($alias, $table) {
-            foreach ($table === 'payments' ? ['reference_root', 'transaction_reference', 'reference_number'] : ['reference_root'] as $column) {
-                $q->orWhereColumn($alias.'.'.$column, 'collection_receipts.reference_norm')
-                    ->orWhereExists(fn ($a) => $a->selectRaw('1')->from('collection_receipt_aliases as alias_ref')
-                        ->whereColumn('alias_ref.receipt_id', 'collection_receipts.id')
-                        ->whereColumn('alias_ref.account_id', 'collection_receipts.account_id')
-                        ->whereColumn('alias_ref.reference', $alias.'.'.$column));
-            }
-        });
+        })->when($table === 'payments', fn ($q) => $q->where(fn ($q) => $q->whereNull($alias.'.resolution_code')->orWhere($alias.'.resolution_code', '!=', Payment::RESOLUTION_RECEIPT_DUPLICATE)))
+            ->where(function ($q) use ($alias, $table) {
+                foreach ($table === 'payments' ? ['reference_root', 'transaction_reference', 'reference_number'] : ['reference_root'] as $column) {
+                    $q->orWhereColumn($alias.'.'.$column, 'collection_receipts.reference_norm')
+                        ->orWhereExists(fn ($a) => $a->selectRaw('1')->from('collection_receipt_aliases as alias_ref')
+                            ->whereColumn('alias_ref.receipt_id', 'collection_receipts.id')
+                            ->whereColumn('alias_ref.account_id', 'collection_receipts.account_id')
+                            ->whereColumn('alias_ref.reference', $alias.'.'.$column));
+                }
+            });
     }
 
     public function withUsage(Builder $query): Builder
@@ -92,7 +93,7 @@ class CollectionReceiptStatusService
         $allAliases = DB::table('collection_receipt_aliases')->whereIn('receipt_id', $ids)->get();
         $refs = $receipts->pluck('reference_norm')->merge($allAliases->pluck('reference'))->unique();
         $mapping = DB::table('collection_account_platforms')->whereIn('account_id', $receipts->pluck('account_id'))->get();
-        $payments = Payment::with(['client', 'deal'])->whereIn('platform_id', $mapping->pluck('platform_id'))
+        $payments = Payment::with(['client', 'deal'])->withoutReceiptDuplicates()->whereIn('platform_id', $mapping->pluck('platform_id'))
             ->where(fn ($q) => $q->whereIn('reference_root', $refs)->orWhereIn('transaction_reference', $refs)->orWhereIn('reference_number', $refs))
             ->orderBy('id')->limit(626)->get();
         $bundles = DB::table('manual_payment_bundles')->whereIn('platform_id', $mapping->pluck('platform_id'))->whereIn('reference_root', $refs)->limit(626)->get();

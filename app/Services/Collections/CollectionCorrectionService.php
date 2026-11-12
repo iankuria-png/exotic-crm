@@ -153,6 +153,9 @@ class CollectionCorrectionService
 
     public function execute(CollectionCorrection $correction, User $actor, int $version, string $requestKey): CollectionCorrection
     {
+        if ($correction->action === 'link_existing') {
+            throw new CollectionException('use_saved_subscription_link');
+        }
         $allocation = CollectionAllocation::findOrFail($correction->allocation_id);
         $this->authorize($allocation, $actor);
         if ($correction->target_intent_id) {
@@ -222,6 +225,9 @@ class CollectionCorrectionService
 
     public function resume(CollectionCorrection $correction, User $actor): CollectionCorrection
     {
+        if ($correction->action === 'link_existing') {
+            throw new CollectionException('use_saved_subscription_link');
+        }
         $a = CollectionAllocation::findOrFail($correction->allocation_id);
         $this->authorize($a, $actor);
         if (in_array($correction->state, ['verified', 'verified_release_pending'], true)) {

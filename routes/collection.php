@@ -31,6 +31,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('receipts/{receipt}/reversal-review', [CollectionPaymentController::class, 'reviewReversal'])->whereNumber('receipt');
         Route::post('receipts/{receipt}/correction-preview', [CollectionPaymentController::class, 'correctionPreview'])->whereNumber('receipt');
         Route::post('corrections/{correction}/execute', [CollectionPaymentController::class, 'executeCorrection']);
+        Route::post('receipts/{receipt}/subscription-link-preview', [\App\Http\Controllers\CRM\CollectionSubscriptionLinkController::class, 'preview'])->whereNumber('receipt');
+        Route::post('subscription-links/{link}/execute', [\App\Http\Controllers\CRM\CollectionSubscriptionLinkController::class, 'execute'])->whereUuid('link');
         Route::get('arrivals', [CollectionPaymentController::class, 'arrivals']);
         Route::get('device-health', [CollectionPaymentController::class, 'deviceHealth']);
         Route::get('accounts/{account}/package-rule-evidence', [CollectionPaymentController::class, 'packageRuleEvidence']);

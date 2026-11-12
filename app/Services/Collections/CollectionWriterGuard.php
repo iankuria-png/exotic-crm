@@ -62,6 +62,7 @@ class CollectionWriterGuard
     /** Serialize captured-reference cash inserts with receipt claims, including legacy entry points. */
     public function paymentWrite(Payment $payment, Closure $callback): mixed
     {
+        $this->assertLinkedPayment($payment, false);
         if ($this->saleItem || ($payment->exists && ! $payment->isDirty(['platform_id', 'amount', 'currency', 'client_id', 'deal_id', 'transaction_reference', 'reference_number', 'reference_root'])) || ! Schema::hasTable('collection_sales_sessions')
             || ! in_array($payment->purpose, [null, Payment::PURPOSE_SUBSCRIPTION], true)) {
             return $callback();
@@ -127,6 +128,7 @@ class CollectionWriterGuard
 
     public function assertPayment(Payment $payment): void
     {
+        $this->assertLinkedPayment($payment);
         if (! in_array($payment->purpose, [null, Payment::PURPOSE_SUBSCRIPTION], true)) {
             return;
         }
@@ -180,6 +182,18 @@ class CollectionWriterGuard
                     throw new CollectionException('receipt_principal_already_reserved');
                 }
             }
+        }
+    }
+
+    private function assertLinkedPayment(Payment $payment, bool $force = true): void
+    {
+        $data = $payment->exists ? $payment->getOriginal('payment_data') : [];
+        $allocation = data_get($data, 'duplicate_receipt_link.allocation_id') ?: data_get($data, 'receipt_link.allocation_id');
+        if ($allocation && $allocation !== $this->owner && ($force || $payment->isDirty([
+            'amount', 'currency', 'client_id', 'deal_id', 'product_id', 'status', 'purpose', 'transaction_reference',
+            'reference_number', 'reference_root', 'provider_environment', 'payment_data', 'resolution_code', 'resolution_meta_json',
+        ]))) {
+            throw new CollectionException('linked_receipt_payment_is_managed');
         }
     }
 

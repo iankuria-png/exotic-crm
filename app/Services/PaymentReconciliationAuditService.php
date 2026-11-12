@@ -576,6 +576,7 @@ class PaymentReconciliationAuditService
     {
         $map = [];
         Payment::query()
+            ->withoutReceiptDuplicates()
             ->with(['client:id,name', 'confirmedBy:id,name,email'])
             ->whereIn('platform_id', $platformIds)
             ->whereNotNull('transaction_reference')

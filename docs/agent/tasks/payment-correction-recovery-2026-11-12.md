@@ -48,3 +48,7 @@ php artisan queue:restart
 No migrations, seeders or WordPress upload are needed. Use the normal serving-PHP/FPM refresh mechanism if cached code remains; a CLI cache probe does not prove web runtime refresh. Do not replay yesterday's failed maintenance/deployment adapter.
 
 After deployment, reopen `/payments?workspace=collections&receipt=326`. The drawer should show the saved removal and Sabrina's related record. “Check saved correction” resumes the original undo. Success must confirm both original services removed and leave funds awaiting reconciliation, while Sabrina's existing expiry/service remains unchanged. The two positive payment records need a separate reviewed reconciliation; the code release does not silently merge them. Independently verify native WordPress, current drawer state and actual served assets before marking this incident resolved.
+
+## Live acceptance · 12 November 11:14 EAT
+
+Ian deployed d5653a16 and CS completed the saved original undo at11:03EAT. Independent Fleet Ops f8e6/fa2e native reads confirm receipt326/allocation unassigned, accepted correction verified, both compensation operations succeeded, restored original inactive/expired didah and private Tanzania state, and Sabrina’s manual subscription unchanged. No Codex apply occurred. The remaining code-to-subscription link is now implemented in [the follow-up task](link-existing-subscription-2026-11-12.md); its deployment and CS confirmation are separate acceptance steps.

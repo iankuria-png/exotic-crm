@@ -109,7 +109,7 @@ class CollectionDecisionService
     {
         $platformIds = DB::table('collection_account_platforms')->where('account_id', $receipt->account_id)->pluck('platform_id')->all();
         $references = array_unique(array_merge([$receipt->reference_norm], DB::table('collection_receipt_aliases')->where('account_id', $receipt->account_id)->where('receipt_id', $receipt->id)->pluck('reference')->all()));
-        $payments = Payment::with(['manualSubmission', 'deal'])->whereIn('platform_id', $platformIds)->where('amount', '>', 0)
+        $payments = Payment::with(['manualSubmission', 'deal'])->withoutReceiptDuplicates()->whereIn('platform_id', $platformIds)->where('amount', '>', 0)
             ->where(function ($q) use ($references) {
                 foreach ($references as $ref) {
                     $q->orWhere('transaction_reference', 'like', '%'.$ref.'%')->orWhere('reference_number', 'like', '%'.$ref.'%')->orWhere('reference_root', 'like', '%'.$ref.'%');

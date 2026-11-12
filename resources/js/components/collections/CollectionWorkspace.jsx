@@ -1,6 +1,7 @@
 import CollectionSubsidiaryProgress, { subsidiaryProgressLabel } from './CollectionSubsidiaryProgress';
 import CollectionActivationCorrection, { CorrectionProgress } from './CollectionActivationCorrection';
 import CollectionStandingAgreement from './CollectionStandingAgreement';
+import CollectionSubscriptionLink from './CollectionSubscriptionLink';
 import CollectionReceiptTimeline from './CollectionReceiptTimeline';
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -16,6 +17,8 @@ import { ActivatedBy, ActivationSpeedSummary, Icon, StatusPill, TimeToActivate, 
 
 const states = { reversed: 'Reversed by M-PESA', purchase_saved: 'Choice saved · Review activation', sales_draft: 'Allocations saved · Review activation', sales_prepared: 'Waiting to activate', sales_activating: 'Activating subscriptions', sales_partial: 'Partly active', sales_confirmed: 'Active · Confirmed', sales_needs_review: 'Sale needs checking', collecting: 'Waiting for payment details', historical: 'Historical · no activation', ready_auto: 'Ready for automatic activation', dispatching: 'Activation processing', active_review_pending: 'Active · Review needed', reviewed: 'Reviewed', needs_review: 'Needs a sales decision', uncertain: 'Checking site confirmation', correcting: 'Correction in progress', unassigned: 'Money received · Unassigned', dependent_pending: 'Active · Tanzania exposure pending' };
 const reasons = {
+    link_existing: 'Link existing subscription',
+    existing_subscription_linked: 'Existing subscription linked to received payment',
     multiple_exact_package_matches: 'More than one configured package matches this amount. Choose the purchased package.',
     no_exact_catalogue_package_match: 'No current configured package exactly matches this payment. Review the agreed price and service.',
     approved_default_package_unavailable: 'The approved automatic package is no longer available at this price. Staff must review the payment.',
@@ -186,6 +189,7 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
     const row = detail.data;
     const pendingCorrection = row?.corrections?.find(c => c.request_key && !['verified', 'confirmed'].includes(c.state));
     const relatedHold = Boolean(row?.related_payments && (!row.related_payments.complete || row.related_payments.matches?.length));
+    const showSubscriptionLink = Boolean(row?.receipt_link || (row?.allocation?.state === 'unassigned' && relatedHold));
     const openCorrection = correction => { setNotice(''); setPreview(correction || null); setMode(correction?.action === 'undo_effect' ? 'undo_effect' : 'reassign'); };
     async function checkSavedCorrection(correction) {
         try {
@@ -220,7 +224,7 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
     };
     return <dialog ref={dialog} onKeyDown={trapTab} onCancel={onClose} onClose={onClose} onClick={event => { if (event.target === event.currentTarget) onClose(); }} aria-labelledby="collection-receipt-title" className="m-0 ml-auto h-dvh max-h-dvh w-full max-w-3xl border-0 bg-slate-50 p-0 text-slate-900 shadow-2xl backdrop:bg-slate-900/40">
         <div className="flex h-full flex-col" onClick={e => e.stopPropagation()}><header className="border-b border-slate-200 bg-white px-5 py-4"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">Incoming payment{row ? ` · ${row.account_label}` : ''}</p><h2 id="collection-receipt-title" className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{row ? money(row) : 'Receipt details'}</h2></div><button type="button" className={button} onClick={onClose} autoFocus><Icon name="close" />Close</button></div>
-            {row && <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2"><StatusPill tone={headTone.tone} pulse={headTone.pulse}>{row.usage?.state === 'already_recorded' ? 'Existing payment found' : headTone.label}</StatusPill>{row.activation && <TimeToActivate row={row} className="!mt-0" />}<WalletAfter balance={row.wallet_balance} />{row.activation ? <ActivatedBy activation={row.activation} compact /> : row.allocation?.decision_source === 'automatic' && <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-800"><Icon name="bolt" className="h-3.5 w-3.5" />Auto-activated</span>}<span className="text-xs tabular-nums text-slate-500">{row.provider_at ? `Paid ${receiptTime(row.provider_at)}` : `Phone arrival ${receiptTime(row.received_at)}`} · {relative(row.provider_at || row.received_at)}</span><span className="select-all rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">{row.reference}</span></div>}</header>
+            {row && <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2"><StatusPill tone={headTone.tone} pulse={headTone.pulse}>{row.receipt_link ? 'Payment linked' : row.usage?.state === 'already_recorded' ? 'Existing payment found' : headTone.label}</StatusPill>{row.activation && <TimeToActivate row={row} className="!mt-0" />}<WalletAfter balance={row.wallet_balance} />{row.activation ? <ActivatedBy activation={row.activation} compact /> : row.allocation?.decision_source === 'automatic' && row.allocation.state !== 'unassigned' && <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-800"><Icon name="bolt" className="h-3.5 w-3.5" />Auto-activated</span>}<span className="text-xs tabular-nums text-slate-500">{row.provider_at ? `Paid ${receiptTime(row.provider_at)}` : `Phone arrival ${receiptTime(row.received_at)}`} · {relative(row.provider_at || row.received_at)}</span><span className="select-all rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">{row.reference}</span></div>}</header>
         <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
             {detail.isPending && <p role="status" className="text-sm text-slate-500">Loading receipt evidence…</p>}
             {(detail.isError || error) && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error || 'Receipt could not be refreshed.'} <button className="underline" type="button" onClick={() => detail.refetch()}>Refresh receipt</button></p>}
@@ -228,7 +232,7 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
                 {!row.allocation && <CollectionMatchEvidence key={`match-${row.id}`} row={row} />}
                 {!row.allocation && <CollectionReceiptEvidence usage={row.usage} related={row.related_payments} />}
                 {!row.allocation && !row.historical_only && <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><CollectionPurchaseReview key={row.id} row={row} footerTarget={footerTarget} onSaved={refresh} /></div>}
-                {row.allocation && <section aria-label="Activation" className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><h3 className="text-sm font-semibold text-slate-900">{pendingCorrection ? 'Payment correction' : row.allocation.state === 'unassigned' ? (relatedHold ? 'Activation removed' : 'Payment ready to assign') : 'Activation'}</h3>
+                {row.allocation && !showSubscriptionLink && <section aria-label="Activation" className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><h3 className="text-sm font-semibold text-slate-900">{pendingCorrection ? 'Payment correction' : row.allocation.state === 'unassigned' ? (relatedHold ? 'Activation removed' : 'Payment ready to assign') : 'Activation'}</h3>
                 {notice && <p role="status" className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950">{notice}</p>}
                 {pendingCorrection && !mode && <><CorrectionProgress receipt={row} correction={pendingCorrection} /><button type="button" className={`${button} !border-teal-700 !bg-teal-700 !text-white`} disabled={action.isPending} onClick={() => checkSavedCorrection(pendingCorrection)}>{action.isPending ? 'Checking saved correction…' : 'Check saved correction'}</button></>}
                 {row.allocation.state === 'unassigned' && !mode && !relatedHold && <p className="text-sm leading-6 text-slate-600">The previous activation has been removed. Assign this payment to the correct profile.</p>}
@@ -246,8 +250,9 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
                     onUpdated={async () => { await detail.refetch(); refresh(); }} onCancel={() => { setMode(null); setPreview(null); }} />}
 
                 </section>}
-                {row.allocation && <CollectionReceiptEvidence usage={row.usage} related={row.related_payments} />}
-                {row.subsidiary_obligation && !pendingCorrection && <CollectionSubsidiaryProgress row={row} onChanged={refresh} />}
+                {showSubscriptionLink && <CollectionSubscriptionLink key={row.id} receipt={row} onUpdated={async () => { await detail.refetch(); refresh(); }} />}
+                {row.allocation && !showSubscriptionLink && <CollectionReceiptEvidence usage={row.usage} related={row.related_payments} />}
+                {row.subsidiary_obligation && !row.receipt_link && !pendingCorrection && <CollectionSubsidiaryProgress row={row} onChanged={refresh} />}
                 <section aria-label="Details and history" className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white px-4">
                 <details className="group py-1"><summary className={accordion}>Payer, receiving message &amp; payment details<Icon name="chevron" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" /></summary><div className="space-y-4 pb-4 pt-1"><CollectionPayerSummary payer={row.payer} /><CollectionMessageCopy key={`messages-${row.id}`} receiptId={row.id} /><dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-xs text-slate-500">Payment code</dt><dd className="mt-0.5 select-all font-mono font-medium">{row.reference}</dd></div><div><dt className="text-xs text-slate-500">Paid at</dt><dd className="mt-0.5">{receiptTime(row.provider_at)}</dd></div><div><dt className="text-xs text-slate-500">First received on phone</dt><dd className="mt-0.5">{receiptTime(row.received_at)}</dd></div></dl><p className="text-xs text-slate-500">{row.evidence_level === 'statement' ? 'Funds verified on a statement.' : 'Funds observed on the receiving phone; statement verification is separate.'}</p></div></details>
                 {row.allocation && <details className="py-1"><summary className={accordion}>Matching evidence<Icon name="chevron" className="h-4 w-4 text-slate-400" /></summary><div className="pb-4"><CollectionMatchEvidence row={row} /></div></details>}
