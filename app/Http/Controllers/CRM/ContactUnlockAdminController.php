@@ -10,6 +10,7 @@ use App\Models\VisitorContactUnlock;
 use App\Services\ContactUnlockAnalyticsService;
 use App\Services\ContactUnlockDateWindowService;
 use App\Services\ContactUnlockDemandDetailService;
+use App\Services\ContactUnlockDemandService;
 use App\Services\ContactUnlockPricingService;
 use App\Services\ContactUnlockPulseService;
 use App\Services\ContactUnlockQueryService;
@@ -30,6 +31,7 @@ class ContactUnlockAdminController extends Controller
         private readonly ContactUnlockPulseService $pulseService,
         private readonly ContactUnlockAnalyticsService $analyticsService,
         private readonly ContactUnlockDemandDetailService $demandDetailService,
+        private readonly ContactUnlockDemandService $demandService,
         private readonly ContactUnlockQueryService $unlockQueryService,
         private readonly ContactUnlockDateWindowService $dateWindowService,
         private readonly MarketAuthorizationService $marketAuthorization,
@@ -237,6 +239,7 @@ class ContactUnlockAdminController extends Controller
     {
         $validated = $request->validate([
             'platform_id' => 'nullable|integer|exists:platforms,id',
+            'country' => 'nullable|string|max:80',
             'range' => ['nullable', Rule::in(['today', '7d', '30d', 'custom'])],
             'timezone' => 'nullable|string|max:80',
             'reporting_currency' => 'nullable|string|min:3|max:8',
@@ -248,6 +251,7 @@ class ContactUnlockAdminController extends Controller
         $platformIds = ! empty($validated['platform_id'])
             ? [(int) $validated['platform_id']]
             : $this->marketAuthorization->resolveAccessiblePlatformIds($request->user());
+        $platformIds = $this->demandService->countryScope($platformIds, $validated['country'] ?? null);
 
         return response()->json($this->pulseService->summary(
             $platformIds,
@@ -267,6 +271,7 @@ class ContactUnlockAdminController extends Controller
     {
         $validated = $request->validate([
             'platform_id' => 'nullable|integer|exists:platforms,id',
+            'country' => 'nullable|string|max:80',
             'range' => ['nullable', Rule::in(['today', '7d', '30d', 'custom'])],
             'timezone' => 'nullable|string|max:80',
             'reporting_currency' => 'nullable|string|min:3|max:8',
@@ -279,6 +284,7 @@ class ContactUnlockAdminController extends Controller
         $platformIds = ! empty($validated['platform_id'])
             ? [(int) $validated['platform_id']]
             : $this->marketAuthorization->resolveAccessiblePlatformIds($request->user());
+        $platformIds = $this->demandService->countryScope($platformIds, $validated['country'] ?? null);
 
         return response()->json($this->analyticsService->analytics(
             $platformIds,
@@ -300,6 +306,7 @@ class ContactUnlockAdminController extends Controller
         $validated = $request->validate([
             'metric' => ['required', Rule::in(ContactUnlockDemandDetailService::METRICS)],
             'platform_id' => 'nullable|integer|exists:platforms,id',
+            'country' => 'nullable|string|max:80',
             'range' => ['nullable', Rule::in(['today', '7d', '30d', 'custom'])],
             'timezone' => 'nullable|string|max:80',
             'reporting_currency' => 'nullable|string|min:3|max:8',
@@ -311,6 +318,7 @@ class ContactUnlockAdminController extends Controller
         $platformIds = ! empty($validated['platform_id'])
             ? [(int) $validated['platform_id']]
             : $this->marketAuthorization->resolveAccessiblePlatformIds($request->user());
+        $platformIds = $this->demandService->countryScope($platformIds, $validated['country'] ?? null);
 
         return response()->json($this->demandDetailService->detail(
             (string) $validated['metric'],

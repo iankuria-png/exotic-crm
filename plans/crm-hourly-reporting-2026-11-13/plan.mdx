@@ -1,0 +1,51 @@
+---
+title: Exact-time CRM MCP collections reporting
+objective: Return precisely bounded collections by hour, country, website, category and currency through existing authorised MCP tools.
+status: coordinator review
+owner: Ian Kuria
+date: 2026-11-13
+scope: MCP read-only revenue summary, trend and approved aggregate payment view
+non_goals:
+  - no payment or subscription mutation
+  - no frontend or production changes
+---
+
+## Outcome and existing failure
+
+The request from 12 November 20:00 EAT through 13 November 05:09 EAT must query 12 November17:00UTC through13November02:09UTC, excluding the upper endpoint. The current dashboard adapter defaults to30days without window=custom, truncates explicit bounds to whole days and rejects hourly grouping for arbitrary windows. Its subscription collections exclude contact-unlock and other service purposes, so that figure cannot represent consolidated collections.
+
+## Approach
+
+Reuse Payment::reportableSuccessful for live/business status, sandbox/test, manual-review, reversal and bundle visibility rules. Add an MCP-specific bounded reporting service rather than changing the established dashboard HTTP contract. Preserve default summary metrics and append an explicit collections section; explicit bounds return exact subscription and visitor metrics plus the same collections section. Customer-mix or active-snapshot metrics not calculated for exact windows are labelled unavailable. New service totals carry native amounts, cached USD equivalents, FX gaps, retained-record and provider-assurance caveats. New-cash collections exclude wallet-funded purchases; a separately labelled earned-service total includes wallet redemptions, while top-ups are excluded from both. Every country/platform/category group carries both totals. The occurrence clock is completed_at, falling back to confirmed_at and finally created_at with explicit fallback counts; no provider-settlement claim is inferred. Renewal uses immutable payment.subscription_lifecycle, and missing lifecycle stays subscription with a classification caveat. Receipt matching uses provider, environment, currency, receiving-account provenance where present and platform fallback when absent, across retained eligible records before applying the report window; ambiguous counts/native amounts are exposed. Committed split-bundle allocations remain additive. Rollback drops only the new view and reverts owned source/config; existing SQL enablement/grants are preserved. New view allowlisting must be reconciled with stored hatch overrides and the SELECT-only account grant after deployment.
+
+<Callout tone="decision" body="Timestamp bounds are [from,to), normalised to UTC; date-only bounds mean complete Africa/Nairobi calendar days, with date-only to advanced to the following midnight. Explicit bounds select custom reporting even when window is omitted. Invalid, reversed or partial bounds are refused instead of falling back to30days." />
+
+<DataModel name="Collections" fields={[
+ {"name":"window","type":"object","note":"UTC from/to, EAT display, timezone and exclusive end"},
+ {"name":"total","type":"object","note":"native source_breakdown, USD total or null, count and FX provenance"},
+ {"name":"categories","type":"array","note":"subscription, renewal, contact_unlock, other paid services"},
+ {"name":"countries","type":"array","note":"country totals and each authorised platform including zero observations"},
+ {"name":"coverage","type":"object","note":"query timestamp, retained-record limitations, uncertain receipts, fallback dates"}
+]} />
+
+<Steps items={[
+ {"title":"Resolve precise authorised reporting scope","reuses":"MarketAuthorizationService and existing MCP capabilities","adds":"strict timestamp/date-only window parser, bounds and country/platform scope validation","files":"app/Services/Mcp/RevenueReportingWindow.php; app/Services/Mcp/RevenueReportingService.php","verify":"offset equivalence, midnight/date-only handling, invalid intervals and unauthorised sites"},
+ {"title":"Compute consolidated collections and hourly buckets","reuses":"Payment::reportableSuccessful and ReportingCurrencyService cached rates","adds":"shared eligible query, receipt ambiguity/deduplication, service/funding classification, aggregate country/site/category totals and timestamp-labelled hourly buckets","files":"app/Services/Mcp/RevenueReportingService.php; app/Services/Mcp/RevenueReportingQuery.php","verify":"boundary fixtures, two-site Uganda, category/funding partitions, tests/refunds/reversals/duplicates/bundles and missing FX"},
+ {"title":"Expose through existing MCP transports and SQL gate","reuses":"McpServer legacy/enhanced dispatch, ToolRegistry schemas, SqlSafetyValidator and existing explicit SQL tool/grants","adds":"exact-report routing, complete argument/output contracts and one aggregate-only second-grain view with matching eligibility","files":"app/Services/Mcp/McpServer.php; app/Services/Mcp/ToolRegistry.php; config/mcp.php; database/migrations/2026_11_13_180000_create_mcp_payment_collections_view.php","verify":"all supported adapters return same window/totals; unsafe SQL/raw tables remain refused; aggregate view agrees with tool"},
+ {"title":"Validate and hand off local release","reuses":"PHP8.2/PHPUnit and existing MCP regressions","adds":"isolated synthetic endpoint/query acceptance, source manifest and deployment guidance","files":"tests/Feature/Mcp/McpHourlyRevenueReportingTest.php; docs/agent/tasks/crm-hourly-reporting-2026-11-13.md","verify":"Julian Uganda and overnight requests resolve exact synthetic amounts; syntax/format/regressions; no production mutation"}
+]} />
+
+<Endpoint method="POST" path="/api/mcp" auth="Existing active staff OAuth/token grant, named-tool capability and role; country/platform scope intersected with server-side market permission. SQL retains admin role, explicit enabled hatch and SELECT-only read connection." request={{"name":"exotic_revenue_summary","arguments":{"from":"2026-11-12T20:00:00+03:00","to":"2026-11-13T05:09:00+03:00"}}} response="Existing summary shape with explicit all-service collections, country/platform/category/funding totals, native currencies, USD availability and coverage" errors="422 invalid interval or timezone;403 inaccessible market; unavailable SQL view is explicit until migration/grant readiness" />
+
+<Risks items={[
+ {"risk":"Retained duplicate references do not prove which receipt is valid","impact":"high","mitigation":"Exclude ambiguous economic identities, retain counts/caveats, preserve committed bundle splits and never infer provider settlement"},
+ {"risk":"Absent cached FX produces a misleading consolidated amount","impact":"high","mitigation":"Use existing cached historical policy, return null/partial USD with original currencies instead of1:1 fallback"},
+ {"risk":"Shared MCP edits collide with Visitor Demand work","impact":"medium","mitigation":"Coordinator reserves MCP registry/server/config here; Visitor Demand changes submitted for serial integration"},
+ {"risk":"SQLite full migration chain fails on unrelated MySQL-only UPDATE JOIN","impact":"medium","mitigation":"Use isolated schema fixture for focused query/endpoint tests, and report broader baseline failure honestly"}
+]} />
+
+## Verification and release
+
+Run focused synthetic PHPUnit cases with a disposable database and verify the SQL view exposes only timestamp/platform/country/category/currency/aggregate money/count fields. Exercise legacy and enhanced MCP calls, including rejection paths. Run PHP syntax and Pint on owned files; compare unrelated dirty/staged paths. The revenueDashboard app must use the same exact summary/trend/market data when bounds are supplied; output schemas and money normalisation explicitly retain the new nested fields. No commit, push or deployment is authorised in this workstream. Exact actual production amounts and Julian-account acceptance remain live release checks.
+
+<Questions items={[]} />

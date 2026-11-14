@@ -1,0 +1,21 @@
+{
+  "app/Http/Controllers/CRM/ContactUnlockAdminController.php": "d749b3f45432d57b87477b39f43ba63b7bea86c90e876447aa7f448f320ebbc1",
+  "app/Services/ContactUnlockDemandService.php": "9f449e53ba8bd3bd20687ccb2c4564e02ca998a7de7180291a5688bb406f5381",
+  "app/Services/ContactUnlockPulseService.php": "2fc41affb3e4997a4a481077208a92d7335b40898f693439ca5fb98a0f245885",
+  "app/Services/Mcp/McpAnalyticsService.php": "0a700e5fe34895b72a86959b57c024e24676f41461b5b5e0fa721d2509abc1f1",
+  "app/Services/Mcp/McpRequestAdapter.php": "1f79552606ae54effea06f6af787d172430c0794fcca4aef0086fb99fb8bc464",
+  "app/Services/Mcp/McpServer.php": "69337c08b891c1b7f1d9d4e0039f84ba00a416ea6af4e0f823640b8b7719e3a3",
+  "app/Services/Mcp/RevenueReportingQuery.php": "751fb0dde0a4f60a879456aa489bbbb8d2f1beaa9d426513bbb7ff2bd5b7312a",
+  "app/Services/Mcp/RevenueReportingService.php": "a8cd858dd1f43bb3502e12e47d45ba7f81455cda0c799cd0e70d162bf29cc416",
+  "app/Services/Mcp/RevenueReportingWindow.php": "00e7dc0bf3e928648fd53f5ed396d36bfe82124c38c1d809887df1769f26a871",
+  "app/Services/Mcp/ToolRegistry.php": "b978ed10a1d3786d9e67eeb115b2c21149c5ca5c19fe45181fd45ec29763eefb",
+  "config/mcp.php": "ba7bf0b448354b1877cfa141c8ec8526c4bf40aa4f385ab77c34dead04e9adfc",
+  "database/migrations/2026_11_13_180000_create_mcp_payment_collections_view.php": "c52a3dcf5a91c3870ffc3b1009b1d89f108b15c591e70fd55d1e7025b5b980ed",
+  "resources/js/components/visitors/VisitorAttemptDemand.jsx": "2591ca71f091bddc8a912a7b8d2db754656c7fabc1bc5770c3d1c835aff093a3",
+  "resources/js/components/visitors/VisitorDemandPanel.jsx": "29baf417281a8a025e2f397d7d7c82be080bd85f0c7dd55e01eb8e806c4e6ff7",
+  "resources/js/pages/WebVisitors.jsx": "61f5863506c94c38e663eed49f9110d9062ecacaf4b002d600e8c956e93c6046",
+  "resources/mcp/apps/revenue-dashboard-v1.html": "294cda359e370b5c62557ff428c7bebd7f0004cd3c699339d7541e7d20a4bddc",
+  "tests/Feature/ContactUnlockCountryDemandTest.php": "5cd38c7db55f1482fa79ae33e46a136b79e0c1a1f81dd78adbcb26f4f8376307",
+  "tests/Feature/Mcp/McpHourlyRevenueReportingTest.php": "0ebcadbcfd15d8607c9c34202e05b735e0d4e44c8ccf763b4d2a63eb1f7e50af",
+  "tests/scripts/mcp-revenue-app-contract.cjs": "370ce9a2343df8bd7a74bdfdf03ed0d2ebfc5262c36a68a6f601c5fe596613bc"
+}

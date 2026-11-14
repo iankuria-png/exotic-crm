@@ -76,7 +76,7 @@ return [
     ],
     'sql_hatch' => [
         'enabled' => false,
-        'views' => ['vw_mcp_lifecycle_rollup', 'vw_mcp_revenue_rollup'],
+        'views' => ['vw_mcp_lifecycle_rollup', 'vw_mcp_revenue_rollup', 'vw_mcp_payment_collections'],
         'default_row_limit' => 50,
         'max_row_limit' => 500,
         'timeout_seconds' => 10,

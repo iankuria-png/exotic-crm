@@ -10,6 +10,7 @@ use App\Services\CeoDashboardDataService;
 use App\Services\ChurnAggregatorService;
 use App\Services\CityPerformanceService;
 use App\Services\ContactUnlockAnalyticsService;
+use App\Services\ContactUnlockDemandService;
 use App\Services\ContactUnlockPulseService;
 use App\Services\MarketAuthorizationService;
 use App\Services\TeamActivityService;
@@ -81,10 +82,14 @@ class McpAnalyticsService
     public function visitorDemand(array $arguments, McpAuthorizationContext $auth): array
     {
         $scope = $this->scope($auth, $this->platform($arguments, $auth));
+        $scope = app(ContactUnlockDemandService::class)->countryScope($scope, $arguments['country'] ?? null);
         $range = (string) ($arguments['range'] ?? '7d');
         $currency = $arguments['reporting_currency'] ?? null;
 
-        $overview = $this->visitorPulse->summary($scope, $range, null, $currency);
+        $timezone = $arguments['timezone'] ?? null;
+        $from = $arguments['from'] ?? null;
+        $to = $arguments['to'] ?? null;
+        $overview = $this->visitorPulse->summary($scope, $range, $timezone, $currency, $from, $to);
         $overview['top_profiles'] = collect($overview['top_profiles'] ?? [])
             ->map(function (array $row): array {
                 $clientId = (int) ($row['client_id'] ?? 0);
@@ -103,9 +108,18 @@ class McpAnalyticsService
             ->all();
 
         return [
-            'definition' => 'Contact-unlock demand only; it is not subscription revenue.',
+            'definition' => 'Recorded attempts to open contact unlock, including checkout-disabled sites; sessions are not unique people. Profile cities describe requested profiles, not visitor origins.',
+            '_report_meta' => [
+                'result_state' => data_get($overview, 'demand.totals.coverage', 'unavailable') === 'unavailable' ? 'unavailable' : 'partial',
+                'coverage' => [['source' => 'contact_unlock_events', 'state' => data_get($overview, 'demand.totals.coverage', 'unavailable')]],
+                'caveats' => [
+                    'Recorded events are a lower bound; missing tracking is not zero demand.',
+                    'Session counts are distinct per website, not unique people across websites.',
+                    'Requested cities use the current profile cache and may differ from the profile city at the time of the attempt.',
+                ],
+            ],
             'overview' => $overview,
-            'analytics' => $this->visitorAnalytics->analytics($scope, $range, null, $currency, null, null, (string) ($arguments['bucket'] ?? 'auto')),
+            'analytics' => $this->visitorAnalytics->analytics($scope, $range, $timezone, $currency, $from, $to, (string) ($arguments['bucket'] ?? 'auto')),
         ];
     }
 

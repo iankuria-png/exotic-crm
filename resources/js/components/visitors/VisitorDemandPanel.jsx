@@ -4,6 +4,7 @@ import { BarList, InsightEmptyState } from '../shared/InsightStates';
 import MetricCard from '../MetricCard';
 import { formatCurrency } from '../../utils/currency';
 import { compactNumber, copyText, percentLabel } from './visitorFormat';
+import VisitorAttemptDemand from './VisitorAttemptDemand';
 
 function DemandList({ title, subtitle, rows, toast }) {
     const mapped = (rows || []).map((row) => ({
@@ -23,7 +24,7 @@ function DemandList({ title, subtitle, rows, toast }) {
             ) : null}
         >
             {mapped.length ? <BarList rows={mapped} colorClass="bg-teal-600" /> : (
-                <InsightEmptyState title="No demand yet" message="This market has no visitor unlock demand in the selected range." />
+                <InsightEmptyState title="No events recorded" message="No matching events are recorded in this range. Missing collection does not establish zero demand." />
             )}
         </SectionFrame>
     );
@@ -84,7 +85,7 @@ function TopProfilesList({ rows, currency, toast }) {
                     ))}
                 </div>
             ) : (
-                <InsightEmptyState title="No demand yet" message="This market has no visitor unlock demand in the selected range." />
+                <InsightEmptyState title="No events recorded" message="No matching events are recorded in this range. Missing collection does not establish zero demand." />
             )}
         </SectionFrame>
     );
@@ -102,8 +103,9 @@ export default function VisitorDemandPanel({ pulse = {}, reportingCurrency, isLo
 
     return (
         <div className="space-y-4">
+            <VisitorAttemptDemand demand={pulse.demand} isLoading={isLoading} toast={toast} />
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <MetricCard label="Unlock conversion" value={percentLabel(kpis.unlock_conversion_percent)} isLoading={isLoading} />
+                <MetricCard label="Payments / ready drawers" value={percentLabel(kpis.unlock_conversion_percent)} hint="Ready drawers only; not all profile views or attempts" isLoading={isLoading} />
                 <MetricCard
                     label="Pending payments"
                     value={compactNumber(kpis.pending_payments)}
@@ -134,7 +136,7 @@ export default function VisitorDemandPanel({ pulse = {}, reportingCurrency, isLo
                 />
             </div>
             <div className="grid gap-4 xl:grid-cols-4">
-                <DemandList title="Top cities" subtitle="Unlock interest by profile city." rows={pulse.top_cities || []} toast={toast} />
+                <DemandList title="Profile activity cities" subtitle="All recorded event types by profile city; not visitor origins." rows={pulse.top_cities || []} toast={toast} />
                 <TopProfilesList rows={pulse.top_profiles || []} currency={currency} toast={toast} />
                 <DemandList title="Traffic sources" subtitle="Where checkouts started." rows={pulse.top_sources || []} toast={toast} />
                 <DemandList title="Top hours" subtitle="Local hour of checkout start." rows={pulse.top_hours || []} toast={toast} />

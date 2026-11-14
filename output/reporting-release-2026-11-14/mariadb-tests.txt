@@ -1,0 +1,10 @@
+PHPUnit 10.5.63 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.2.30
+Configuration: /Users/ian/.cache/exotic-crm-reporting-ship-2026-11-14/release/phpunit.xml
+
+.......................                                           23 / 23 (100%)
+
+Time: 00:03.431, Memory: 54.50 MB
+
+OK (23 tests, 150 assertions)

@@ -82,6 +82,7 @@ export default function WebVisitors() {
     const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const [insightPlatformId, setInsightPlatformId] = useState(sharedPlatformId);
     const [trendBucket, setTrendBucket] = useState('auto');
+    const [demandCountry, setDemandCountry] = useState('');
     const [activeMetric, setActiveMetric] = useState(null);
     const [demandMetric, setDemandMetric] = useState(null);
     const requestedTab = searchParams.get('tab') || 'overview';
@@ -136,12 +137,13 @@ export default function WebVisitors() {
 
     const pulseParams = useMemo(() => buildParams({
         platform_id: insightPlatformId,
+        country: activeTab === 'demand' ? demandCountry : '',
         range: fromDate && toDate ? 'custom' : 'today',
         from: fromDate,
         to: toDate,
         timezone: browserTimezone,
         reporting_currency: reportingCurrency.targetCurrency,
-    }), [browserTimezone, fromDate, insightPlatformId, reportingCurrency.targetCurrency, toDate]);
+    }), [activeTab, browserTimezone, demandCountry, fromDate, insightPlatformId, reportingCurrency.targetCurrency, toDate]);
 
     const pulseQuery = useQuery({
         queryKey: ['contact-unlock-pulse', pulseParams],
@@ -253,6 +255,17 @@ export default function WebVisitors() {
             })),
         ],
     }], [markets]);
+
+    const demandMarketGroups = useMemo(() => [{
+        label: 'Websites',
+        options: [
+            { value: 'all', label: demandCountry ? `All ${demandCountry} websites` : 'All websites' },
+            ...markets.filter((market) => !demandCountry || String(market.country || '').trim().toLowerCase() === demandCountry.trim().toLowerCase()).map((market) => ({
+                value: String(market.id), label: market.name,
+                secondaryLabel: market.country || '',
+            })),
+        ],
+    }], [demandCountry, markets]);
 
     const retry = () => {
         unlockQuery.refetch();
@@ -383,21 +396,36 @@ export default function WebVisitors() {
 
                             {activeTab === 'demand' ? (
                                 <div className="space-y-4">
+                                    <label className="flex max-w-sm flex-col gap-1 text-sm text-slate-600">
+                                        Country
+                                        <select className="crm-input" value={demandCountry} onChange={(event) => { setDemandCountry(event.target.value); setInsightPlatformId('all'); }}>
+                                            <option value="">All authorised countries</option>
+                                            {[...new Set(markets.map((market) => market.country).filter(Boolean))].sort().map((country) => <option key={country} value={country}>{country}</option>)}
+                                        </select>
+                                    </label>
                                     <Combobox
-                                        label="Demand market"
+                                        label="Demand website"
                                         value={insightPlatformId}
                                         onChange={(value) => setInsightPlatformId(value || 'all')}
-                                        groups={marketGroups}
+                                        groups={demandMarketGroups}
                                         className="max-w-sm"
                                         allowClear={false}
                                     />
-                                    <VisitorDemandPanel
-                                        pulse={pulseQuery.data || {}}
-                                        reportingCurrency={reportingCurrency}
-                                        isLoading={pulseQuery.isLoading}
-                                        onOpenMetric={setDemandMetric}
-                                        toast={toast}
-                                    />
+                                    {pulseQuery.isError ? (
+                                        <div className="rounded-lg border border-rose-200 bg-rose-50 p-4" role="alert">
+                                            <p className="font-semibold text-rose-900">Demand unavailable</p>
+                                            <p className="mt-1 text-sm text-rose-700">Recorded demand could not be loaded. These results must not be treated as zero interest.</p>
+                                            <button type="button" className="crm-btn-secondary mt-3" onClick={() => pulseQuery.refetch()}>Retry</button>
+                                        </div>
+                                    ) : (
+                                        <VisitorDemandPanel
+                                            pulse={pulseQuery.data || {}}
+                                            reportingCurrency={reportingCurrency}
+                                            isLoading={pulseQuery.isLoading}
+                                            onOpenMetric={setDemandMetric}
+                                            toast={toast}
+                                        />
+                                    )}
                                 </div>
                             ) : null}
 

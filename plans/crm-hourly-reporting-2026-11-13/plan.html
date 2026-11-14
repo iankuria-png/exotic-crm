@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Exact-time CRM MCP collections reporting — plan</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+--bg:#0a0a0b;--bg2:#101013;--card:#131317;--card2:#17171c;--line:#26262e;
+--line2:#33333d;--ink:#ededf2;--mut:#9a9aa8;--mut2:#6e6e7d;--acc:#7c5cff;
+--acc2:#a48bff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--info:#58a6ff;
+--r:10px;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+--wf-paper:#0d0d10;--wf-card:#17171c;--wf-ink:#ededf2;--wf-muted:#8b8b99;
+--wf-line:#2c2c36;--wf-accent:#7c5cff;--wf-accent-soft:#241d47;
+--wf-warn:#d29922;--wf-ok:#3fb950;--wf-radius:8px;
+}
+@media(prefers-color-scheme:light){:root{
+--bg:#fbfbfd;--bg2:#fff;--card:#fff;--card2:#f7f7fa;--line:#e3e3ea;
+--line2:#d0d0da;--ink:#16161c;--mut:#5c5c6b;--mut2:#8a8a99;--acc:#6247d6;
+--acc2:#7c5cff;--wf-paper:#fff;--wf-card:#f7f7fa;--wf-ink:#16161c;
+--wf-muted:#5c5c6b;--wf-line:#e3e3ea;--wf-accent:#6247d6;--wf-accent-soft:#efecff;
+}}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:minmax(0,1fr);max-width:1180px;margin:0 auto;padding:0 28px 120px}
+@media(min-width:1080px){.shell{grid-template-columns:232px minmax(0,1fr);gap:56px;padding-left:32px}}
+nav.toc{display:none}
+@media(min-width:1080px){nav.toc{display:block;position:sticky;top:0;align-self:start;
+max-height:100vh;overflow:auto;padding:96px 0 40px;font-size:13px}}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:5px 10px;
+border-left:2px solid transparent;border-radius:0 4px 4px 0}
+nav.toc a:hover{color:var(--ink);background:var(--card);border-left-color:var(--acc)}
+nav.toc a.l3{padding-left:22px;font-size:12.5px;color:var(--mut2)}
+header.hero{padding:72px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+color:var(--acc2);margin-bottom:18px}
+h1{font-size:clamp(30px,4.2vw,44px);line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;font-weight:660}
+.obj{font-size:18px;color:var(--mut);max-width:70ch;margin:0 0 26px;line-height:1.6}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 12px/1 var(--sans);color:var(--mut);background:var(--card);
+border:1px solid var(--line);border-radius:999px;padding:7px 13px}
+.chip b{color:var(--ink);font-weight:600}
+main h2{font-size:24px;letter-spacing:-.02em;margin:56px 0 14px;padding-top:10px;font-weight:640}
+main h3{font-size:17px;margin:34px 0 10px;font-weight:620;letter-spacing:-.01em}
+main h4{font-size:15px;margin:0 0 8px;font-weight:620}
+main p{margin:0 0 14px;max-width:76ch}
+main ul,main ol{margin:0 0 16px;padding-left:22px;max-width:76ch}
+main li{margin:5px 0}
+a{color:var(--acc2)}
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+blockquote{margin:0 0 16px;padding:2px 0 2px 18px;border-left:3px solid var(--line2);color:var(--mut)}
+code{font-family:var(--mono);font-size:.875em;background:var(--card2);
+border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre.code{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);
+padding:14px 16px;overflow-x:auto;margin:0 0 16px}
+pre.code code{background:none;border:0;padding:0;font-size:12.75px;line-height:1.6}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{text-align:left;font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+.blk{margin:30px 0;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.bh{font:600 11.5px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+color:var(--mut);padding:14px 18px;border-bottom:1px solid var(--line);background:var(--card2)}
+.bh code{background:none;border:0;padding:0;text-transform:none;letter-spacing:0;
+font-size:12.5px;color:var(--ink)}
+.bb{padding:18px}
+.bb>.tw,.bb>*:last-child{margin-bottom:0}
+.cap{color:var(--mut2);font-size:13px;margin:10px 0 0!important}
+.tag{font:500 10.5px/1 var(--mono);color:var(--mut2);border:1px solid var(--line);
+border-radius:4px;padding:3px 6px;text-transform:uppercase;letter-spacing:.07em}
+.pill{display:inline-block;font:600 10.5px/1 var(--mono);border-radius:999px;
+padding:4px 9px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.p-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.p-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.p-bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.p-mut{color:var(--mut);background:var(--card2)}
+.callout{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
+margin:22px 0;padding:15px 17px;border:1px solid var(--line);border-left-width:3px;
+border-radius:var(--r);background:var(--card)}
+.callout .ct{font:600 10.5px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.callout .cb>*:last-child{margin-bottom:0}
+.t-note{border-left-color:var(--info)} .t-note .ct{color:var(--info)}
+.t-decision{border-left-color:var(--acc)} .t-decision .ct{color:var(--acc2)}
+.t-risk{border-left-color:var(--bad)} .t-risk .ct{color:var(--bad)}
+.t-warn{border-left-color:var(--warn)} .t-warn .ct{color:var(--warn)}
+.t-ok{border-left-color:var(--ok)} .t-ok .ct{color:var(--ok)}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+li.step{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 0;
+border-bottom:1px solid var(--line)}
+li.step:first-child{padding-top:0} li.step:last-child{border-bottom:0;padding-bottom:0}
+.sn{width:28px;height:28px;border-radius:8px;background:var(--wf-accent-soft);
+color:var(--acc2);font:600 12.5px/28px var(--mono);text-align:center}
+.sc h4{margin:3px 0 8px}
+.sm{display:grid;grid-template-columns:64px 1fr;gap:10px;font-size:13px;margin-top:5px}
+.sm .k{font:600 10.5px/1.7 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut2)}
+.sm .v{color:var(--mut)}
+.ty{font:500 12px/1 var(--mono);color:var(--acc2)}
+.rels{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.rel{font:500 11.5px/1 var(--mono);color:var(--mut);background:var(--card2);
+border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+.ep-h{display:flex;align-items:center;gap:11px;margin-bottom:12px;flex-wrap:wrap}
+.verb{font:700 11px/1 var(--mono);letter-spacing:.08em;padding:6px 9px;border-radius:6px;color:#0a0a0b}
+.v-GET{background:var(--info)} .v-POST{background:var(--ok)}
+.v-PUT,.v-PATCH{background:var(--warn)} .v-DELETE{background:var(--bad)}
+.v-HEAD,.v-OPTIONS{background:var(--mut)}
+.path{font-size:13.5px;background:none;border:0;padding:0}
+.sub{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin:14px 0 7px}
+table.ac{font-family:var(--mono);font-size:12.5px}
+table.ac td{padding:2px 10px;border:0;vertical-align:top}
+.ln{color:var(--mut2);text-align:right;user-select:none;width:1%;padding-right:14px!important}
+.cd code{background:none;border:0;padding:0;white-space:pre}
+.cl.hl{background:var(--wf-accent-soft)}
+.cl.hl .ln{color:var(--acc2)}
+.nt{font-family:var(--sans);color:var(--mut);font-size:12.5px;width:34%}
+.an b{color:var(--ink)}
+.diff{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line);
+border-radius:var(--r);overflow:hidden;font-family:var(--mono);font-size:12.5px}
+@media(min-width:760px){.diff{grid-template-columns:1fr 1fr}}
+.dcol{background:var(--bg2);padding-bottom:10px}
+.dh{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:11px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.dl{padding:1px 14px;white-space:pre-wrap;word-break:break-word}
+.d-del{background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.d-add{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.dg{padding:6px 2px;overflow-x:auto}
+.dg svg{max-width:100%;height:auto}
+.wfw{display:flex;justify-content:center}
+.wf{background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:12px;
+overflow:hidden;width:100%}
+.wf.s-desktop{max-width:100%} .wf.s-tablet{max-width:720px}
+.wf.s-mobile{max-width:378px} .wf.s-panel{max-width:440px}
+.wfbar{display:flex;gap:6px;padding:10px 13px;border-bottom:1px solid var(--wf-line);
+background:var(--wf-card)}
+.wfbar i{width:9px;height:9px;border-radius:50%;background:var(--wf-line)}
+.wfb{padding:16px;color:var(--wf-ink);font-size:13.5px}
+.cmp{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.cmp{grid-template-columns:1fr 1fr}}
+.ccol{border:1px solid var(--line);border-radius:var(--r);padding:15px;background:var(--bg2)}
+.ch{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin-bottom:11px}
+.ccol>*:last-child{margin-bottom:0}
+ol.qs{list-style:none;margin:0;padding:0}
+li.q{padding:16px 0;border-bottom:1px solid var(--line)}
+li.q:first-child{padding-top:0} li.q:last-child{border-bottom:0;padding-bottom:0}
+.qh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.qn{font:700 11px/1 var(--mono);color:var(--acc2)}
+.qt{font-weight:600;flex:1;min-width:200px}
+ul.opts{list-style:none;margin:11px 0 0;padding:0}
+ul.opts li{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;
+padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin:0 0 7px;background:var(--bg2)}
+.box{width:14px;height:14px;border:1.5px solid var(--line2);border-radius:3px;margin-top:4px}
+.box.m{border-radius:3px} .ol{font-size:14px}
+.od{display:block;color:var(--mut);font-size:13px;margin-top:2px}
+.freeform{border:1px dashed var(--line2);border-radius:8px;padding:15px;
+color:var(--mut2);font-size:13px;margin-top:11px}
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+color:var(--mut2);font-size:12.5px}
+@media print{
+ nav.toc{display:none}.shell{grid-template-columns:1fr;max-width:none;padding:0}
+ .blk,.callout,.tw{break-inside:avoid}body{background:#fff;color:#000}
+}
+</style>
+</head><body>
+<div class="shell">
+<nav class="toc"><a class="l2" href="#outcome-and-existing-failure">Outcome and existing failure</a><a class="l2" href="#approach">Approach</a><a class="l2" href="#verification-and-release">Verification and release</a><a class="l2" href="#open-questions">Open questions</a></nav>
+<div>
+<header class="hero">
+<div class="eyebrow">Implementation plan</div>
+<h1>Exact-time CRM MCP collections reporting</h1>
+<p class="obj">Return precisely bounded collections by hour, country, website, category and currency through existing authorised MCP tools.</p>
+<div class="meta"><span class="chip">Status <b>coordinator review</b></span><span class="chip">Owner <b>Ian Kuria</b></span><span class="chip">Date <b>2026-11-13</b></span><span class="chip">Scope <b>MCP read-only revenue summary, trend and approved aggregate payment view</b></span><span class="chip">Non-goals <b>no payment or subscription mutation; no frontend or production changes</b></span></div>
+</header>
+<main><h2 id="outcome-and-existing-failure">Outcome and existing failure</h2>
+<p>The request from 12 November 20:00 EAT through 13 November 05:09 EAT must query 12 November17:00UTC through13November02:09UTC, excluding the upper endpoint. The current dashboard adapter defaults to30days without window=custom, truncates explicit bounds to whole days and rejects hourly grouping for arbitrary windows. Its subscription collections exclude contact-unlock and other service purposes, so that figure cannot represent consolidated collections.</p>
+<h2 id="approach">Approach</h2>
+<p>Reuse Payment::reportableSuccessful for live/business status, sandbox/test, manual-review, reversal and bundle visibility rules. Add an MCP-specific bounded reporting service rather than changing the established dashboard HTTP contract. Preserve default summary metrics and append an explicit collections section; explicit bounds return exact subscription and visitor metrics plus the same collections section. Customer-mix or active-snapshot metrics not calculated for exact windows are labelled unavailable. New service totals carry native amounts, cached USD equivalents, FX gaps, retained-record and provider-assurance caveats. New-cash collections exclude wallet-funded purchases; a separately labelled earned-service total includes wallet redemptions, while top-ups are excluded from both. Every country/platform/category group carries both totals. The occurrence clock is completed_at, falling back to confirmed_at and finally created_at with explicit fallback counts; no provider-settlement claim is inferred. Renewal uses immutable payment.subscription_lifecycle, and missing lifecycle stays subscription with a classification caveat. Receipt matching uses provider, environment, currency, receiving-account provenance where present and platform fallback when absent, across retained eligible records before applying the report window; ambiguous counts/native amounts are exposed. Committed split-bundle allocations remain additive. Rollback drops only the new view and reverts owned source/config; existing SQL enablement/grants are preserved. New view allowlisting must be reconciled with stored hatch overrides and the SELECT-only account grant after deployment.</p>
+<aside class="callout t-decision"><div class="ct">DECISION</div><div class="cb"><p>Timestamp bounds are [from,to), normalised to UTC; date-only bounds mean complete Africa/Nairobi calendar days, with date-only to advanced to the following midnight. Explicit bounds select custom reporting even when window is omitted. Invalid, reversed or partial bounds are refused instead of falling back to30days.</p></div></aside>
+<section class="blk"><header class="bh">Data model · Collections</header><div class="bb"><div class="tw"><table><thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead><tbody><tr><td><code>window</code></td><td><span class="ty">object</span></td><td>UTC from/to, EAT display, timezone and exclusive end</td></tr><tr><td><code>total</code></td><td><span class="ty">object</span></td><td>native source_breakdown, USD total or null, count and FX provenance</td></tr><tr><td><code>categories</code></td><td><span class="ty">array</span></td><td>subscription, renewal, contact_unlock, other paid services</td></tr><tr><td><code>countries</code></td><td><span class="ty">array</span></td><td>country totals and each authorised platform including zero observations</td></tr><tr><td><code>coverage</code></td><td><span class="ty">object</span></td><td>query timestamp, retained-record limitations, uncertain receipts, fallback dates</td></tr></tbody></table></div></div></section>
+<section class="blk"><header class="bh">Implementation steps</header><div class="bb"><ol class="steps"><li class="step"><div class="sn">1</div><div class="sc"><h4>Resolve precise authorised reporting scope</h4><div class="sm"><span class="k">Reuses</span><span class="v">MarketAuthorizationService and existing MCP capabilities</span></div><div class="sm"><span class="k">Adds</span><span class="v">strict timestamp/date-only window parser, bounds and country/platform scope validation</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Mcp/RevenueReportingWindow.php; app/Services/Mcp/RevenueReportingService.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">offset equivalence, midnight/date-only handling, invalid intervals and unauthorised sites</span></div></div></li><li class="step"><div class="sn">2</div><div class="sc"><h4>Compute consolidated collections and hourly buckets</h4><div class="sm"><span class="k">Reuses</span><span class="v">Payment::reportableSuccessful and ReportingCurrencyService cached rates</span></div><div class="sm"><span class="k">Adds</span><span class="v">shared eligible query, receipt ambiguity/deduplication, service/funding classification, aggregate country/site/category totals and timestamp-labelled hourly buckets</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Mcp/RevenueReportingService.php; app/Services/Mcp/RevenueReportingQuery.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">boundary fixtures, two-site Uganda, category/funding partitions, tests/refunds/reversals/duplicates/bundles and missing FX</span></div></div></li><li class="step"><div class="sn">3</div><div class="sc"><h4>Expose through existing MCP transports and SQL gate</h4><div class="sm"><span class="k">Reuses</span><span class="v">McpServer legacy/enhanced dispatch, ToolRegistry schemas, SqlSafetyValidator and existing explicit SQL tool/grants</span></div><div class="sm"><span class="k">Adds</span><span class="v">exact-report routing, complete argument/output contracts and one aggregate-only second-grain view with matching eligibility</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Mcp/McpServer.php; app/Services/Mcp/ToolRegistry.php; config/mcp.php; database/migrations/2026_11_13_180000_create_mcp_payment_collections_view.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">all supported adapters return same window/totals; unsafe SQL/raw tables remain refused; aggregate view agrees with tool</span></div></div></li><li class="step"><div class="sn">4</div><div class="sc"><h4>Validate and hand off local release</h4><div class="sm"><span class="k">Reuses</span><span class="v">PHP8.2/PHPUnit and existing MCP regressions</span></div><div class="sm"><span class="k">Adds</span><span class="v">isolated synthetic endpoint/query acceptance, source manifest and deployment guidance</span></div><div class="sm"><span class="k">Files</span><span class="v">tests/Feature/Mcp/McpHourlyRevenueReportingTest.php; docs/agent/tasks/crm-hourly-reporting-2026-11-13.md</span></div><div class="sm"><span class="k">Verify</span><span class="v">Julian Uganda and overnight requests resolve exact synthetic amounts; syntax/format/regressions; no production mutation</span></div></div></li></ol></div></section>
+<section class="blk"><header class="bh">Endpoint</header><div class="bb"><div class="ep"><div class="ep-h"><span class="verb v-POST">POST</span><code class="path">/api/mcp</code></div><div class="sm"><span class="k">Auth</span><span class="v">Existing active staff OAuth/token grant, named-tool capability and role; country/platform scope intersected with server-side market permission. SQL retains admin role, explicit enabled hatch and SELECT-only read connection.</span></div><div class="sub">Request</div><pre class="code"><code>{
+  &quot;name&quot;: &quot;exotic_revenue_summary&quot;,
+  &quot;arguments&quot;: {
+    &quot;from&quot;: &quot;2026-11-12T20:00:00+03:00&quot;,
+    &quot;to&quot;: &quot;2026-11-13T05:09:00+03:00&quot;
+  }
+}</code></pre><div class="sm"><span class="k">Response</span><span class="v">Existing summary shape with explicit all-service collections, country/platform/category/funding totals, native currencies, USD availability and coverage</span></div><div class="sm"><span class="k">Errors</span><span class="v">422 invalid interval or timezone;403 inaccessible market; unavailable SQL view is explicit until migration/grant readiness</span></div></div></div></section>
+<section class="blk"><header class="bh">Risks</header><div class="bb"><div class="tw"><table><thead><tr><th>Risk</th><th>Impact</th><th>Likelihood</th><th>Mitigation</th></tr></thead><tbody><tr><td>Retained duplicate references do not prove which receipt is valid</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Exclude ambiguous economic identities, retain counts/caveats, preserve committed bundle splits and never infer provider settlement</td></tr><tr><td>Absent cached FX produces a misleading consolidated amount</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Use existing cached historical policy, return null/partial USD with original currencies instead of1:1 fallback</td></tr><tr><td>Shared MCP edits collide with Visitor Demand work</td><td><span class="pill p-warn">medium</span></td><td>—</td><td>Coordinator reserves MCP registry/server/config here; Visitor Demand changes submitted for serial integration</td></tr><tr><td>SQLite full migration chain fails on unrelated MySQL-only UPDATE JOIN</td><td><span class="pill p-warn">medium</span></td><td>—</td><td>Use isolated schema fixture for focused query/endpoint tests, and report broader baseline failure honestly</td></tr></tbody></table></div></div></section>
+<h2 id="verification-and-release">Verification and release</h2>
+<p>Run focused synthetic PHPUnit cases with a disposable database and verify the SQL view exposes only timestamp/platform/country/category/currency/aggregate money/count fields. Exercise legacy and enhanced MCP calls, including rejection paths. Run PHP syntax and Pint on owned files; compare unrelated dirty/staged paths. The revenueDashboard app must use the same exact summary/trend/market data when bounds are supplied; output schemas and money normalisation explicitly retain the new nested fields. No commit, push or deployment is authorised in this workstream. Exact actual production amounts and Julian-account acceptance remain live release checks.</p>
+<section class="blk" id="open-questions"><header class="bh">Open questions</header><div class="bb"><ol class="qs"></ol></div></section></main>
+<footer>Rendered from <code>plan.mdx</code> · review surface only — no code was written to produce this.</footer>
+</div></div></body></html>

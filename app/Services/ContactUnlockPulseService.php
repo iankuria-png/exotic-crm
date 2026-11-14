@@ -11,12 +11,14 @@ use Illuminate\Support\Facades\DB;
 class ContactUnlockPulseService
 {
     public function __construct(
-        private readonly ReportingCurrencyService $reportingCurrencyService
+        private readonly ReportingCurrencyService $reportingCurrencyService,
+        private readonly ContactUnlockDemandService $demandService
     ) {}
 
-    public function summary(int|array|null $platformIds = null, string $range = 'today', ?string $timezone = null, ?string $targetCurrency = null, ?string $fromDate = null, ?string $toDate = null): array
+    public function summary(int|array|null $platformIds = null, string $range = 'today', ?string $timezone = null, ?string $targetCurrency = null, ?string $fromDate = null, ?string $toDate = null, ?string $country = null): array
     {
         [$from, $to] = $this->window($range, $timezone, $fromDate, $toDate);
+        $platformIds = $this->demandService->countryScope($platformIds, $country);
         $resolvedTargetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
 
         $eventBase = ContactUnlockEvent::query()
@@ -73,6 +75,7 @@ class ContactUnlockPulseService
                 'upgrade_rate_percent' => $this->upgradeRatePercent($platformIds, $from, $to),
                 'renewed_after_paid_demand' => $this->renewedAfterDemand($platformIds, $from, $to),
             ],
+            'demand' => $this->demandService->summary($platformIds, $from, $to),
             'top_cities' => $this->topCities($platformIds, $from, $to),
             'top_profiles' => $this->topProfiles($platformIds, $from, $to, $resolvedTargetCurrency),
             'top_sources' => $this->topSources($platformIds, $from, $to),

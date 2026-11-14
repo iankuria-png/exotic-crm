@@ -215,16 +215,19 @@ class McpServer
             'exotic_client_operations' => app(McpAnalyticsService::class)->clientOperations($arguments, $auth),
             default => $this->legacyData($name, $arguments, $auth->user, $auth->abilities),
         };
+        $reportMeta = $this->reportMetadata($data);
+        unset($data['_report_meta']);
         $safe = $this->sanitizer->sanitize($this->projector->project($this->normalizer->forTool($name, $this->stripUnsafeDashboardKeys($this->presentToolData($name, $data, $auth->user)))));
-        $rowCount = $this->rowCount(is_array($safe) ? $safe : []);
+        $rowCount = (int) ($reportMeta['row_count'] ?? $this->rowCount(is_array($safe) ? $safe : []));
         $envelope = ToolResult::envelope(is_array($safe) ? $safe : ['value' => $safe], [], [
             'filters' => $this->resultFilters($arguments),
             'row_count' => $rowCount,
             'result_state' => $this->resultState($rowCount, is_array($safe) ? $safe : []),
+            ...$this->sanitizer->sanitize($this->projector->project($reportMeta)),
         ]);
         $text = $this->serializer->encode($envelope);
 
-        return ['content' => [['type' => 'text', 'text' => $text]], 'structuredContent' => $envelope, 'isError' => false, '_meta' => ['exotic/resultType' => 'complete', 'exotic/rowCount' => $rowCount, 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]];
+        return ['content' => [['type' => 'text', 'text' => $text]], 'structuredContent' => $envelope, 'isError' => false, '_meta' => ['exotic/resultType' => $envelope['meta']['result_state'], 'exotic/rowCount' => $rowCount, 'exotic/cacheScope' => 'private', 'exotic/ttlMs' => 30000]];
     }
 
     private function callTool(Request $request, array $params, User $user, ?array $abilities): array
@@ -241,8 +244,8 @@ class McpServer
         $data = match ($name) {
             'exotic_catalog' => $this->catalog($user, $abilities),
             'exotic_revenue_summary' => $this->dashboardSummary($arguments, $user),
-            'exotic_revenue_trend' => $this->dashboard->revenueTrend($this->adapter->build($arguments, $user)),
-            'exotic_market_breakdown' => $this->dashboard->marketPie($this->adapter->build($arguments, $user)),
+            'exotic_revenue_trend' => $this->revenueTrend($arguments, $user),
+            'exotic_market_breakdown' => $this->marketBreakdown($arguments, $user),
             'exotic_render_revenue_dashboard' => $this->revenueDashboard($arguments, $user),
             'exotic_agent_performance' => $this->dashboard->agentPerformance($this->adapter->build($arguments, $user)),
             'exotic_peak_hours' => $this->dashboard->peakHours($this->adapter->build($arguments, $user)),
@@ -269,14 +272,17 @@ class McpServer
             default => throw McpProtocolException::rpc(-32601, 'Tool not found.', 'tool_not_found', 404),
         };
 
+        $reportMeta = $this->reportMetadata($data);
+        unset($data['_report_meta']);
         $safe = $this->sanitizer->sanitize($this->projector->project($this->normalizer->forTool($name, $this->stripUnsafeDashboardKeys($this->presentToolData($name, $data, $user)))));
 
         return [
             'content' => [['type' => 'text', 'text' => $this->serializer->encode($safe)]],
             'isError' => false,
             '_meta' => [
-                'exotic/resultType' => 'complete',
-                'exotic/rowCount' => is_array($safe) && isset($safe['rows']) && is_array($safe['rows']) ? count($safe['rows']) : 0,
+                'exotic/resultType' => $reportMeta['result_state'] ?? 'complete',
+                'exotic/rowCount' => (int) ($reportMeta['row_count'] ?? (is_array($safe) && isset($safe['rows']) && is_array($safe['rows']) ? count($safe['rows']) : 0)),
+                ...$this->sanitizer->sanitize($this->projector->project($reportMeta)),
             ],
         ];
     }
@@ -314,8 +320,8 @@ class McpServer
         return match ($name) {
             'exotic_catalog' => $this->catalog($user, null),
             'exotic_revenue_summary' => $this->dashboardSummary($arguments, $user),
-            'exotic_revenue_trend' => $this->dashboard->revenueTrend($this->adapter->build($arguments, $user)),
-            'exotic_market_breakdown' => $this->dashboard->marketPie($this->adapter->build($arguments, $user)),
+            'exotic_revenue_trend' => $this->revenueTrend($arguments, $user),
+            'exotic_market_breakdown' => $this->marketBreakdown($arguments, $user),
             'exotic_render_revenue_dashboard' => $this->revenueDashboard($arguments, $user),
             'exotic_agent_performance' => $this->dashboard->agentPerformance($this->adapter->build($arguments, $user)),
             'exotic_peak_hours' => $this->dashboard->peakHours($this->adapter->build($arguments, $user)),
@@ -495,13 +501,46 @@ class McpServer
 
     private function dashboardSummary(array $arguments, User $user): array
     {
+        if ($this->preciseRevenue($arguments)) {
+            return app(RevenueReportingService::class)->summary($arguments, $user);
+        }
+
         return $this->dashboard->summary($this->adapter->build($arguments, $user));
+    }
+
+    private function preciseRevenue(array $arguments): bool
+    {
+        return RevenueReportingWindow::explicit($arguments) || ($arguments['window'] ?? '') === 'custom' || isset($arguments['country']) || isset($arguments['timezone']) || ($arguments['bucket'] ?? '') === 'hour';
+    }
+
+    private function revenueTrend(array $arguments, User $user): array
+    {
+        return $this->preciseRevenue($arguments)
+            ? app(RevenueReportingService::class)->trend($arguments, $user)
+            : $this->dashboard->revenueTrend($this->adapter->build($arguments, $user));
+    }
+
+    private function marketBreakdown(array $arguments, User $user): array
+    {
+        return $this->preciseRevenue($arguments)
+            ? app(RevenueReportingService::class)->marketBreakdown($arguments, $user)
+            : $this->dashboard->marketPie($this->adapter->build($arguments, $user));
+    }
+
+    private function reportMetadata(array $data): array
+    {
+        return array_intersect_key((array) ($data['_report_meta'] ?? []), array_flip(['result_state', 'coverage', 'caveats', 'row_count', 'filters', 'citations']));
     }
 
     private function revenueDashboard(array $arguments, User $user): array
     {
         $trendArguments = $arguments;
         $trendArguments['bucket'] = (string) ($trendArguments['bucket'] ?? 'day');
+        $summary = $this->dashboardSummary($arguments, $user);
+        $trend = $this->revenueTrend($trendArguments, $user);
+        $markets = $this->marketBreakdown($arguments, $user);
+        $meta = $this->reportMetadata($summary);
+        unset($summary['_report_meta'], $trend['_report_meta'], $markets['_report_meta']);
 
         return [
             'widget' => [
@@ -509,18 +548,10 @@ class McpServer
                 'title' => 'Revenue dashboard',
                 'description' => 'Read-only revenue summary, trend and market mix for the requested CRM window.',
             ],
-            'summary' => $this->normalizer->forTool(
-                'exotic_revenue_summary',
-                $this->stripUnsafeDashboardKeys($this->presentToolData('exotic_revenue_summary', $this->dashboardSummary($arguments, $user), $user))
-            ),
-            'trend' => $this->normalizer->forTool(
-                'exotic_revenue_trend',
-                $this->stripUnsafeDashboardKeys($this->dashboard->revenueTrend($this->adapter->build($trendArguments, $user)))
-            ),
-            'market_breakdown' => $this->normalizer->forTool(
-                'exotic_market_breakdown',
-                $this->stripUnsafeDashboardKeys($this->dashboard->marketPie($this->adapter->build($arguments, $user)))
-            ),
+            'summary' => $this->normalizer->forTool('exotic_revenue_summary', $this->stripUnsafeDashboardKeys($summary)),
+            'trend' => $this->normalizer->forTool('exotic_revenue_trend', $this->stripUnsafeDashboardKeys($trend)),
+            'market_breakdown' => $this->normalizer->forTool('exotic_market_breakdown', $this->stripUnsafeDashboardKeys($markets)),
+            '_report_meta' => $meta,
         ];
     }
 

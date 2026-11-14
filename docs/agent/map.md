@@ -23,3 +23,7 @@ is unavailable, report that concrete limitation; do not substitute private model
 the contract. April documentation indexes and the archived July handover are historical.
 
 Reusable checkpoint lessons: `docs/agent/lessons.md`. Compare current commits before treating old plans as outstanding.
+
+- Exact hourly collections: [task](tasks/crm-hourly-reporting-2026-11-13.md).
+- Country/site demand and requested profile cities: [task](tasks/visitor-demand-country-2026-11-13.md).
+- Reporting release and cPanel checklist: [task](tasks/reporting-release-2026-11-14.md).

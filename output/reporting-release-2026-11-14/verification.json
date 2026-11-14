@@ -1,0 +1,20 @@
+{
+  "checked_at_utc": "2026-11-14T17:11:46.823806+00:00",
+  "release_base": "2bdd6d5b",
+  "sqlite": "23 tests / 150 assertions PASS",
+  "mariadb": {
+    "version": "10.6.28-MariaDB-ubu2204",
+    "result": "23 tests / 150 assertions PASS",
+    "image_digest": "sha256:c7d726a1c0d29e486a1ab4ef0c76c75431a11428e76c50e99ba32106cea04114",
+    "harness": "Same tests with only their connection setup replaced by unique disposable MariaDB databases; no application source/test fixture semantics changed."
+  },
+  "embedded_dashboard": "13 assertions PASS",
+  "frontend": "npm run build PASS from scoped release source, not full dirty checkout",
+  "build_manifest_sha256": "0900186f5461e740558b64ba90c96d04644ca2b99d1b5bab472c91d80474e327",
+  "production_deployment": false,
+  "pending": [
+    "Target-volume query timing",
+    "Historical payment reconciliation through Julian connector",
+    "Ghana and both Tanzania sites signed event arrival and requested profile cities"
+  ]
+}
