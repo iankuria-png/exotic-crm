@@ -3,7 +3,7 @@
 Started 13 November; local checkpoint 14 November 2026 (Africa/Nairobi).
 Owner: Ian Kuria. Executor: `/root/crm_hourly_reporting`; coordinator completed integration review, evidence and handoff after the executor's usage limit ended its turn.
 
-Status: source and matching assets prepared for the authorised 14 November commit/push; not deployed. Baseline `052b4aff83382c9cef37eed89281c73a8a8116dd`, existing main checkout. Unrelated working-tree and staged changes preserved.
+Status: source and matching assets **PUSHED to origin/main as `33a77116`** on 14 November 2026; not deployed. Baseline `052b4aff83382c9cef37eed89281c73a8a8116dd`, existing main checkout. Unrelated working-tree and staged changes preserved.
 
 ## Result
 
@@ -32,11 +32,11 @@ Fixtures cover Julian's Uganda 31 October 15:00 EAT through end of 6 November an
 
 ## Remaining release work
 
-Local MySQL socket was unavailable. **Actual target MariaDB view compilation, execution plan/runtime and historical payment reconciliation are unverified.** Validate those before release; the correlated retained-history collision check needs real-volume measurement. Then package only intended changes from the dirty checkout, apply the new view migration and explicitly approved existing SQL read grants if required, refresh deployed PHP, and verify both historical intervals through Julian's connector. Rollback removes the new view and restores the scoped source/app files. No migration or grant was applied here.
+Disposable MariaDB 10.6.28 view compilation, rollback and all 23 tests / 150 assertions pass. **Production-volume query runtime and historical payment reconciliation remain unverified.** The scoped source and matching assets are pushed. At deployment, apply only the new view migration, reconcile existing SQL read grants if required, refresh serving PHP and verify both historical intervals through Julian's connector. Rollback removes the view and restores scoped source/assets. No production migration or grant was applied here.
 
 Coverage remains CRM-recorded: provider settlement and historical completeness are unverified. Missing receiver provenance uses platform/provider fallback and can miss cross-site receipt relationships; unknown funding and absent FX are disclosed. Reports cap candidates at 50,000, windows at 366 days and trend buckets at 9,000; limits do not establish database performance.
 
-Coordination: [WP three-stream task](</Users/ian/Local Sites/exotic/app/public/docs/agent/tasks/reporting-seo-delegation-2026-11-13.md>). 14 November: Ian authorised shipping; scoped commit/push preparation is in progress. No production deployment or message sent.
+Coordination: [WP three-stream task](</Users/ian/Local Sites/exotic/app/public/docs/agent/tasks/reporting-seo-delegation-2026-11-13.md>). 14 November: Ian authorised shipping; scoped source/build commit `33a77116` is pushed to origin/main. No production deployment or message sent.
 
 ## Ship validation — 14 November
 

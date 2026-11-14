@@ -3,7 +3,7 @@
 Started 13 November; local checkpoint 14 November 2026 (Africa/Nairobi).
 Owner: Ian Kuria. Executor: `/root/visitor_demand_country`; coordinator completed final integration/copy review and handoff after the executor's usage limit ended its turn.
 
-Status: source and matching assets prepared for the authorised 14 November commit/push; not deployed. Existing main baseline `052b4aff83382c9cef37eed89281c73a8a8116dd`; unrelated work preserved.
+Status: source and matching assets **PUSHED to origin/main as `33a77116`** on 14 November 2026; not deployed. Existing main baseline `052b4aff83382c9cef37eed89281c73a8a8116dd`; unrelated work preserved.
 
 Ian confirmed that locations means **profile cities being requested**. This supersedes the earlier visitor-origin interpretation. No new visitor-geolocation collection is required.
 
@@ -37,7 +37,7 @@ Existing local theme `js/contact-unlock.js` emits `cta_click` when the modal ope
 
 Deployed Ghana/TZ sender parity, signed end-to-end event arrival and continuous tracking have not been verified. The 13 November read-only baseline observed Ghana CTA events but no events for either Tanzania site; absence is not a demand count. On release, verify fresh attempts and correct profile cities on all three sites while preserving their feature settings. Existing historical events can be reported; missing historical events cannot be reconstructed. Measure all-history coverage aggregation on production volume before claiming performance acceptance. No database migration is required for this report.
 
-Coordination: [WP three-stream task](</Users/ian/Local Sites/exotic/app/public/docs/agent/tasks/reporting-seo-delegation-2026-11-13.md>). 14 November: Ian authorised shipping; scoped commit/push preparation is in progress. No production deployment or teammate message sent.
+Coordination: [WP three-stream task](</Users/ian/Local Sites/exotic/app/public/docs/agent/tasks/reporting-seo-delegation-2026-11-13.md>). 14 November: Ian authorised shipping; scoped source/build commit `33a77116` is pushed to origin/main. No production deployment or teammate message sent.
 
 ## Ship validation — 14 November
 

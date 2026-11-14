@@ -1,12 +1,14 @@
 # Reporting and country-demand release — 14 November 2026
 
+Source/build commit **`33a77116` is pushed to `origin/main`**. Production deployment remains pending.
+
 Ian authorised shipping the CRM changes. Scope: exact-time/hourly revenue reports and country/site demand with requested profile cities. SEO preparation is outside this CRM release.
 
 ## Release construction
 
 Integrated remote `2bdd6d5b` into the existing main checkout before preparing this change. Local pre-existing `052b4aff` only records the earlier Kenya pay-link release. Forty overlapping dirty/untracked paths were privately backed up, temporarily cleared for the merge, and restored byte for byte. Unrelated local overlays remain uncommitted. No unrelated staging existed at intake.
 
-Built from an archive of remote main plus the reviewed task paths, with three-way integration for shared MCP files. This excludes unrelated local billing/collection/UI changes. Source and generated manifest/assets are staged from that exact release. The existing dirty local `public/build/manifest.json` is preserved; it can differ from the committed release manifest. Do not rebuild from the whole dirty checkout and treat it as equivalent.
+Built from an archive of remote main plus the reviewed task paths, with three-way integration for shared MCP files. This excludes unrelated local billing/collection/UI changes. Source and generated manifest/assets were committed from that exact release. The existing dirty local `public/build/manifest.json` is preserved; it can differ from the committed release manifest. Do not rebuild from the whole dirty checkout and treat it as equivalent.
 
 [Verification](../../../output/reporting-release-2026-11-14/verification.json): 23 tests / 150 assertions pass on both SQLite and disposable MariaDB 10.6.28, including view creation/rollback; 13 embedded dashboard assertions pass. Scoped production frontend build passes. Existing CSS animation/large chunk warnings remain. [Source hashes](../../../output/reporting-release-2026-11-14/source-manifest.json) identify the tested runtime inputs.
 
