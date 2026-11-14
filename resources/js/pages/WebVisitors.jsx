@@ -79,6 +79,7 @@ export default function WebVisitors() {
     const sharedPlatformId = searchParams.get('platform_id') || 'all';
     const fromDate = searchParams.get('from') || '';
     const toDate = searchParams.get('to') || '';
+    const demandRangeInvalid = Boolean(fromDate) !== Boolean(toDate) || Boolean(fromDate && toDate && toDate < fromDate);
     const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const [insightPlatformId, setInsightPlatformId] = useState(sharedPlatformId);
     const [trendBucket, setTrendBucket] = useState('auto');
@@ -108,6 +109,8 @@ export default function WebVisitors() {
     const unlockQuery = useQuery({
         queryKey: ['contact-unlocks', overviewParams],
         queryFn: () => contactUnlocks.getOverview(overviewParams),
+        enabled: !(activeTab === 'demand' && demandRangeInvalid),
+        placeholderData: activeTab === 'demand' && demandRangeInvalid ? (previous) => previous : undefined,
         staleTime: 30_000,
     });
 
@@ -148,7 +151,7 @@ export default function WebVisitors() {
     const pulseQuery = useQuery({
         queryKey: ['contact-unlock-pulse', pulseParams],
         queryFn: () => contactUnlocks.getPulse(pulseParams),
-        enabled: Boolean(unlockQuery.data),
+        enabled: Boolean(unlockQuery.data) && !(activeTab === 'demand' && demandRangeInvalid),
         staleTime: 30_000,
     });
 
@@ -160,7 +163,7 @@ export default function WebVisitors() {
     const analyticsQuery = useQuery({
         queryKey: ['contact-unlock-analytics', analyticsParams],
         queryFn: () => contactUnlocks.getAnalytics(analyticsParams),
-        enabled: Boolean(unlockQuery.data),
+        enabled: Boolean(unlockQuery.data) && !(activeTab === 'demand' && demandRangeInvalid),
         staleTime: 30_000,
     });
 
@@ -298,24 +301,9 @@ export default function WebVisitors() {
         ? (analyticsQuery.error?.response?.data?.message || 'Visitor revenue analytics could not be loaded.')
         : null;
 
-    return (
-        <div className="space-y-5">
-            <PageHeader
-                title="Web Visitors"
-                subtitle="Visitor contact-unlock revenue, demand signals, checkout trail, and market setup."
-                actions={<Link to="/payments" className="crm-btn-secondary">Payments</Link>}
-            />
-
-            <section className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="font-semibold">Visitor unlock revenue - recorded separately from advertiser subscription revenue. Shared payment rails, separate books.</p>
-                    <span className="rounded-md border border-teal-200 bg-white px-2.5 py-1 text-xs font-semibold text-teal-700" title="payments.purpose = visitor_contact_unlock">purpose: visitor_contact_unlock</span>
-                </div>
-            </section>
-
-            <SectionFrame title="Controls" subtitle="Market, currency and date range apply across overview, demand, unlock trail and export.">
+    const rangeControls = (
                 <div className="flex flex-wrap items-end gap-3">
-                    <Combobox
+                    {activeTab !== 'demand' && <Combobox
                         label="Market"
                         value={sharedPlatformId}
                         onChange={(value) => setSharedMarket(value || 'all')}
@@ -323,24 +311,39 @@ export default function WebVisitors() {
                         className="min-w-[240px]"
                         allowClear={false}
                     />
-                    <ReportingCurrencyControl reporting={reportingCurrency} />
+                    }
+                    {activeTab !== 'demand' && <ReportingCurrencyControl reporting={reportingCurrency} />}
                     <label className="flex flex-col gap-1">
                         <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">From</span>
-                        <input type="date" className="crm-input w-auto min-w-[140px]" value={fromDate} onChange={(event) => updateParams({ from: event.target.value, page: 1 })} />
+                        <input aria-label="From date" type="date" className="crm-input w-auto min-w-[140px]" value={fromDate} onChange={(event) => updateParams({ from: event.target.value, page: 1 })} />
                     </label>
                     <label className="flex flex-col gap-1">
                         <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">To</span>
-                        <input type="date" className="crm-input w-auto min-w-[140px]" value={toDate} onChange={(event) => updateParams({ to: event.target.value, page: 1 })} />
+                        <input aria-label="To date" type="date" className="crm-input w-auto min-w-[140px]" value={toDate} onChange={(event) => updateParams({ to: event.target.value, page: 1 })} />
                     </label>
                     <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-                        {[['today', 1], ['7d', 7], ['30d', 30], ['all', 'all']].map(([label, days]) => (
-                            <button key={label} type="button" className="rounded-md px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-white hover:text-slate-900" onClick={() => applyRangePreset(days)}>
+                        {[['today', 1], ['7d', 7], ['30d', 30], ...(activeTab === 'demand' ? [] : [['all', 'all']])].map(([label, days]) => (
+                            <button key={label} type="button" aria-pressed={activeTab === 'demand' ? (days === 1 ? (!fromDate && !toDate) || (fromDate === todayDate() && toDate === todayDate()) : fromDate === dateDaysAgo(days - 1) && toDate === todayDate()) : undefined} className="rounded-md px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-white hover:text-slate-900 aria-pressed:bg-teal-700 aria-pressed:text-white" onClick={() => applyRangePreset(days)}>
                                 {label === 'all' ? 'All time' : label.toUpperCase()}
                             </button>
                         ))}
                     </div>
                 </div>
-            </SectionFrame>
+    );
+    const demandPeriodLabel = demandRangeInvalid ? 'Complete your date range' : fromDate && toDate ? `${fromDate} – ${toDate}` : 'Today';
+
+    return (
+        <div className="space-y-5">
+            {activeTab === 'demand' ? <header className="vd-page-heading"><div><h2>Visitor demand</h2><p>See which markets and profile cities attract recorded contact-unlock interest.</p></div><Link to="/payments" className="crm-btn-secondary">Payments</Link></header> : <PageHeader title="Web Visitors" subtitle="Visitor contact-unlock revenue, demand signals, checkout trail, and market setup." actions={<Link to="/payments" className="crm-btn-secondary">Payments</Link>} />}
+
+            {activeTab !== 'demand' && <section className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="font-semibold">Visitor unlock revenue - recorded separately from advertiser subscription revenue. Shared payment rails, separate books.</p>
+                    <span className="rounded-md border border-teal-200 bg-white px-2.5 py-1 text-xs font-semibold text-teal-700" title="payments.purpose = visitor_contact_unlock">purpose: visitor_contact_unlock</span>
+                </div>
+            </section>}
+
+            {activeTab === 'demand' ? <section className="vd-period-controls" aria-label="Report period"><div><span>Report period</span><p>{demandPeriodLabel} <small>· {browserTimezone}</small></p></div>{rangeControls}</section> : <SectionFrame title="Controls" subtitle="Market, currency and date range apply across overview, demand, unlock trail and export.">{rangeControls}</SectionFrame>}
 
             <div className="crm-surface overflow-hidden">
                 <BillingTabNav tabs={visibleTabs} activeTab={activeTab === 'setup' && !canManage ? 'overview' : activeTab} onChange={setTab} />
@@ -396,22 +399,20 @@ export default function WebVisitors() {
 
                             {activeTab === 'demand' ? (
                                 <div className="space-y-4">
-                                    <label className="flex max-w-sm flex-col gap-1 text-sm text-slate-600">
-                                        Country
-                                        <select className="crm-input" value={demandCountry} onChange={(event) => { setDemandCountry(event.target.value); setInsightPlatformId('all'); }}>
-                                            <option value="">All authorised countries</option>
-                                            {[...new Set(markets.map((market) => market.country).filter(Boolean))].sort().map((country) => <option key={country} value={country}>{country}</option>)}
-                                        </select>
-                                    </label>
-                                    <Combobox
-                                        label="Demand website"
-                                        value={insightPlatformId}
-                                        onChange={(value) => setInsightPlatformId(value || 'all')}
-                                        groups={demandMarketGroups}
-                                        className="max-w-sm"
-                                        allowClear={false}
-                                    />
-                                    {pulseQuery.isError ? (
+                                    <div className="vd-filterbar">
+                                        <label>Country
+                                            <select className="crm-input" value={demandCountry} onChange={(event) => { setDemandCountry(event.target.value); setInsightPlatformId('all'); }}>
+                                                <option value="">All authorised countries</option>
+                                                {[...new Set(markets.map((market) => market.country).filter(Boolean))].sort().map((country) => <option key={country} value={country}>{country}</option>)}
+                                            </select>
+                                        </label>
+                                        <Combobox label="Demand website" value={insightPlatformId} onChange={(value) => setInsightPlatformId(value || 'all')} groups={demandMarketGroups} allowClear={false} />
+                                        <p>Country and website apply to every demand signal.</p>
+                                    </div>
+                                    {pulseQuery.isFetching && !pulseQuery.isLoading && !demandRangeInvalid && <p className="vd-refresh" role="status">Updating demand…</p>}
+                                    {demandRangeInvalid ? (
+                                        <div className="vd-range-prompt" role="alert">{fromDate && toDate ? 'Choose an end date on or after the start date.' : 'Choose both a start and an end date to view this period.'} Use Today, 7d or 30d for a quick selection.</div>
+                                    ) : pulseQuery.isError ? (
                                         <div className="rounded-lg border border-rose-200 bg-rose-50 p-4" role="alert">
                                             <p className="font-semibold text-rose-900">Demand unavailable</p>
                                             <p className="mt-1 text-sm text-rose-700">Recorded demand could not be loaded. These results must not be treated as zero interest.</p>
@@ -419,6 +420,7 @@ export default function WebVisitors() {
                                         </div>
                                     ) : (
                                         <VisitorDemandPanel
+                                            key={`${demandCountry}-${insightPlatformId}`}
                                             pulse={pulseQuery.data || {}}
                                             reportingCurrency={reportingCurrency}
                                             isLoading={pulseQuery.isLoading}

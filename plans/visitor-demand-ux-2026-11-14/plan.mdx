@@ -1,0 +1,48 @@
+---
+title: Make visitor demand readable at a glance
+objective: Replace the long alphabetical demand report with ranked markets, requested cities and inspectable website coverage, then ship scoped CRM source and assets.
+status: authorised implementation
+owner: Ian Kuria
+date: 2026-11-14
+scope: CRM Demand tab presentation and exploration
+non_goals:
+  - Event collection, payments, permissions and counting changes
+---
+
+## Design direction
+
+The current report puts unavailable countries first, duplicates country and website rows and buries requested cities below dozens of rows. Compact filters lead into an editorial summary, followed by two parallel ranked views. Teal identifies recorded demand; amber identifies coverage gaps. Typography and proportional bars carry the hierarchy. Native expansion reveals site details without navigation. Hover/focus feedback lasts 120ms; disclosure is immediate and reduced motion disables transitions. No entrance animation delays data.
+
+<Wireframe title="Demand workspace inside the existing CRM shell" surface="desktop" caption="Existing sidebar and header remain. Illustration uses synthetic values." html="<div style='display:grid;grid-template-columns:130px 1fr;gap:16px'><aside style='border-right:1px solid var(--wf-line);padding:12px'>Exotic Online<br><br>Dashboard<br>Clients<br>Web Visitors</aside><main><p>Overview　 Demand　 Unlocks　 Safety　 Setup</p><h2>Where visitors want to connect</h2><p>Country: All　 Website: All</p><div style='display:flex;gap:24px;padding:20px 0'><strong>932 attempts</strong><span>567 site sessions</span><span>11 / 55 sites observed</span></div><div style='display:grid;grid-template-columns:1fr 1fr;gap:18px'><section style='padding:14px;border:1px solid var(--wf-line)'><h3>Markets by demand</h3><p>Search markets　 With history　 All</p><p>Ghana ━━━━━━━ 320</p><p>Kenya ━━━ 120</p><p>Expand country for website detail</p></section><section style='padding:14px;border:1px solid var(--wf-line)'><h3>Profile cities requested</h3><p>Search cities</p><p>Kasoa ━━━━━ 51</p><p>Lubumbashi ━━━━ 40</p></section></div></main></div>" />
+
+<Steps items={[
+ {"title":"Recompose recorded demand","reuses":"VisitorAttemptDemand props, pulse.demand country/site/location aggregates, existing CSV and copy helpers","adds":"ranked and searchable market rows, With history/All/Coverage gaps filters, native website disclosures, proportional bars, bounded city pagination and loading/empty states","files":"resources/js/components/visitors/VisitorAttemptDemand.jsx; new resources/js/components/visitors/visitorDemand.css","verify":"Synthetic full-page browser fixture checks ranking, expansions, search, pagination, exports, loading and unknown coverage on desktop and mobile."},
+ {"title":"Tighten the Demand flow","reuses":"WebVisitors country/site controls and VisitorDemandPanel purchase widgets","adds":"side-by-side filters, visible scope heading and secondary disclosure for purchase/checkout analytics","files":"resources/js/pages/WebVisitors.jsx; resources/js/components/visitors/VisitorDemandPanel.jsx","verify":"Country/site intersection, request failure/retry, date scope, keyboard controls and existing metric drawers remain functional."},
+ {"title":"Build and ship reviewed scope","reuses":"CRM ship workflow and archive-based scoped release used by reporting release","adds":"matching compiled assets, task evidence and separate WP changelog entry","files":"public/build/; docs/agent/tasks/visitor-demand-ux-2026-11-14.md","verify":"Build archived HEAD plus owned source only, inspect manifest and generated diff, run ContactUnlockCountryDemandTest, push origin/main. Ian performs cPanel pull under established CRM delivery contract."}
+]} />
+
+<Risks items={[
+ {"risk":"Missing collection reads as zero demand","impact":"high","mitigation":"Unavailable counts stay unavailable. With history filter explicitly reports hidden countries; All and Coverage gaps expose every authorised country. Coverage summary counts websites, not people."},
+ {"risk":"City bars suggest a share of all demand despite 100-row cap","impact":"medium","mitigation":"Bars compare counts against the largest returned city only. Display returned/total/truncated metadata and cache-city meaning. No city share percentage."},
+ {"risk":"Unrelated dirty CRM overlays enter the release","impact":"high","mitigation":"Build from a separate temporary archive of HEAD with only task-owned frontend paths. Preserve working-tree build and stage exact release outputs through Git index operations."}
+]} />
+
+Phone layouts switch between Markets and Profile cities without scrolling through the other list. Coverage gaps includes countries with one observed website and one missing website. Editable phone inputs use at least 16px text. Invalid date intervals suppress all three report requests and retain the last market metadata for the date prompt.
+
+## Scope and rollback
+
+With history includes every country with any historical events, even with zero attempts in the selected period. Mixed-coverage countries retain all website disclosures. Export CSV and Copy cities include all data in the country/site/date selection, independent of local search, coverage filter or pagination; buttons say so. Demand has Today/7d/30d presets and requires both date bounds for a custom interval. A partial interval shows a prompt and suppresses report values until completed; it must never silently present today as the selected interval. The active period is visible above the report.
+
+Retain prior task-owned source paths, manifest and compiled assets. To roll back, restore only those source/build files through the established cPanel workflow, retaining unrelated overlays. No migrations or configuration changes are required.
+
+## Verification
+
+Render the real WebVisitors component with synthetic API responses through the existing browser fixture pattern. Check 1440px, 390px and 320px widths, keyboard expansion, reduced motion, empty/loading/error/retry, country/site filters and CSV safety. Use PHP 8.2 ContactUnlockCountryDemandTest on disposable SQLite. Build scoped release with npm run build. Confirm remote main matches the pushed commit and document cPanel pull as pending until independently observed.
+
+## Audit history
+
+Round 1: NOT READY. Addressed date scope/partial intervals, history semantics, export scope and exact-source/build rollback.
+
+Round 2: READY. Aligned With history wording and included reversed-date verification.
+
+<Questions items={[]} />

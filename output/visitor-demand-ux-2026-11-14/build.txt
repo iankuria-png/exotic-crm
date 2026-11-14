@@ -1,0 +1,31 @@
+
+> build
+> vite build
+
+vite v6.4.1 building for production...
+transforming...
+Found 1 warning while optimizing generated CSS:
+
+[2m│ }[22m
+[2m│ @media (prefers-reduced-motion: reduce) {[22m
+[2m│[22m   .animate-\[forecastSlide_1\.4s_ease-in-out_infinite] {
+[2m┆[22m                                                      [33m[2m^--[22m Unexpected token CloseSquareBracket[39m
+[2m┆[22m
+[2m│     animation: none;[22m
+[2m│     transform: translateX(0);[22m
+
+✓ 1422 modules transformed.
+rendering chunks...
+computing gzip size...
+public/build/assets/layers-BWBAp2CZ.png           0.70 kB
+public/build/manifest.json                        1.06 kB │ gzip:     0.30 kB
+public/build/assets/layers-2x-Bpkbi35X.png        1.26 kB
+public/build/assets/marker-icon-hN30_KVU.png      1.47 kB
+public/build/assets/app-B1WaJdBZ.css            299.48 kB │ gzip:    44.17 kB
+public/build/assets/app-DJgra4KM.js           5,771.88 kB │ gzip: 1,407.55 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 10.98s

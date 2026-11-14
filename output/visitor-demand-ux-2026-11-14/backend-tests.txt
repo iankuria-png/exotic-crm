@@ -1,0 +1,14 @@
+
+   PASS  Tests\Feature\ContactUnlockCountryDemandTest
+  ✓ disabled sites have attempts grouped by country and site without cl… 0.21s
+  ✓ country filter intersects authorisation and platform and cannot wid… 0.03s
+  ✓ missing collection is unavailable and inactive sites stay visible    0.03s
+  ✓ locations are cta only current profile cities and bad cross site li… 0.03s
+  ✓ pulse endpoint intersects country with sales assignments and reject… 0.20s
+  ✓ pulse endpoint accepts both tanzania sites for admin                 0.03s
+  ✓ pulse endpoint requires authentication                               0.04s
+  ✓ requested location limit is explicit and does not truncate attempt…  0.05s
+  ✓ existing event ingestion records and deduplicates interest with che… 0.06s
+
+  Tests:    9 passed (46 assertions)
+  Duration: 1.55s

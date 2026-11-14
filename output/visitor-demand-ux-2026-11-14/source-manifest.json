@@ -1,0 +1,9 @@
+{
+  "base_head": "8b64f471b4b731599c152d0dfa4f7c58e70319a3",
+  "paths": {
+    "resources/js/pages/WebVisitors.jsx": "85d696a0ace9477e1bf3b4f10d2dff5823ff6029ec0b4f10568508e376e8176f",
+    "resources/js/components/visitors/VisitorAttemptDemand.jsx": "0446d91cdffa19e88f0a4eea2b6a3233601679717691e82dfe082ec4c67a6f1f",
+    "resources/js/components/visitors/VisitorDemandPanel.jsx": "de1e89a7e18329e3b39f8570fefe978e1e8375053936676b56b449419c4dd895",
+    "resources/js/components/visitors/visitorDemand.css": "5c6cc84f9616cdafa85fd4bd1d448a9d5e2fb1ceacd14c90bc6a2e4883599239"
+  }
+}

@@ -104,6 +104,9 @@ export default function VisitorDemandPanel({ pulse = {}, reportingCurrency, isLo
     return (
         <div className="space-y-4">
             <VisitorAttemptDemand demand={pulse.demand} isLoading={isLoading} toast={toast} />
+            <details className="vd-secondary">
+                <summary><span><strong>Purchases &amp; checkout activity</strong><small>Payment outcomes, purchased profiles, sources and checkout hours</small></span><span aria-hidden="true">＋</span></summary>
+                <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <MetricCard label="Payments / ready drawers" value={percentLabel(kpis.unlock_conversion_percent)} hint="Ready drawers only; not all profile views or attempts" isLoading={isLoading} />
                 <MetricCard
@@ -135,12 +138,14 @@ export default function VisitorDemandPanel({ pulse = {}, reportingCurrency, isLo
                     onClick={open('renewed_after_demand', 'Renewed after demand', compactNumber(kpis.renewed_after_paid_demand))}
                 />
             </div>
-            <div className="grid gap-4 xl:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2">
                 <DemandList title="Profile activity cities" subtitle="All recorded event types by profile city; not visitor origins." rows={pulse.top_cities || []} toast={toast} />
                 <TopProfilesList rows={pulse.top_profiles || []} currency={currency} toast={toast} />
                 <DemandList title="Traffic sources" subtitle="Where checkouts started." rows={pulse.top_sources || []} toast={toast} />
                 <DemandList title="Top hours" subtitle="Local hour of checkout start." rows={pulse.top_hours || []} toast={toast} />
             </div>
+                </div>
+            </details>
         </div>
     );
 }
