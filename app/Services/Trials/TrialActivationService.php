@@ -30,6 +30,12 @@ class TrialActivationService
             return $r;
         }
         abort_if(DB::transactionLevel() > 0, 409, 'Commit the trial authorization before activation.');
+        if (! empty($r->terms_json['collection_obligation_id'])) {
+            $service = app(\App\Services\Collections\CollectionSubsidiaryFulfillmentService::class);
+            $owner = $service->forRequest($r);
+            $service->resume($owner->id);
+            return $r->fresh(); // This owner always uses the collection exact-target writer, never runItem/add-days.
+        }
         if ($r->action === 'subsidiary') {
             $r = app(\App\Services\SubsidiaryTrialWorkflow::class)->prepare($r);
             $primary = Deal::findOrFail($r->terms_json['source_deal_id']);
@@ -68,6 +74,7 @@ class TrialActivationService
 
     public function runItem(FreeTrialRequest $request, Client $client, string $itemKey, ?int $seoItem = null): ?Deal
     {
+        abort_if(! empty($request->terms_json['collection_obligation_id']), 409, 'Resume the collection subsidiary owner instead.');
         abort_if(DB::transactionLevel() > 0, 409, 'Trial activation cannot run inside a database transaction.');
 
         return app(ClientLifecycleMutationLock::class)->run($client, function () use ($request, $client, $itemKey, $seoItem) {

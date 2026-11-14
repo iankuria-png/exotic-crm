@@ -210,6 +210,12 @@ class CollectionFulfillmentService
                         $automatic = $effect->correction_id === null && $allocation->decision_source === 'automatic';
                         app(CollectionGate::class)->assertFunds($receipt);
                         app(CollectionGate::class)->assertWrites($account, [$effect->platform_id], $automatic, $effect->correction_id !== null, $allocation->id);
+                        if (($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent' && in_array($effect->effect_kind, ['subsidiary_free', 'target_subsidiary'])) {
+                            $owner = \App\Models\Collections\CollectionSubsidiaryObligation::where('dependent_effect_id', $effect->id)->firstOrFail();
+                            app(CollectionSubsidiaryFulfillmentService::class)->assertCurrent($owner);
+                            $trial = \App\Models\FreeTrialRequest::lockForUpdate()->findOrFail($owner->trial_request_id);
+                            app(\App\Services\Trials\TrialApprovalService::class)->assertDispatch($trial);
+                        }
                         if ($automatic && $effect->effect_kind !== 'subsidiary_free') {
                             app(CollectionAutomationEpoch::class)->assertReceipt($receipt);
                         }
@@ -220,7 +226,7 @@ class CollectionFulfillmentService
                         $locked->update(['state' => 'dispatching', 'attempts' => $locked->attempts + 1, 'dispatch_started_at' => now()]);
                         PaymentFulfillmentOperation::whereKey($effect->id)->update(['state' => 'dispatching', 'dispatch_started_at' => now()]);
                     });
-                    $proof = $effect->correction_id ? app(CollectionCorrectionOwnership::class)->proof($effect->correction_id, $effect->platform_id, $effect->wp_post_id) : [];
+                    $proof = $effect->correction_id && ! (($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent' && $effect->effect_kind === 'target_subsidiary') ? app(CollectionCorrectionOwnership::class)->proof($effect->correction_id, $effect->platform_id, $effect->wp_post_id) : [];
                     $sync->applySubscriptionOperation($effect->wp_post_id, $effect->target_state + ['operation_id' => $effect->id, 'wp_user_id' => $effect->wp_user_id] + $proof);
                     $read = $sync->subscriptionOperation($effect->wp_post_id, $effect->id);
                     $result = $read['operation'] ?? null;
@@ -234,13 +240,17 @@ class CollectionFulfillmentService
                     return;
                 }
                 app(SubscriptionProvisioningService::class)->cacheVerifiedCollectionSnapshot($effect->client_id, $effect->verified_state);
-                if ($effect->correction_id) {
+                if ($effect->correction_id && ! (($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent' && $effect->effect_kind === 'target_subsidiary')) {
                     $effect->update(['state' => 'succeeded']);
 
                     return;
                 }
                 app(SubscriptionProvisioningService::class)->recordVerifiedCollectionEffect($effect, $allocation);
                 $effect->update(['state' => 'succeeded']);
+                if ($effect->effect_kind === 'primary_paid' && ($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent') {
+                    app(CollectionSubsidiaryFulfillmentService::class)->ensure($allocation, $effect);
+                    DB::table('collection_profile_holds')->where('allocation_id', $allocation->id)->where('client_id', $effect->client_id)->delete();
+                }
                 if ($effect->effect_kind === 'primary_paid') {
                     PaymentFulfillmentOperation::whereKey($effect->id)->update(['state' => 'succeeded', 'result_json' => json_encode(['snapshot' => $effect->verified_state, 'collection_effect_id' => $effect->id]), 'last_error_code' => null]);
                     $receipt = $allocation->receipt->fresh();
@@ -255,8 +265,10 @@ class CollectionFulfillmentService
                 $effect->update(['state' => $effect->state === 'prepared' ? 'needs_review' : 'effect_unknown', 'last_error_code' => $e instanceof CollectionException ? $e->reason : 'site_confirmation_required']);
             }
             PaymentFulfillmentOperation::whereKey($effect->id)->where('state', '!=', 'succeeded')->update(['state' => 'effect_unknown', 'last_error_code' => 'site_confirmation_required']);
-            $allocation->update(['state' => 'uncertain']);
-            $allocation->receipt->update(['decision_state' => 'uncertain']);
+            if (! (($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent' && in_array($effect->effect_kind, ['subsidiary_free', 'target_subsidiary']))) {
+                $allocation->update(['state' => 'uncertain']);
+                $allocation->receipt->update(['decision_state' => 'uncertain']);
+            }
             throw $e;
         }
     }

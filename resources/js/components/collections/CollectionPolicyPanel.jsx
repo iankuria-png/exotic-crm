@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
-import CollectionAutomationControls from './CollectionAutomationControls';
+import CollectionAutomationControls, { automationHeadline } from './CollectionAutomationControls';
+import { Icon, StatusPill, primaryButton, quietButton, secondaryButton } from './collectionUi';
 
 const caps = { single_cap_minor: 'Per payment', daily_cap_minor: 'Per day', unreviewed_cap_minor: 'Awaiting sales review', unverified_cap_minor: 'Awaiting statement verification' };
 const showAmount = value => value === null ? '' : (value / 100).toFixed(2);
@@ -23,29 +24,56 @@ export function useCollectionPolicies() {
 export function CollectionAutomationSummary({ onConfigure }) {
     const query = useCollectionPolicies();
     const accounts = query.data?.accounts || [];
-    const pending = accounts.flatMap(account => account.automation?.readiness || []).filter(check => !check.ready);
-    const finance = pending.some(check => ['independent_reconciliation_accepted_at', 'settlement_policy_accepted_at'].includes(check.key));
-    const enabled = accounts.some(account => account.automation?.enabled);
-    const title = query.isPending ? 'Checking automatic activation…' : query.isError ? 'Automatic activation status unavailable' : !accounts.length ? 'No receiving account in this view' : enabled ? pending.length ? 'Automatic activation · Checks pending' : 'Automatic activation · Enabled' : 'Automatic activation · Paused';
-    return <section aria-label="Automatic activation status" className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-4 text-sm">
-        <div className="min-w-0 flex-1"><p className="font-semibold text-slate-900">{title}</p>
-            {accounts.length > 0 && <p className="mt-1 text-slate-600">{finance ? 'Awaiting Finance acceptance and remaining activation checks.' : pending.length ? 'Remaining activation checks must pass before new payments can activate automatically.' : enabled ? 'Eligible new payments activate automatically. Exceptions stay for staff review.' : 'Matching continues. Staff can review and activate payments while automation is paused.'}</p>}
-            {query.isError && <p className="mt-1 text-slate-600">Refresh the status before relying on automatic activation. <button type="button" className="text-teal-800 underline" onClick={() => query.refetch()}>Retry status</button></p>}
-        </div><button type="button" onClick={onConfigure} className="shrink-0 py-2 font-medium text-teal-800 underline">Automation settings</button>
+    const account = accounts.find(a => a.automation?.enabled) || accounts[0];
+    const policy = account?.automation;
+    const status = policy?.status;
+    const head = policy ? automationHeadline(policy, status) : null;
+    const pending = accounts.flatMap(a => a.automation?.readiness || []).filter(check => !check.ready);
+    const finance = pending.filter(check => check.group === 'finance' || ['independent_reconciliation_accepted_at', 'settlement_policy_accepted_at'].includes(check.key)).length;
+    const title = query.isPending ? 'Checking automatic activation…' : query.isError ? 'Automatic activation status unavailable' : !accounts.length ? 'No receiving account in this view' : !head ? 'Automatic activation · Not configured'
+        : `Automatic activation · ${head.state === 'live' ? 'Live' : head.state === 'held' ? 'Held' : head.state === 'pilot_ended' ? 'Pilot ended' : status?.can_enable ? 'Ready to switch on' : 'Paused'}`;
+    const line = !policy ? null : head.state === 'live' ? [head.pilot, status?.activity ? `${status.activity.automatic} of ${status.activity.received} new ${status.activity.received === 1 ? 'payment' : 'payments'} activated automatically` : null].filter(Boolean).join(' · ') || 'Eligible new payments activate automatically. Exceptions stay for staff review.'
+        : head.state === 'held' ? 'Switched on, but held: new payments wait for staff until the failing checks pass.'
+        : head.state === 'pilot_ended' ? 'The 24-hour pilot ended. New payments wait for staff review.'
+        : status?.can_enable ? 'All go-live checks pass. A manager can switch it on.'
+        : finance ? `Awaiting Finance acceptance and remaining activation checks · ${pending.length} open.` : `${pending.length} go-live ${pending.length === 1 ? 'check' : 'checks'} open. Staff activate payments meanwhile.`;
+    return <section aria-label="Automatic activation status" className={`mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${head?.tone === 'live' ? 'border-teal-200 bg-teal-50/70' : head?.tone === 'action' ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}>
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+            {head && <span className="mt-0.5"><StatusPill tone={head.tone} pulse={head.pulse}>{head.badge}</StatusPill></span>}
+            <div className="min-w-0"><p className="font-semibold text-slate-900">{title}</p>
+                {line && <p className="mt-0.5 tabular-nums text-slate-600">{line}</p>}
+                {query.isError && <p className="mt-1 text-slate-600">Refresh the status before relying on automatic activation. <button type="button" className="text-teal-800 underline" onClick={() => query.refetch()}>Retry status</button></p>}</div>
+        </div>
+        <button type="button" onClick={onConfigure} className={status?.can_enable || head?.tone === 'action' ? primaryButton : secondaryButton}>Automation settings</button>
     </section>;
 }
 
-export default function CollectionPolicyPanel({ open, onToggle }) {
+export default function CollectionPolicyPanel({ open, onClose }) {
     const { user } = useAuth();
     const manager = ['admin', 'sub_admin'].includes(user?.role);
     const query = useCollectionPolicies();
-    return <details id="collection-automation-settings" open={open} onToggle={onToggle} className="mt-6 border-t border-slate-200 pt-4"><summary className="cursor-pointer py-2 text-sm font-semibold text-slate-800">Automatic activation limits</summary>
-        <p className="mt-2 text-sm text-slate-600">Limits control exposure from automatic activation. Unlimited keeps the payment and review totals recorded. Saving limits does not enable automatic activation.</p>
-        {query.isPending && <p className="mt-3 text-sm text-slate-500">Loading limits…</p>}
-        {query.isError && <p role="alert" className="mt-3 text-sm text-rose-800">Limits could not be loaded. <button type="button" className="underline" onClick={() => query.refetch()}>Retry</button></p>}
-        {query.data?.accounts?.map(account => <AccountLimits key={account.account_id} account={account} manager={manager} />)}
-        {query.data?.accounts?.length === 0 && <p className="mt-3 text-sm text-slate-500">No receiving account is available in your market scope.</p>}
-    </details>;
+    const dialog = useRef(null);
+    useEffect(() => {
+        const modal = dialog.current;
+        if (!open || !modal) return undefined;
+        const trigger = document.activeElement;
+        modal.showModal();
+        return () => { modal.close(); if (trigger?.isConnected) trigger.focus(); };
+    }, [open]);
+    if (!open) return null;
+    return <dialog ref={dialog} id="collection-automation-settings" aria-labelledby="collection-automation-title" onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) onClose(); }}
+        className="m-0 ml-auto h-dvh max-h-dvh w-full max-w-2xl border-0 bg-slate-50 p-0 text-slate-900 shadow-2xl backdrop:bg-slate-900/40">
+        <div className="flex h-full flex-col" onClick={e => e.stopPropagation()}>
+            <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4"><div><p className="text-xs font-medium uppercase tracking-wide text-slate-500">Incoming office payments</p><h2 id="collection-automation-title" className="mt-1 text-xl font-semibold">Automatic activation</h2><p className="mt-1 text-sm text-slate-500">Go-live checks, rules and exposure limits for each receiving account.</p></div>
+                <button type="button" className={secondaryButton} onClick={onClose} autoFocus><Icon name="close" />Close</button></header>
+            <div className="flex-1 space-y-6 overflow-y-auto p-5">
+                {query.isPending && <div role="status" className="space-y-3" aria-label="Loading automatic activation">{[0, 1, 2].map(i => <div key={i} className="h-20 rounded-xl bg-slate-200/70 motion-safe:animate-pulse" />)}</div>}
+                {query.isError && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">Automatic activation settings could not be loaded. <button type="button" className="font-medium underline" onClick={() => query.refetch()}>Retry</button></p>}
+                {query.data?.accounts?.map(account => <div key={account.account_id} className="space-y-5"><CollectionAutomationControls account={account} manager={manager} /><AccountLimits account={account} manager={manager} /></div>)}
+                {query.data?.accounts?.length === 0 && <p className="text-sm text-slate-500">No receiving account is available in your market scope.</p>}
+            </div>
+        </div>
+    </dialog>;
 }
 
 function AccountLimits({ account, manager }) {
@@ -65,7 +93,7 @@ function AccountLimits({ account, manager }) {
         try { update.mutate({ expected_version: editing.version, ...Object.fromEntries(Object.entries(editing.values).map(([cap, value]) => [cap, value.unlimited ? null : minor(value.amount)])) }); }
         catch (failure) { setError(failure.message); }
     }
-    return <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4"><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900">{account.label} · {account.currency}</p>{manager && !editing && <button type="button" onClick={edit} className="rounded px-2 py-2 text-sm font-medium text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-600">Configure limits</button>}</div>
+    return <section aria-label="Exposure limits" className="rounded-xl border border-slate-200 bg-white p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h5 className="text-sm font-semibold text-slate-900">Exposure limits</h5><p className="mt-0.5 text-xs text-slate-500">Caps on what automatic activation may grant before staff review. Saving limits does not switch anything on.</p></div>{manager && !editing && <button type="button" onClick={edit} className={`${quietButton} shrink-0`}>Configure limits</button>}</div>
         {!account.configured && !editing && <p className="mt-2 text-sm text-amber-900">Limits have not been approved. Automatic activation stays held.</p>}
         {saved && <p role="status" className="mt-2 text-sm text-teal-800">Limits saved.</p>}
         {editing ? <form onSubmit={save} className="mt-3"><div className="grid gap-4 sm:grid-cols-2">{Object.entries(caps).map(([cap, label]) => <fieldset key={cap} className="min-w-0"><legend className="text-sm font-medium text-slate-700">{label}</legend>
@@ -74,9 +102,8 @@ function AccountLimits({ account, manager }) {
         </fieldset>)}</div>
             {error && <p role="alert" className="mt-3 text-sm text-rose-800">{error}</p>}
             <p className="mt-3 text-xs text-slate-500">A limit of zero prevents new automatic exposure. Existing payment and review totals are retained when limits change.</p>
-            <div className="mt-4 flex flex-wrap gap-3"><button type="submit" disabled={update.isPending} className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{update.isPending ? 'Saving…' : 'Save limits'}</button><button type="button" disabled={update.isPending} onClick={() => { setEditing(null); setError(''); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">Cancel</button>{error && <button type="button" onClick={() => client.invalidateQueries({ queryKey: ['collection-policies'] })} className="rounded px-2 py-2 text-sm text-teal-700">Reload latest limits</button>}</div>
+            <div className="mt-4 flex flex-wrap gap-3"><button type="submit" disabled={update.isPending} className={primaryButton}>{update.isPending ? 'Saving…' : 'Save limits'}</button><button type="button" disabled={update.isPending} onClick={() => { setEditing(null); setError(''); }} className={secondaryButton}>Cancel</button>{error && <button type="button" onClick={() => client.invalidateQueries({ queryKey: ['collection-policies'] })} className="rounded px-2 py-2 text-sm text-teal-700">Reload latest limits</button>}</div>
             {editing.version !== account.version && <p role="status" className="mt-3 text-sm text-amber-900">Latest saved version loaded. Your edits are preserved. <button type="button" className="underline" onClick={() => setEditing(current => ({ ...current, version: account.version }))}>Use this version for my next save</button></p>}
         </form> : account.configured && <dl className="mt-3 grid gap-3 sm:grid-cols-2">{Object.entries(caps).map(([cap, label]) => <div key={cap}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 text-sm text-slate-900">{account.limits[cap] === null ? 'Unlimited' : `${account.currency} ${showAmount(account.limits[cap])}`}</dd></div>)}</dl>}
-        <CollectionAutomationControls account={account} manager={manager} />
-    </div>;
+    </section>;
 }

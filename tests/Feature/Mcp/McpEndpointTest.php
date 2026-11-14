@@ -269,7 +269,7 @@ class McpEndpointTest extends TestCase
 
         $registry = $this->getJson('/api/crm/settings/mcp')
             ->assertOk()
-            ->assertJsonCount(35, 'tools');
+            ->assertJsonCount(38, 'tools');
         $knowledge = collect($registry->json('tools'))->firstWhere('name', 'exotic_search_knowledge');
         $this->assertSame('rollout', $knowledge['management_mode']);
         $this->assertTrue($knowledge['scope_required']);
@@ -278,7 +278,7 @@ class McpEndpointTest extends TestCase
 
         $minted = $this->postJson('/api/crm/settings/mcp/tokens', ['label' => 'full access'])
             ->assertCreated()
-            ->assertJsonCount(31, 'abilities')
+            ->assertJsonCount(34, 'abilities')
             ->assertJsonPath('abilities.0', 'mcp:read');
         $token = $minted->json('token');
 
@@ -289,7 +289,7 @@ class McpEndpointTest extends TestCase
             'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-06-18']],
         ], $this->modernHeaders('tools/list', '2025-06-18'));
 
-        $response->assertOk()->assertJsonCount(30, 'result.tools');
+        $response->assertOk()->assertJsonCount(33, 'result.tools');
         $this->assertContains('exotic_search_knowledge', collect($response->json('result.tools'))->pluck('name')->all());
         $this->assertContains('exotic_error_digest_live', collect($response->json('result.tools'))->pluck('name')->all());
     }

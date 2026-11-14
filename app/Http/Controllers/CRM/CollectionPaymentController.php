@@ -58,6 +58,8 @@ class CollectionPaymentController extends Controller
         if (! empty($v['state'])) {
             if (in_array($v['state'], ['needs_action', 'already_recorded'], true)) {
                 app(CollectionReceiptStatusService::class)->filter($q, $v['state']);
+            } elseif ($v['state'] === 'reversed') {
+                $q->whereIn('funds_state', ['reversed', 'disputed']);
             } elseif ($v['state'] === 'purchase_saved') {
                 $q->whereDoesntHave('allocation')->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
                     ->where(fn ($q) => $q->whereNull('conflicts')->orWhereJsonLength('conflicts', 0))
@@ -131,9 +133,34 @@ class CollectionPaymentController extends Controller
             ->whereIn('payer_fingerprint', $rows->pluck('payer_fingerprint')->filter()->unique())
             ->selectRaw('account_id, payer_fingerprint, COUNT(*) AS total')->groupBy('account_id', 'payer_fingerprint')->get()
             ->keyBy(fn ($c) => $c->account_id.':'.$c->payer_fingerprint);
-        $rows->getCollection()->transform(fn ($r) => $this->present($r, $evidence[$r->id], $r->payer_fingerprint ? (int) ($counts[$r->account_id.':'.$r->payer_fingerprint]->total ?? 0) : null, $usage[$r->id]));
+        $activations = app(\App\Services\Collections\CollectionActivationAttribution::class)->forReceipts($rows->getCollection(), $usage);
+        $balances = app(\App\Services\Collections\CollectionWalletBalanceService::class)->forReceipts($rows->getCollection());
+        $rows->getCollection()->transform(fn ($r) => $this->present($r, $evidence[$r->id], $r->payer_fingerprint ? (int) ($counts[$r->account_id.':'.$r->payer_fingerprint]->total ?? 0) : null, $usage[$r->id], $activations[$r->id] ?? null));
 
-        return response()->json($rows);
+        $rows->getCollection()->transform(fn ($row) => $row + ['wallet_balance' => $balances[$row['id']] ?? null]);
+        $needsAction = null;
+        $wallet = [];
+        if (empty($v['client_id'])) {
+            $wallet = app(\App\Services\Collections\CollectionWalletBalanceService::class)->latest($this->access->accountIds($request->user()));
+            $pending = CollectionReceipt::whereIn('account_id', $this->access->accountIds($request->user()))
+                ->when(! empty($v['account_id']), fn ($q) => $q->where('account_id', $v['account_id']))
+                ->when(! empty($v['platform_id']), fn ($q) => $q->whereIn('account_id', DB::table('collection_account_platforms')->where('platform_id', $v['platform_id'])->select('account_id')));
+            app(CollectionReceiptStatusService::class)->filter($pending, 'needs_action');
+            $needsAction = $pending->count();
+        }
+
+        $reversals = empty($v['client_id']) ? $this->reversalAlerts($this->access->accountIds($request->user())) : [];
+
+        return response()->json($rows->toArray() + ['counts' => ['needs_action' => $needsAction], 'wallet_balances' => $wallet, 'reversals' => $reversals]);
+    }
+
+    public function packageRuleEvidence(Request $request, string $account)
+    {
+        $this->enabled();
+        app(\App\Services\MarketAuthorizationService::class)->ensureManager($request->user());
+        $a = $this->access->account($request->user(), $account);
+
+        return response()->json(app(\App\Services\Collections\CollectionPackageHistoryService::class)->evidence($a));
     }
 
     public function show(Request $request, int $receipt)
@@ -141,7 +168,9 @@ class CollectionPaymentController extends Controller
         $this->enabled();
         $r = $this->access->receipt($request->user(), $receipt);
         $r->load('account', 'allocation.effects', 'sale.items');
-        $payload = $this->present($r, null, null, app(CollectionReceiptStatusService::class)->forReceipts(collect([$r]), true)[$r->id]);
+        $usage = app(CollectionReceiptStatusService::class)->forReceipts(collect([$r]), true)[$r->id];
+        $payload = $this->present($r, null, null, $usage, app(\App\Services\Collections\CollectionActivationAttribution::class)->forReceipts(collect([$r]), [$r->id => $usage])[$r->id] ?? null);
+        $payload['wallet_balance'] = app(\App\Services\Collections\CollectionWalletBalanceService::class)->forReceipts(collect([$r]))[$r->id] ?? null;
         $candidates = app(CollectionDecisionService::class)->candidates($r);
         $payload['candidates'] = $candidates;
         $payload['payer_links'] = CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', $r->payer_fingerprint)->get()->toArray();
@@ -149,16 +178,21 @@ class CollectionPaymentController extends Controller
         $payload['timeline'] = app(\App\Services\Collections\CollectionAuditTimeline::class)->forReceipt($r, isset($timelineInput['timeline_before']) ? (int) $timelineInput['timeline_before'] : null);
         $payload['history'] = DB::table('collection_audit')->where('receipt_id', $r->id)->orderByDesc('id')->limit(50)->get();
         $payload['corrections'] = $r->allocation ? CollectionCorrection::where('allocation_id', $r->allocation->id)->orderByDesc('created_at')->get() : [];
+        $payload['related_payments'] = $r->allocation ? app(CollectionReceiptStatusService::class)->relatedPayments($r) : null;
+        $review = DB::table('collection_audit as a')->leftJoin('users as u', 'u.id', '=', 'a.actor_id')->where('a.receipt_id', $r->id)
+            ->where('a.action', 'like', 'reversal_reviewed%')->orderByDesc('a.id')->first(['a.context', 'a.created_at', 'u.name']);
+        $payload['reversal_review'] = $review ? (json_decode((string) $review->context, true) ?: []) + ['at' => \Illuminate\Support\Carbon::parse($review->created_at)->toIso8601String(), 'by' => $review->name] : null;
         $payload['field_provenance'] = $r->field_provenance;
         $payload['conflicts'] = $r->conflicts;
 
         return response()->json($payload);
     }
 
-    private function present(CollectionReceipt $r, ?array $payer = null, ?int $capturedCount = null, ?array $usage = null): array
+    private function present(CollectionReceipt $r, ?array $payer = null, ?int $capturedCount = null, ?array $usage = null, ?array $activation = null): array
     {
         $allocation = $r->allocation;
         $p = $allocation?->purchase_snapshot;
+        $obligation = $allocation && Schema::hasTable('collection_subsidiary_obligations') ? \App\Models\Collections\CollectionSubsidiaryObligation::where('allocation_id', $allocation->id)->orderByDesc('source_generation')->first() : null;
         $savedChoice = ! $allocation ? \App\Models\Collections\CollectionPurchaseIntent::where('account_id', $r->account_id)
             ->where('provider_reference', $r->reference_norm)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->latest('created_at')->first() : null;
         $p ??= $savedChoice?->purchase_snapshot;
@@ -174,10 +208,10 @@ class CollectionPaymentController extends Controller
         $suggestions = array_values(array_filter(array_map(fn ($candidate) => isset($profiles[$candidate['id']])
             ? ['id' => $candidate['id'], 'name' => $profiles[$candidate['id']]->name, 'score' => $candidate['score']] : null, $suggestions)));
 
-        return ['id' => $r->id, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
+        return ['id' => $r->id, 'receipt_link' => $p['receipt_link'] ?? null, 'subsidiary_obligation' => $obligation && $allocation->state !== 'unassigned' && empty($p['receipt_link']) ? ['state' => $obligation->state, 'version' => $obligation->version, 'last_error_code' => $obligation->last_error_code] : null, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
             'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
             'payer' => $payer ?? app(CollectionPayerEvidenceService::class)->forReceipt($r), 'captured_payer_receipts' => $capturedCount,
-            'usage' => $usage, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
+            'usage' => $usage, 'activation' => $activation, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',
             'provider_at' => $r->provider_at, 'received_at' => $r->first_received_at, 'created_at' => $r->created_at, 'historical_only' => $r->historical_only,
             'funds_state' => $r->funds_state, 'evidence_level' => $r->evidence_level, 'decision_state' => $sale ? 'sales_'.$sale->state : ($savedChoice && ! $r->historical_only && ! $r->conflicts && in_array($r->funds_state, ['observed', 'statement_verified']) ? 'purchase_saved' : $r->decision_state),
             'sale' => $sale ? ['id' => $sale->id, 'state' => $sale->state, 'items_count' => $sale->items->count(), 'confirmed_count' => $sale->items->where('state', 'confirmed')->count()] : null,
@@ -185,10 +219,10 @@ class CollectionPaymentController extends Controller
             'match_suggestions' => $suggestions, 'match_needs_choice' => (bool) ($matching['needs_choice'] ?? false),
             'reviewed_at' => $r->reviewed_at, 'version' => $r->version, 'clients' => $clients, 'purchase' => $p,
             'allocation' => $allocation ? ['id' => $allocation->id, 'state' => $allocation->state, 'version' => $allocation->version, 'payment_id' => $allocation->payment_id,
-                'decision_source' => $allocation->decision_source, 'effects' => $allocation->effects->map(fn ($e) => ['id' => $e->id, 'client_id' => $e->client_id,
+                'decision_source' => $allocation->decision_source, 'effects' => $allocation->effects->map(fn ($e) => ['id' => $e->id, 'client_id' => $e->client_id, 'correction_id' => $e->correction_id,
                     'kind' => $e->effect_kind, 'state' => $e->state, 'platform_id' => $e->platform_id, 'interval' => $e->contribution,
                     'superseded_at' => $e->superseded_at, 'last_error_code' => $e->last_error_code])] : null,
-            'reasons' => array_merge(data_get($r->candidate_snapshot, 'reasons', []), $r->conflicts ?? [])];
+            'reasons' => empty($p['receipt_link']) ? array_merge(data_get($r->candidate_snapshot, 'reasons', []), $r->conflicts ?? []) : []];
     }
 
     public function reviewContext(Request $request, int $receipt, CollectionReviewContextService $context)
@@ -238,7 +272,7 @@ class CollectionPaymentController extends Controller
         $phone = app(CollectionPrivacy::class)->tzPhone($term);
         $payerClients = $phone ? CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone))->whereNull('revoked_at')->where('valid_until', '>', now())->pluck('client_id')->all() : [];
         $clients = $context->selectable()->whereIn('platform_id', $platforms)->where(function ($q) use ($term, $payerClients, $phone) {
-            $q->where('name', 'like', '%'.$term.'%')->orWhere('phone_normalized', 'like', '%'.($phone ?? $term).'%')->orWhere('wp_post_id', $term)->orWhereIn('id', $payerClients);
+            $q->where('name', 'like', '%'.$term.'%')->orWhere('wp_profile_permalink', $term)->orWhere('wp_profile_permalink', rtrim($term, '/').'/')->orWhere('phone_normalized', 'like', '%'.($phone ?? $term).'%')->orWhere('wp_post_id', $term)->orWhereIn('id', $payerClients);
         })->orderBy('name')->limit(20)->get();
 
         return response()->json(['clients' => $context->clientRows($clients), 'prices' => ProductPrice::with('product:id,name,tier,platform_id')->where('is_active', true)->where('currency', $r->currency)
@@ -298,9 +332,18 @@ class CollectionPaymentController extends Controller
         $this->enabled();
         $r = $this->access->receipt($request->user(), $receipt);
         abort_unless($r->allocation, 422);
-        $v = $request->validate(['target_intent_id' => 'nullable|uuid', 'action' => 'required|in:reassign,change_package,undo_effect', 'expected_version' => 'required|integer', 'reason' => 'required|string|min:3|max:1000']);
+        $v = $request->validate(['target_intent_id' => 'nullable|uuid', 'action' => 'required|in:reassign,change_package,undo_effect',
+            'expected_version' => 'required|integer|min:1', 'reason' => 'nullable|string|min:3|max:1000',
+            'client_id' => 'nullable|integer|min:1', 'product_price_id' => 'nullable|integer|min:1']);
+        $reason = trim((string) ($v['reason'] ?? '')) ?: ($v['action'] === 'undo_effect' ? 'Staff removed this payment activation.' : 'Staff corrected the profile or package for this payment.');
+        if ($v['action'] !== 'undo_effect' && empty($v['target_intent_id'])) {
+            abort_unless(! empty($v['client_id']) && ! empty($v['product_price_id']), 422, 'Choose the intended profile and package.');
 
-        return response()->json($corrections->preview($r->allocation, $request->user(), $v['action'], $v['target_intent_id'] ?? null, $v['expected_version'], $v['reason']));
+            return response()->json($corrections->previewPurchase($r->allocation, $request->user(), (int) $v['client_id'],
+                (int) $v['product_price_id'], (int) $v['expected_version'], $reason));
+        }
+
+        return response()->json($corrections->preview($r->allocation, $request->user(), $v['action'], $v['target_intent_id'] ?? null, $v['expected_version'], $reason));
     }
 
     public function executeCorrection(Request $request, string $correction, CollectionCorrectionService $corrections)
@@ -325,6 +368,7 @@ class CollectionPaymentController extends Controller
 
         return response()->json(['unread_receipts' => (clone $events)->count('id'), 'cursor' => $max,
             'device_needs_attention' => $health['needs_attention'],
+            'device_attention' => collect($health['devices'])->contains(fn ($d) => ($d['state'] ?? null) === 'account_review') ? 'wallet' : ($health['needs_attention'] ? 'phone' : null),
             'last_contact_at' => collect($health['devices'])->pluck('last_contact_at')->filter()->max()]);
     }
 
@@ -349,6 +393,47 @@ class CollectionPaymentController extends Controller
         $this->enabled();
 
         return response()->json($policies->update($request->user(), $account, $request->all()));
+    }
+
+    public function recordSignoff(Request $request, string $account, \App\Services\Collections\CollectionAutomationPolicy $automation)
+    {
+        $this->enabled();
+
+        return response()->json($automation->recordSignoff($request->user(), $account, $request->all()));
+    }
+
+    /** Payments the provider reversed or put on hold in the last 30 days, with whether service is still running and whether staff reviewed it. */
+    private function reversalAlerts(array $accountIds): array
+    {
+        $rows = CollectionReceipt::with(['allocation.effects', 'sale.items'])->whereIn('account_id', $accountIds)->whereIn('funds_state', ['reversed', 'disputed'])
+            ->where('updated_at', '>=', now()->subDays(30))->orderByDesc('updated_at')->limit(20)->get();
+        $reviewed = DB::table('collection_audit')->whereIn('receipt_id', $rows->pluck('id'))->where('action', 'like', 'reversal_reviewed%')
+            ->orderBy('id')->get(['receipt_id', 'action', 'context', 'created_at'])->keyBy('receipt_id');
+
+        return $rows->map(function (CollectionReceipt $r) use ($reviewed) {
+            $active = (bool) $r->allocation?->effects?->contains(fn ($e) => ! $e->superseded_at && $e->state === 'succeeded' && in_array($e->effect_kind ?? $e->kind ?? '', ['primary_paid', 'target_paid'], true))
+                || in_array($r->sale?->state, ['confirmed', 'partial'], true);
+            $review = $reviewed[$r->id] ?? null;
+
+            return ['id' => $r->id, 'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
+                'funds_state' => $r->funds_state, 'flagged_at' => $r->updated_at?->toIso8601String(), 'service_active' => $active,
+                'reviewed' => $review ? ['decision' => json_decode((string) $review->context, true)['decision'] ?? null, 'at' => \Illuminate\Support\Carbon::parse($review->created_at)->toIso8601String()] : null];
+        })->values()->all();
+    }
+
+    public function reviewReversal(Request $request, int $receipt)
+    {
+        $this->enabled();
+        $r = $this->access->receipt($request->user(), $receipt);
+        $v = $request->validate(['decision' => 'required|in:keep_service', 'note' => 'required|string|min:3|max:500']);
+        if (! in_array($r->funds_state, ['reversed', 'disputed'], true)) {
+            throw new \App\Services\Collections\CollectionException('receipt_not_reversed', 422);
+        }
+        DB::table('collection_audit')->insertOrIgnore(['receipt_id' => $r->id, 'account_id' => $r->account_id, 'actor_id' => $request->user()->id,
+            'action' => 'reversal_reviewed_service_kept', 'context' => json_encode(['decision' => 'Keep service active', 'note' => $v['note'], 'actor' => $request->user()->name]),
+            'dedupe_key' => 'reversal-review:'.$r->id, 'created_at' => now()]);
+
+        return response()->json(['reviewed' => true]);
     }
 
     public function readArrivals(Request $request)

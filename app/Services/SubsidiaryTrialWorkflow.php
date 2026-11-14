@@ -103,6 +103,9 @@ class SubsidiaryTrialWorkflow
 
     public function noGrant(FreeTrialRequest $r, Client $client): bool
     {
+        if (! empty($r->terms_json['collection_obligation_id'])) {
+            return false; // The collection coordinator verifies same-tier coverage through the pinned interval end.
+        }
         $coverage = app(SubsidiaryActivationPreviewService::class)->coverage($client);
         if (! $coverage) {
             return false;
@@ -172,8 +175,6 @@ class SubsidiaryTrialWorkflow
             abort_unless($helper->same($r->terms_json['subsidiary_basis'] ?? [], $this->basis($r->terms_json)), 409, 'Approved package terms changed during profile resolution.');
             abort_unless($helper->same($identity['source'], $helper->contact($main->client)) && (int) $resolved->platform_id === (int) $r->platform_id
                 && $resolved->wp_post_id > 0 && $resolved->wp_user_id > 0 && $resolved->phone_normalized === $identity['seed']['phone_normalized'], 409, 'Resolved identity conflicts with the approved customer.');
-            $email = $helper->email($identity['seed']['email']);
-            abort_if($email && $helper->email($resolved->email) && $email !== $helper->email($resolved->email), 409, 'Resolved email conflicts with the approved customer.');
             $resolution = $helper->resolve($main, Platform::findOrFail($r->platform_id));
             abort_unless($resolution['client_id'] === $resolved->id && ! in_array($resolution['kind'], ['ambiguous', 'unavailable']), 409, 'Profile resolution needs review.');
             $terms = $r->terms_json;
@@ -209,11 +210,6 @@ class SubsidiaryTrialWorkflow
             }
             $phone = \App\Support\PhoneNormalizer::normalize($data['phone'] ?? null, $target->phone_prefix);
             if ($phone !== $r->terms_json['subsidiary_seed']['phone_normalized'] || ! in_array($data['post_status'] ?? '', ['publish', 'private', 'draft', 'pending'])) {
-                return $r;
-            }
-            $helper = app(SubsidiaryActivationPreviewService::class);
-            $email = $helper->email($r->terms_json['subsidiary_seed']['email'] ?? '');
-            if ($email && $helper->email($data['email'] ?? '') && $email !== $helper->email($data['email'])) {
                 return $r;
             }
             DB::transaction(function () use ($r) {

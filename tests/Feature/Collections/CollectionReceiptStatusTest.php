@@ -40,7 +40,8 @@ class CollectionReceiptStatusTest extends CollectionWorkflowTestCase
         $this->getJson('/api/crm/collections/receipts/'.$r->id)->assertOk()->assertJsonPath('usage.state', 'already_recorded')
             ->assertJsonPath('usage.matches.0.deal.id', $d->id)->assertJsonPath('usage.matches.0.destination', 'not_verified')
             ->assertJsonPath('usage.matches.0.responsibility.actor.id', $actor->id);
-        $this->getJson('/api/crm/collections/receipts?state=already_recorded')->assertOk()->assertJsonPath('total', 1);
+        $this->getJson('/api/crm/collections/receipts?state=already_recorded')->assertOk()->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.activation.kind', 'staff')->assertJsonPath('data.0.activation.actor.id', $actor->id)->assertJsonPath('data.0.activation.actor.name', $actor->name);
         $this->getJson('/api/crm/collections/receipts?state=needs_action')->assertOk()->assertJsonPath('total', 0);
         $this->assertSame($before, DB::table('payments')->count());
         $this->assertDatabaseCount('collection_sales_sessions', 0);

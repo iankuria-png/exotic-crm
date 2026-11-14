@@ -103,6 +103,49 @@ class SubsidiaryActivationSummaryTest extends TestCase
         app(SubsidiaryActivationPreviewService::class)->validate($admin, $main->fresh('client.platform'), $input, app(SubsidiaryTrialService::class)->previewForDeal($main->fresh(), $target, $client->id));
     }
 
+    public function test_unique_phone_reuses_a_target_with_a_different_login_email(): void
+    {
+        [$source, $target, $main, $admin, $client] = $this->fixture();
+        $client->update(['email' => 'different.login@customer.test']);
+        // An unrelated profile sharing the source email must not defeat the unique phone match.
+        Client::factory()->create(['platform_id' => $target->id, 'phone_normalized' => '255700000999', 'email' => $main->client->email]);
+        $this->getJson('/api/crm/deals/'.$main->id.'/subsidiary-trial-preview?platform_id='.$target->id)
+            ->assertOk()->assertJsonPath('resolution.kind', 'existing')->assertJsonPath('resolution.client_id', $client->id)
+            ->assertJsonCount(1, 'resolution.candidates');
+        $this->assertDatabaseCount('free_trial_requests', 0);
+        Http::assertNothingSent();
+    }
+
+    public function test_email_alone_does_not_adopt_another_phone_and_new_account_terms_are_frozen(): void
+    {
+        [$source, $target, $main, $admin] = $this->fixture(false);
+        Client::factory()->create(['platform_id' => $target->id, 'phone_normalized' => '255700000999', 'email' => $main->client->email]);
+        $preview = app(SubsidiaryTrialService::class)->previewForDeal($main, $target);
+        $this->assertSame('create_if_needed', $preview['resolution']['kind']);
+        $trial = $this->requestFor($main, $target, $admin);
+        $this->assertTrue($trial->terms_json['subsidiary_seed']['separate_account']);
+        $payload = app(SubsidiaryClientResolver::class)->frozenPayload($trial->terms_json['subsidiary_seed'], 'fixture-request');
+        $this->assertTrue($payload['separate_account']);
+        $legacy = app(SubsidiaryClientResolver::class)->frozenPayload(['name' => 'Legacy', 'phone_normalized' => '255712345678'], 'legacy-request');
+        $this->assertArrayNotHasKey('separate_account', $legacy);
+        Http::assertNothingSent();
+    }
+
+    public function test_profile_resolution_binds_a_phone_match_with_a_different_email_without_creating_a_duplicate(): void
+    {
+        [$source, $target, $main, $admin] = $this->fixture(false);
+        $trial = $this->requestFor($main, $target, $admin);
+        $main->update(['pending_subsidiary_trial' => ['status' => 'pending', 'platform_id' => $target->id, 'trial_request_id' => $trial->id]]);
+        $client = Client::factory()->create(['platform_id' => $target->id, 'phone_normalized' => $main->client->phone_normalized,
+            'email' => 'independent.login@customer.test', 'profile_reverted_at' => null, 'profile_removal_requested_at' => null]);
+        $resolved = app(SubsidiaryTrialWorkflow::class)->bind($trial, $client, 'existing');
+        $this->assertSame($client->id, $resolved->client_id);
+        $this->assertSame('existing', $resolved->activation_result_json['profile_origin']);
+        $this->assertSame('independent.login@customer.test', $client->fresh()->email);
+        $this->assertDatabaseCount('clients', 2);
+        $this->assertDatabaseCount('trial_activation_operations', 0);
+    }
+
     public function test_duplicate_phone_requires_selection_and_generated_email_is_not_identity(): void
     {
         [$source, $target, $main, $admin, $client] = $this->fixture();
@@ -402,7 +445,7 @@ class SubsidiaryActivationSummaryTest extends TestCase
         Http::assertNothingSent();
     }
 
-    private function recoverKnownProfile(bool $expired): void
+    private function recoverKnownProfile(bool $expired, bool $differentEmail = false): void
     {
         [$source, $target, $main, $admin] = $this->fixture(false);
         $r = $this->requestFor($main, $target, $admin);
@@ -412,7 +455,7 @@ class SubsidiaryActivationSummaryTest extends TestCase
         $lookup = \Mockery::mock(SubsidiaryWpIdentityLookup::class);
         $lookup->shouldReceive('provisionRecord')->once()->with(\Mockery::type(Platform::class), $id)->andReturn(['status' => 'completed', 'payload_hash' => $hash, 'wp_post_id' => 10101, 'wp_user_id' => 20202]);
         $this->app->instance(SubsidiaryWpIdentityLookup::class, $lookup);
-        Http::fake(['https://target.example.test/*' => Http::response(['wp_post_id' => 10101, 'wp_user_id' => 20202, 'name' => $main->client->name, 'phone' => $main->client->phone_normalized, 'email' => $main->client->email, 'city' => $main->client->city, 'post_status' => 'private', 'client_type' => 'escort'])]);
+        Http::fake(['https://target.example.test/*' => Http::response(['wp_post_id' => 10101, 'wp_user_id' => 20202, 'name' => $main->client->name, 'phone' => $main->client->phone_normalized, 'email' => $differentEmail ? 'separate.login@customer.test' : $main->client->email, 'city' => $main->client->city, 'post_status' => 'private', 'client_type' => 'escort'])]);
         $out = app(TrialActivationService::class)->recover($r);
         $this->assertSame($expired ? 'pending' : 'approved', $out->status);
         $this->assertSame('resolved', $out->activation_result_json['profile_resolution']);
@@ -426,6 +469,11 @@ class SubsidiaryActivationSummaryTest extends TestCase
     public function test_completed_provision_ledger_recovers_exact_profile_without_trial_dispatch(): void
     {
         $this->recoverKnownProfile(false);
+    }
+
+    public function test_exact_provision_recovery_accepts_a_different_destination_login_email(): void
+    {
+        $this->recoverKnownProfile(false, true);
     }
 
     public function test_expired_authorization_requires_new_decision_after_profile_recovery(): void
@@ -524,6 +572,35 @@ class SubsidiaryActivationSummaryTest extends TestCase
         $match = $lookup->find($target, app(SubsidiaryActivationPreviewService::class)->seed($main, $target));
         $this->assertSame(['wp_post_id' => 510, 'wp_user_id' => 55], $match);
         $this->assertSame(520, $db->table('posts')->count());
+    }
+
+    public function test_authoritative_phone_lookup_ignores_login_email_differences(): void
+    {
+        [$source, $target, $main] = $this->fixture(false);
+        $db = $this->siteDatabase($target);
+        $db->table('users')->where('ID', 55)->update(['user_email' => 'another.login@customer.test']);
+        $lookup = \Mockery::mock(SubsidiaryWpIdentityLookup::class)->makePartial();
+        $lookup->shouldReceive('connection')->once()->andReturn($db);
+        $this->assertSame(['wp_post_id' => 510, 'wp_user_id' => 55], $lookup->find($target, app(SubsidiaryActivationPreviewService::class)->seed($main, $target)));
+    }
+
+    public function test_authoritative_email_only_match_does_not_block_creation_but_duplicate_phones_do(): void
+    {
+        [$source, $target, $main] = $this->fixture(false);
+        $db = $this->siteDatabase($target);
+        $db->table('postmeta')->delete();
+        $db->table('users')->where('ID', 55)->update(['user_email' => $main->client->email]);
+        $lookup = \Mockery::mock(SubsidiaryWpIdentityLookup::class)->makePartial();
+        $lookup->shouldReceive('connection')->twice()->andReturn($db);
+        $seed = app(SubsidiaryActivationPreviewService::class)->seed($main, $target);
+        $this->assertNull($lookup->find($target, $seed));
+        $db->table('postmeta')->insert([
+            ['post_id' => 509, 'meta_key' => 'phone', 'meta_value' => '0712345678'],
+            ['post_id' => 510, 'meta_key' => 'phone', 'meta_value' => '255712345678'],
+        ]);
+        $this->expectException(\Symfony\Component\HttpKernel\Exception\HttpException::class);
+        $this->expectExceptionMessage('Multiple matching site profiles found.');
+        $lookup->find($target, $seed);
     }
 
     public static function siteHostCases(): array

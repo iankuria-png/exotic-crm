@@ -169,7 +169,7 @@ class CollectionPurchaseService
         $p = $intent->purchase_snapshot;
         $client = Client::findOrFail($intent->client_id);
         $price = ProductPrice::with('product')->find($p['product_price_id']);
-        if (! in_array($intent->authority, ['standing_agreement', 'reviewed_quote', 'matched_catalogue'], true)
+        if (! in_array($intent->authority, ['standing_agreement', 'reviewed_quote', 'matched_catalogue', 'matched_receipt_history'], true)
             || ! in_array($p['identity_authority'] ?? '', ['reviewed_payer', 'staff_reviewed_quote', 'rule_supported_payer'], true)
             || ($p['stacking'] ?? '') !== 'same_tier') {
             throw new CollectionException('reviewed_purchase_authority_required');
@@ -189,7 +189,7 @@ class CollectionPurchaseService
             ->where('valid_from', '<=', $receipt->provider_at)->where(fn ($q) => $q->whereNull('valid_until')->orWhere('valid_until', '>', $receipt->provider_at))->exists()) {
             throw new CollectionException('destination_binding_missing', 422);
         }
-        if ($secondary = ($p['subsidiary'] ?? null)) {
+        if (! ($automatic && app(CollectionAutomationPolicy::class)->independentSubsidiary($receipt->account)) && ($secondary = ($p['subsidiary'] ?? null))) {
             $profile = $this->selectableClients()->find($secondary['client_id']);
             if (! $profile || (int) $profile->platform_id !== (int) $secondary['platform_id']
                 || (int) $profile->wp_post_id !== (int) $secondary['wp_post_id'] || (int) $profile->wp_user_id !== (int) $secondary['wp_user_id']) {
@@ -210,7 +210,7 @@ class CollectionPurchaseService
             && (! data_get($receipt->account->policy, 'recurring_negotiated_enabled') || empty($p['discount_approved_by']) || empty($p['discount_source']))) {
             throw new CollectionException('recurring_negotiated_policy_disabled');
         }
-        if ($intent->authority === 'matched_catalogue') {
+        if (in_array($intent->authority, ['matched_catalogue', 'matched_receipt_history'], true)) {
             app(CollectionCataloguePurchaseMatch::class)->assertCurrent($intent, $receipt, $client);
         } elseif (($p['identity_authority'] ?? '') === 'rule_supported_payer') {
             throw new CollectionException('reviewed_purchase_authority_required');
@@ -226,7 +226,7 @@ class CollectionPurchaseService
             }
             $links = CollectionPayerLink::where('account_id', $receipt->account_id)->where('payer_fingerprint', $receipt->payer_fingerprint)
                 ->whereNull('revoked_at')->where('valid_until', '>', now())->get();
-            if ($intent->authority !== 'matched_catalogue' && (! $receipt->payer_fingerprint || $links->pluck('client_id')->unique()->count() !== 1
+            if (! in_array($intent->authority, ['matched_catalogue', 'matched_receipt_history'], true) && (! $receipt->payer_fingerprint || $links->pluck('client_id')->unique()->count() !== 1
                 || ! $links->contains(fn ($link) => $link->id === $intent->payer_link_id && $link->auto_allowed
                     && (int) $link->client_id === (int) $client->id && (int) $link->wp_post_id === (int) $client->wp_post_id && (int) $link->wp_user_id === (int) $client->wp_user_id))) {
                 throw new CollectionException('reviewed_unique_payer_required');

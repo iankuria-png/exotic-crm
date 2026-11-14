@@ -21,6 +21,7 @@ const failureMessages = {
     receipt_version_changed: 'New payment details arrived. Refresh the saved version and review your selections.',
     sale_version_changed: 'Another staff member updated this sale. Refresh its saved version before continuing.',
     activation_preview_changed: 'The service or customer details changed. Review activation again before continuing.',
+    saved_purchase_changed: 'The saved purchase choice has changed. Refresh to review the current profile and package.',
     refresh_activation_preview: 'This review expired. Review activation again before continuing.',
     refresh_subsidiary_preview: 'The subsidiary preview expired. Reopen its details to check the profile again.',
     subsidiary_sale_context_changed: 'The payment or selected profile changed. Refresh the subsidiary details before continuing.',
@@ -35,7 +36,7 @@ const failureMessages = {
     indefinite_active_coverage_requires_review: 'The site reports active coverage without an expiry date. Open the profile and ask a manager to review that coverage before replacing it.',
 };
 const failureMessage = error => Object.values(error.response?.data?.errors || {}).flat()[0] || failureMessages[error.response?.data?.reason] || error.response?.data?.message || 'Could not complete this step. Your selections are preserved.';
-const versionErrors = ['receipt_version_changed', 'sale_version_changed', 'activation_preview_changed', 'refresh_activation_preview', 'refresh_subsidiary_preview', 'subsidiary_sale_context_changed'];
+const versionErrors = ['receipt_version_changed', 'sale_version_changed', 'activation_preview_changed', 'saved_purchase_changed', 'refresh_activation_preview', 'refresh_subsidiary_preview', 'subsidiary_sale_context_changed'];
 const labels = { draft: 'Not activated', prepared: 'Waiting to activate', dispatching: 'Checking activation', unknown: 'Needs checking', needs_review: 'Needs checking', confirmed: 'Active', partial: 'Partly active', activating: 'Activating', canceled: 'Canceled', correcting: 'Correcting activation', unassigned: 'Payment allocation unassigned', correction_unknown: 'Correction needs checking' };
 function draft(row) {
     const needsApproval = Boolean(row?.state === 'draft' && row?.purchase?.receipt_discount_requested);

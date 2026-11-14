@@ -19,6 +19,24 @@ class CollectionWriterGuard
 
     private ?string $saleCorrection = null;
 
+    /** @var array{account_id: string, reference: string}|null */
+    private ?array $receiptSale = null;
+
+    /**
+     * Staff activating a receipt from the payments workspace own that receipt's purchase choices,
+     * including the automation's own match for the same payment. Choices for other receipts still block.
+     */
+    public function forReceiptSale(\App\Models\Collections\CollectionReceipt $receipt, Closure $callback): mixed
+    {
+        $previous = $this->receiptSale;
+        $this->receiptSale = ['account_id' => $receipt->account_id, 'reference' => $receipt->reference_norm];
+        try {
+            return $callback();
+        } finally {
+            $this->receiptSale = $previous;
+        }
+    }
+
     public function ownedSaleCorrection(\App\Models\Collections\CollectionSalesItem $item, string $correctionId, Closure $callback): mixed
     {
         $previous = $this->saleCorrection;
@@ -44,6 +62,7 @@ class CollectionWriterGuard
     /** Serialize captured-reference cash inserts with receipt claims, including legacy entry points. */
     public function paymentWrite(Payment $payment, Closure $callback): mixed
     {
+        $this->assertLinkedPayment($payment, false);
         if ($this->saleItem || ($payment->exists && ! $payment->isDirty(['platform_id', 'amount', 'currency', 'client_id', 'deal_id', 'transaction_reference', 'reference_number', 'reference_root'])) || ! Schema::hasTable('collection_sales_sessions')
             || ! in_array($payment->purpose, [null, Payment::PURPOSE_SUBSCRIPTION], true)) {
             return $callback();
@@ -98,7 +117,9 @@ class CollectionWriterGuard
         }
         $pilot = CollectionPurchaseIntent::whereNull('revoked_at')->where('valid_until', '>', now())
             ->where(fn ($q) => $q->where('client_id', $clientId)->orWhere('purchase_snapshot->subsidiary->client_id', $clientId))
-            ->whereIn('account_id', DB::table('collection_accounts')->whereIn('mode', ['assisted', 'auto'])->select('id'))->exists();
+            ->whereIn('account_id', DB::table('collection_accounts')->whereIn('mode', ['assisted', 'auto'])->select('id'))
+            ->when($this->receiptSale, fn ($q) => $q->where(fn ($q) => $q->where('account_id', '!=', $this->receiptSale['account_id'])
+                ->orWhereNull('provider_reference')->orWhere('provider_reference', '!=', $this->receiptSale['reference'])))->exists();
         $saleOwnsClient = $this->saleItem && DB::table('collection_sales_items')->where('id', $this->saleItem)->where('client_id', $clientId)->exists();
         if ($pilot && ! $this->owner && ! $saleOwnsClient) {
             throw new CollectionException('use_collection_payment_workspace');
@@ -107,6 +128,7 @@ class CollectionWriterGuard
 
     public function assertPayment(Payment $payment): void
     {
+        $this->assertLinkedPayment($payment);
         if (! in_array($payment->purpose, [null, Payment::PURPOSE_SUBSCRIPTION], true)) {
             return;
         }
@@ -160,6 +182,18 @@ class CollectionWriterGuard
                     throw new CollectionException('receipt_principal_already_reserved');
                 }
             }
+        }
+    }
+
+    private function assertLinkedPayment(Payment $payment, bool $force = true): void
+    {
+        $data = $payment->exists ? $payment->getOriginal('payment_data') : [];
+        $allocation = data_get($data, 'duplicate_receipt_link.allocation_id') ?: data_get($data, 'receipt_link.allocation_id');
+        if ($allocation && $allocation !== $this->owner && ($force || $payment->isDirty([
+            'amount', 'currency', 'client_id', 'deal_id', 'product_id', 'status', 'purpose', 'transaction_reference',
+            'reference_number', 'reference_root', 'provider_environment', 'payment_data', 'resolution_code', 'resolution_meta_json',
+        ]))) {
+            throw new CollectionException('linked_receipt_payment_is_managed');
         }
     }
 

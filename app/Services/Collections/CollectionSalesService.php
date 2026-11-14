@@ -69,8 +69,9 @@ class CollectionSalesService
                 throw new CollectionException('shared_payment_requires_one_market', 422);
             }
             $platform = (int) $client->platform_id;
-            $saved = ! empty($value['saved_intent_id']) ? CollectionPurchaseIntent::where('account_id', $receipt->account_id)
-                ->where('provider_reference', $receipt->reference_norm)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->findOrFail($value['saved_intent_id'])
+            $saved = ! empty($value['saved_intent_id']) ? (CollectionPurchaseIntent::where('account_id', $receipt->account_id)
+                ->where('provider_reference', $receipt->reference_norm)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->find($value['saved_intent_id'])
+                    ?? throw new CollectionException('saved_purchase_changed'))
                 : CollectionPurchaseIntent::where('account_id', $receipt->account_id)->where('provider_reference', $receipt->reference_norm)
                     ->where('client_id', $client->id)->where('authority', 'reviewed_quote')->whereNull('revoked_at')->orderByDesc('created_at')->first();
             if ($saved && ((int) $saved->client_id !== $client->id || (int) $saved->purchase_snapshot['product_price_id'] !== (int) $value['product_price_id']
@@ -150,7 +151,7 @@ class CollectionSalesService
             'remainder_reason' => $remainder ? trim($input['remainder_reason']) : null, 'items' => $items,
             'blocked_reasons' => array_values(array_unique($blockers)), 'can_activate' => ! $blockers];
         $projection['preview_token'] = Crypt::encryptString(json_encode(['actor' => $actor->id, 'receipt' => $receipt->id,
-            'digest' => $this->digest($projection), 'expires' => now()->addMinutes(5)->timestamp], JSON_THROW_ON_ERROR));
+            'digest' => $this->previewDigest($projection), 'expires' => now()->addMinutes(5)->timestamp], JSON_THROW_ON_ERROR));
 
         return $projection;
     }
@@ -255,6 +256,22 @@ class CollectionSalesService
         }
 
         return $this->digest($input);
+    }
+
+    /**
+     * Activation compares previews taken seconds apart (around a live WordPress read). Only decision
+     * data counts: the status clock and background sync time are display-only and must not block it.
+     */
+    public function previewDigest(array $preview): string
+    {
+        unset($preview['preview_token']);
+        foreach ($preview['items'] ?? [] as $index => $item) {
+            if (is_array($item['client']['status'] ?? null)) {
+                unset($preview['items'][$index]['client']['status']['checked_at'], $preview['items'][$index]['client']['status']['last_synced_at']);
+            }
+        }
+
+        return $this->digest($preview);
     }
 
     public function digest(array $data): string

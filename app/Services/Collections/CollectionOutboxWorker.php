@@ -33,12 +33,14 @@ class CollectionOutboxWorker
                     'decide' => app(CollectionDecisionService::class)->evaluate((int) $row->subject_id),
                     'fulfill' => $this->fulfill($row->subject_id),
                     'benefits' => $this->benefits($row->subject_id),
+                    'subsidiary' => $this->subsidiary($row->subject_id),
                     'sales_dispatch', 'sales_check', 'sales_benefits', 'sales_trial' => $this->saleJob($row),
                     default => throw new CollectionException('unknown_outbox_kind'),
                 };
                 DB::table('collection_outbox')->where('id', $id)->update(['completed_at' => now(), 'last_error_code' => null]);
                 $done++;
             } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('Collection task held for recovery.', ['outbox_id' => $id, 'kind' => $row->kind ?? null, 'exception_class' => get_class($e), 'code' => $e->getCode()]);
                 DB::table('collection_outbox')->where('id', $id)->update(['available_at' => now()->addMinutes(5), 'last_error_code' => $e instanceof CollectionException ? $e->reason : 'processing_failed']);
                 $held++;
             } finally {
@@ -47,6 +49,14 @@ class CollectionOutboxWorker
         }
 
         return compact('done', 'held');
+    }
+
+    private function subsidiary(string $id): void
+    {
+        $owner = app(CollectionSubsidiaryFulfillmentService::class)->resume($id);
+        if (! in_array($owner->state, ['succeeded', 'already_active', 'canceled'])) {
+            throw new CollectionException('subsidiary_recovery_pending');
+        }
     }
 
     private function fulfill(string $id): void

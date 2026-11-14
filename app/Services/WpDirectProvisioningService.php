@@ -129,7 +129,8 @@ class WpDirectProvisioningService
                 array_values(array_filter(array_map(
                     'intval',
                     is_array($payload['relinkable_post_ids'] ?? null) ? $payload['relinkable_post_ids'] : []
-                )))
+                ))),
+                ! empty($payload['separate_account'])
             );
 
             $postId = $this->createProfilePost(
@@ -436,7 +437,8 @@ class WpDirectProvisioningService
         string $requestedUsername,
         string $password,
         string $website,
-        array $relinkablePostIds = []
+        array $relinkablePostIds = [],
+        bool $separateAccount = false
     ): array {
         $users = DB::connection($this->connectionName)->table('users');
         $options = DB::connection($this->connectionName)->table('options');
@@ -453,6 +455,13 @@ class WpDirectProvisioningService
             $existingByEmail = $users
                 ->whereRaw('LOWER(user_email) = ?', [mb_strtolower($resolvedEmail)])
                 ->first();
+        }
+
+        if ($existingByEmail && $separateAccount) {
+            // A completed phone lookup found no paired profile. Keep any other email owner's account intact.
+            $resolvedEmail = $this->buildPlaceholderEmail();
+            $placeholderEmailUsed = true;
+            $existingByEmail = null;
         }
 
         if ($existingByEmail) {
@@ -988,6 +997,7 @@ class WpDirectProvisioningService
                 'website',
                 'client_type',
                 'agency_wp_user_id',
+                'separate_account',
             ],
             WpProfileFieldCatalog::createProvisioningFields((string) ($payload['client_type'] ?? 'escort'))
         ));

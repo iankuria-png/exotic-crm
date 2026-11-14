@@ -3,6 +3,7 @@
 namespace App\Services\Collections;
 
 use App\Models\Client;
+use App\Models\Collections\CollectionReceipt;
 use App\Models\Deal;
 use App\Models\Payment;
 use Illuminate\Database\Eloquent\Builder;
@@ -18,15 +19,16 @@ class CollectionReceiptStatusService
             $q->selectRaw('1')->from('collection_account_platforms as bound')
                 ->whereColumn('bound.account_id', 'collection_receipts.account_id')
                 ->whereColumn('bound.platform_id', $alias.'.platform_id');
-        })->where(function ($q) use ($alias, $table) {
-            foreach ($table === 'payments' ? ['reference_root', 'transaction_reference', 'reference_number'] : ['reference_root'] as $column) {
-                $q->orWhereColumn($alias.'.'.$column, 'collection_receipts.reference_norm')
-                    ->orWhereExists(fn ($a) => $a->selectRaw('1')->from('collection_receipt_aliases as alias_ref')
-                        ->whereColumn('alias_ref.receipt_id', 'collection_receipts.id')
-                        ->whereColumn('alias_ref.account_id', 'collection_receipts.account_id')
-                        ->whereColumn('alias_ref.reference', $alias.'.'.$column));
-            }
-        });
+        })->when($table === 'payments', fn ($q) => $q->where(fn ($q) => $q->whereNull($alias.'.resolution_code')->orWhere($alias.'.resolution_code', '!=', Payment::RESOLUTION_RECEIPT_DUPLICATE)))
+            ->where(function ($q) use ($alias, $table) {
+                foreach ($table === 'payments' ? ['reference_root', 'transaction_reference', 'reference_number'] : ['reference_root'] as $column) {
+                    $q->orWhereColumn($alias.'.'.$column, 'collection_receipts.reference_norm')
+                        ->orWhereExists(fn ($a) => $a->selectRaw('1')->from('collection_receipt_aliases as alias_ref')
+                            ->whereColumn('alias_ref.receipt_id', 'collection_receipts.id')
+                            ->whereColumn('alias_ref.account_id', 'collection_receipts.account_id')
+                            ->whereColumn('alias_ref.reference', $alias.'.'.$column));
+                }
+            });
     }
 
     public function withUsage(Builder $query): Builder
@@ -50,6 +52,19 @@ class CollectionReceiptStatusService
 
     public function filter(Builder $query, string $state): void
     {
+        if ($state === 'needs_action') {
+            $query->where(function ($q) {
+                $q->where(function ($unrecorded) {
+                    $unrecorded->whereDoesntHave('sale')->whereDoesntHave('allocation')
+                        ->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
+                        ->where(fn ($c) => $c->whereNull('conflicts')->orWhereJsonLength('conflicts', 0))
+                        ->whereNotExists($this->referenceQuery('payments', 'cash')->selectRaw('1'))
+                        ->whereNotExists($this->referenceQuery('manual_payment_bundles', 'bundle')->selectRaw('1'));
+                })->orWhereHas('allocation.subsidiaryObligation', fn ($o) => $o->whereIn('state', ['needs_approval', 'needs_profile', 'uncertain']));
+            });
+
+            return;
+        }
         $query->whereDoesntHave('sale')->whereDoesntHave('allocation');
         if ($state === 'needs_action') {
             $query->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
@@ -78,7 +93,7 @@ class CollectionReceiptStatusService
         $allAliases = DB::table('collection_receipt_aliases')->whereIn('receipt_id', $ids)->get();
         $refs = $receipts->pluck('reference_norm')->merge($allAliases->pluck('reference'))->unique();
         $mapping = DB::table('collection_account_platforms')->whereIn('account_id', $receipts->pluck('account_id'))->get();
-        $payments = Payment::with(['client', 'deal'])->whereIn('platform_id', $mapping->pluck('platform_id'))
+        $payments = Payment::with(['client', 'deal'])->withoutReceiptDuplicates()->whereIn('platform_id', $mapping->pluck('platform_id'))
             ->where(fn ($q) => $q->whereIn('reference_root', $refs)->orWhereIn('transaction_reference', $refs)->orWhereIn('reference_number', $refs))
             ->orderBy('id')->limit(626)->get();
         $bundles = DB::table('manual_payment_bundles')->whereIn('platform_id', $mapping->pluck('platform_id'))->whereIn('reference_root', $refs)->limit(626)->get();
@@ -114,6 +129,50 @@ class CollectionReceiptStatusService
         }
 
         return $out;
+    }
+
+    /** Advisory candidates only: a suffixed code never proves another cash receipt. */
+    public function relatedPayments(CollectionReceipt $receipt): array
+    {
+        $references = [$receipt->reference_norm, ...DB::table('collection_receipt_aliases')
+            ->where('receipt_id', $receipt->id)->where('account_id', $receipt->account_id)->pluck('reference')->all()];
+        $references = array_values(array_unique($references));
+        $platformIds = DB::table('collection_account_platforms')->where('account_id', $receipt->account_id)->pluck('platform_id');
+        $payments = Payment::with(['client', 'deal', 'confirmedBy'])->whereIn('platform_id', $platformIds)
+            ->where('id', '!=', $receipt->allocation?->payment_id ?? 0)
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->where(fn ($q) => $q->whereNull('record_classification')->orWhere('record_classification', 'live'))
+            ->where(fn ($q) => $q->whereNull('provider_environment')->orWhere('provider_environment', '!=', 'sandbox'))
+            ->where(function ($q) use ($references) {
+                foreach ($references as $reference) {
+                    $prefix = str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $reference).'%';
+                    foreach (['reference_root', 'transaction_reference', 'reference_number'] as $column) {
+                        $q->orWhereRaw($column." LIKE ? ESCAPE '!'", [$prefix]);
+                    }
+                }
+            })->orderBy('id')->limit(26)->get();
+        $matches = $payments->filter(function (Payment $payment) use ($references) {
+            if ($payment->isClassifiedTest() || data_get($payment->payment_data, 'test_mode')) {
+                return false;
+            }
+            foreach ($references as $reference) {
+                foreach ([$payment->reference_root, $payment->transaction_reference, $payment->reference_number] as $candidate) {
+                    if (preg_match('~^'.preg_quote($reference, '~').'(?:\s*/\s*[1-9][0-9]*)?$~D', (string) $candidate)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        });
+
+        return ['complete' => $payments->count() < 26, 'matches' => $matches->take(25)->map(fn (Payment $payment) => [
+            'payment_id' => $payment->id, 'reference' => $payment->transaction_reference ?: $payment->reference_root,
+            'status' => $payment->status, 'amount' => $payment->amount, 'currency' => $payment->currency,
+            'client' => $payment->client ? ['id' => $payment->client->id, 'name' => $payment->client->name] : null,
+            'deal' => $payment->deal?->only(['id', 'status', 'plan_type', 'activated_at', 'expires_at']),
+            'recorded_by' => $payment->confirmedBy?->name,
+        ])->values()->all()];
     }
 
     public function clients(Collection $clients): array

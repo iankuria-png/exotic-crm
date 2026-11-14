@@ -24,9 +24,60 @@ use Illuminate\Support\Str;
 
 class CollectionCorrectionService
 {
+    /** A staff correction chooses a profile and package directly; purchase authority is internal. */
+    public function previewPurchase(CollectionAllocation $allocation, User $actor, int $clientId, int $priceId, int $version, string $reason): CollectionCorrection
+    {
+        $this->authorize($allocation, $actor);
+        if ($allocation->version !== $version) {
+            throw new CollectionException('correction_preview_stale_or_held', 409);
+        }
+        $client = Client::findOrFail($clientId);
+        $independent = ($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent';
+        $purchases = app(CollectionPurchaseService::class);
+        $intent = $purchases->prepare($allocation->receipt->account, $client, $actor, [
+            'product_price_id' => $priceId, 'authority' => 'reviewed_quote',
+            'subsidiary_client_id' => (int) $clientId === (int) $allocation->purchase_snapshot['client_id'] ? data_get($allocation->purchase_snapshot, 'subsidiary.client_id') : null,
+            'provider_reference' => $allocation->receipt->reference_norm, 'valid_until' => now()->addMinutes(15),
+        ], ! $independent);
+        if ($independent) {
+            $intent->purchase_snapshot = array_merge($intent->purchase_snapshot, [
+                'subsidiary_mode' => 'independent', 'subsidiary_platform_id' => $allocation->purchase_snapshot['subsidiary_platform_id'],
+            ]);
+        }
+        // Keep an existing approved discount when staff keeps the purchased price option.
+        $original = $allocation->purchase_snapshot;
+        if ((int) $priceId === (int) $original['product_price_id'] && ! empty($original['discount_approved_by'])
+            && ! empty($original['discount_source']) && ! empty($original['original_amount'])
+            && (int) $original['catalogue_minor'] === (int) $intent->purchase_snapshot['catalogue_minor']) {
+            $intent->purchase_snapshot = array_merge($intent->purchase_snapshot, array_intersect_key($original, array_flip([
+                'amount_minor', 'discount_approved_by', 'discount_source', 'original_amount', 'discount_percentage',
+            ])));
+        }
+        $purchases->validate($intent, $allocation->receipt, false);
+        if ((int) $client->platform_id !== (int) $allocation->purchase_snapshot['platform_id']) {
+            throw new CollectionException('cross_market_correction_requires_recovery', 422);
+        }
+        DB::transaction(function () use ($allocation, $version, $intent, $purchases, $actor) {
+            $current = CollectionAllocation::lockForUpdate()->findOrFail($allocation->id);
+            if ($current->version !== $version) {
+                throw new CollectionException('correction_preview_stale_or_held', 409);
+            }
+            $intent->save();
+            $purchases->audit($allocation->receipt, $actor->id, 'purchase_authority_reviewed', [
+                'intent_id' => $intent->id, 'purchase' => $intent->purchase_snapshot, 'purpose' => 'payment_correction',
+            ]);
+        });
+        $action = (int) $clientId === (int) $allocation->purchase_snapshot['client_id'] ? 'change_package' : 'reassign';
+
+        return $this->preview($allocation, $actor, $action, $intent->id, $version, $reason);
+    }
+
     public function preview(CollectionAllocation $allocation, User $actor, string $action, ?string $targetIntentId, int $version, string $reason): CollectionCorrection
     {
         $this->authorize($allocation, $actor);
+        if ($action === 'undo_effect' && $allocation->state === 'unassigned') {
+            throw new CollectionException('activation_already_removed', 409);
+        }
         if ($allocation->version !== $version || ! in_array($action, ['undo_effect', 'reassign', 'change_package']) || trim($reason) === '') {
             throw new CollectionException('correction_version_or_action_invalid', 422);
         }
@@ -50,6 +101,7 @@ class CollectionCorrectionService
             app(CollectionGate::class)->assertFunds($r);
             if ($target) {
                 app(CollectionPurchaseService::class)->validate($target, $r, false);
+                $this->assertNoRelatedPayments($allocation);
                 if ($target->platform_id !== (int) $allocation->purchase_snapshot['platform_id']) {
                     throw new CollectionException('cross_market_correction_requires_recovery');
                 }
@@ -101,6 +153,9 @@ class CollectionCorrectionService
 
     public function execute(CollectionCorrection $correction, User $actor, int $version, string $requestKey): CollectionCorrection
     {
+        if ($correction->action === 'link_existing') {
+            throw new CollectionException('use_saved_subscription_link');
+        }
         $allocation = CollectionAllocation::findOrFail($correction->allocation_id);
         $this->authorize($allocation, $actor);
         if ($correction->target_intent_id) {
@@ -122,6 +177,7 @@ class CollectionCorrectionService
             if ($c->version !== $version || $c->allocation_version !== $a->version || $c->expires_at->isPast() || ! $c->preview['can_execute']) {
                 throw new CollectionException('correction_preview_stale_or_held');
             }
+            app(CollectionSubsidiaryFulfillmentService::class)->fence($a);
             app(CollectionMatchExclusionService::class)->record($a->receipt, (int) $a->purchase_snapshot['client_id'],
                 isset($c->preview['target_purchase']['client_id']) ? (int) $c->preview['target_purchase']['client_id'] : null,
                 'allocation-correction:'.$c->id, $actor->id, $c->reason);
@@ -131,6 +187,7 @@ class CollectionCorrectionService
             app(CollectionGate::class)->assertFunds($a->receipt);
             $this->assertBenefitsReversible($a);
             if ($c->target_intent_id) {
+                $this->assertNoRelatedPayments($a);
                 $target = CollectionPurchaseIntent::lockForUpdate()->findOrFail($c->target_intent_id);
                 app(CollectionPurchaseService::class)->validate($target, $a->receipt, false);
                 if ($target->version !== $c->preview['target_intent_version']) {
@@ -168,6 +225,9 @@ class CollectionCorrectionService
 
     public function resume(CollectionCorrection $correction, User $actor): CollectionCorrection
     {
+        if ($correction->action === 'link_existing') {
+            throw new CollectionException('use_saved_subscription_link');
+        }
         $a = CollectionAllocation::findOrFail($correction->allocation_id);
         $this->authorize($a, $actor);
         if (in_array($correction->state, ['verified', 'verified_release_pending'], true)) {
@@ -195,6 +255,7 @@ class CollectionCorrectionService
                     app(CollectionCorrectionOwnership::class)->acquireAll($correction->id, $profiles);
                     $correction->update(['state' => 'source_correcting']);
                     foreach (CollectionBenefitEffect::where('correction_id', $correction->id)->where('effect_kind', 'source_compensation')->orderBy('client_id')->get() as $effect) {
+                        $this->repairLegacyCompensation($a, $effect, $actor);
                         app(CollectionFulfillmentService::class)->dispatchEffect($a, $effect);
                     }
                     if ($correction->target_intent_id) {
@@ -305,14 +366,8 @@ class CollectionCorrectionService
         if (($current['fingerprint'] ?? '') !== ($expected['fingerprint'] ?? '')) {
             throw new CollectionException('untracked_entitlement_change_requires_recovery');
         }
-        $expiryKey = ($target['post_type'] ?? '') === 'agency' ? 'agency_expire' : 'escort_expire';
-        $target['meta'][$expiryKey] = (string) $cursor;
-        foreach (['premium_expire' => 'premium', 'featured_expire' => 'featured', 'vvip_expire' => 'vvip'] as $expiry => $flag) {
-            $target['meta'][$expiry] = ($target['meta'][$flag] ?? '') === '1' ? (string) $cursor : '';
-        }
-        if ($cursor <= now()->timestamp) {
-            $target['post_status'] = $effect->before_state['post_status'] === 'private' ? 'private' : 'publish';
-        }
+        // WordPress restores the immutable preimage, including empty and absent metadata.
+        // The numeric summary may be zero; the original stored string must stay unchanged.
 
         return ['source_effect_id' => $effect->id, 'client_id' => $effect->client_id, 'platform_id' => $effect->platform_id,
             'wp_post_id' => $effect->wp_post_id, 'wp_user_id' => $effect->wp_user_id, 'deal_id' => $effect->deal_id,
@@ -321,12 +376,82 @@ class CollectionCorrectionService
                 'crm_deal_id' => (int) ($target['meta']['crm_deal_id'] ?? 0), 'post_status' => $target['post_status'], 'restore_snapshot' => $target]];
     }
 
+    /** Recover only the old empty-expiry payload that could never pass the v2 preimage check. */
+    private function repairLegacyCompensation(CollectionAllocation $allocation, CollectionBenefitEffect $effect, User $actor): void
+    {
+        if (! in_array($effect->state, ['prepared', 'effect_unknown', 'needs_review'], true)) {
+            return;
+        }
+        $target = $effect->target_state;
+        $source = CollectionBenefitEffect::find($target['source_operation_id'] ?? '');
+        if (! $source || $source->allocation_id !== $allocation->id || $source->state !== 'succeeded'
+            || $source->platform_id !== $effect->platform_id || $source->wp_post_id !== $effect->wp_post_id
+            || $source->wp_user_id !== $effect->wp_user_id || $source->client_id !== $effect->client_id) {
+            throw new CollectionException('original_compensation_preimage_required');
+        }
+        $original = $source->before_state;
+        $digest = fn ($value) => app(CollectionSalesService::class)->digest($value);
+        if ($digest($target['restore_snapshot'] ?? []) === $digest($original)) {
+            return;
+        }
+        $legacy = $original;
+        $policy = app(CollectionEntitlementPolicy::class);
+        $expiry = $policy->expiry($original);
+        $legacy['meta'][($original['post_type'] ?? '') === 'agency' ? 'agency_expire' : 'escort_expire'] = (string) $expiry;
+        foreach (['premium_expire' => 'premium', 'featured_expire' => 'featured', 'vvip_expire' => 'vvip'] as $key => $flag) {
+            $legacy['meta'][$key] = ($original['meta'][$flag] ?? '') === '1' ? (string) $expiry : '';
+        }
+        if ($expiry <= now()->timestamp) {
+            $legacy['post_status'] = $original['post_status'] === 'private' ? 'private' : 'publish';
+        }
+        if ($digest($target['restore_snapshot'] ?? []) !== $digest($legacy)
+            || ($target['contract_version'] ?? null) !== 2 || ($target['operation_kind'] ?? null) !== 'compensate'
+            || ($target['target_expiry'] ?? null) !== $expiry || ($target['product_type'] ?? null) !== $policy->tier($original)
+            || ($target['crm_deal_id'] ?? null) !== (int) ($original['meta']['crm_deal_id'] ?? 0)
+            || ($target['post_status'] ?? null) !== $original['post_status']) {
+            throw new CollectionException('original_compensation_preimage_required');
+        }
+        $sync = WpSyncService::forPlatform($effect->platform_id);
+        $read = $sync->subscriptionOperation($effect->wp_post_id, $effect->id);
+        if (! empty($read['operation'])) {
+            return; // A committed result must follow the normal immutable-result readback path.
+        }
+        $sourceRead = $sync->subscriptionOperation($source->wp_post_id, $source->id);
+        $operation = $sourceRead['operation'] ?? [];
+        if (data_get($read, 'capabilities.compensate') !== 2 || ($operation['contract_version'] ?? null) !== 2
+            || ($operation['operation_id'] ?? null) !== $source->id || ($operation['state'] ?? null) !== 'succeeded'
+            || (int) ($operation['post_id'] ?? 0) !== $source->wp_post_id
+            || ! is_array(data_get($operation, 'before_state.meta_present'))
+            || $digest($operation['before_state'] ?? []) !== $digest($original)
+            || data_get($read, 'snapshot.fingerprint') !== data_get($effect->before_state, 'fingerprint')
+            || data_get($sourceRead, 'snapshot.fingerprint') !== data_get($read, 'snapshot.fingerprint')
+            || data_get($operation, 'snapshot.fingerprint') !== data_get($read, 'snapshot.fingerprint')
+            || ($target['expected_fingerprint'] ?? null) !== data_get($read, 'snapshot.fingerprint')) {
+            throw new CollectionException('untracked_entitlement_change_requires_recovery');
+        }
+        $target['restore_snapshot'] = $original;
+        $effect->update(['target_state' => $target, 'state' => 'prepared', 'last_error_code' => null]);
+        app(CollectionPurchaseService::class)->audit($allocation->receipt, $actor->id, 'correction_preimage_recovered', [
+            'correction_id' => $effect->correction_id, 'effect_id' => $effect->id,
+            'source_effect_id' => $source->id, 'reason' => 'legacy_empty_expiry_normalization', 'cash_changed' => false,
+        ], 'correction-preimage:'.$effect->id);
+    }
+
+    private function assertNoRelatedPayments(CollectionAllocation $allocation): void
+    {
+        $related = app(CollectionReceiptStatusService::class)->relatedPayments($allocation->receipt);
+        if (! $related['complete'] || $related['matches']) {
+            throw new CollectionException('related_payment_requires_review');
+        }
+    }
+
     private function applyTarget(CollectionAllocation $a, CollectionCorrection $c, User $actor): void
     {
         $p = $c->preview['target_purchase'];
         $this->authorizeSubsidiary($p, $actor);
         $primary = CollectionBenefitEffect::where('correction_id', $c->id)->where('effect_kind', 'target_paid')->first();
         if (! $primary) {
+            $this->assertNoRelatedPayments($a);
             $identity = Client::findOrFail($p['client_id']);
             if ($identity->wp_post_id !== (int) $p['wp_post_id'] || $identity->wp_user_id !== (int) $p['wp_user_id'] || $identity->profile_paused_at || $identity->profile_removal_requested_at) {
                 throw new CollectionException('correction_target_profile_changed');
@@ -347,6 +472,9 @@ class CollectionCorrectionService
                     'deal_id' => $deal->id, 'before_state' => $read['snapshot'], 'contribution' => $target['contribution'],
                     'target_state' => array_diff_key($target, ['contribution' => true]) + ['crm_deal_id' => $deal->id]]);
             });
+        }
+        if ($primary->state === 'prepared') {
+            $this->assertNoRelatedPayments($a);
         }
         app(CollectionFulfillmentService::class)->dispatchEffect($a, $primary);
         if (! empty($p['subsidiary'])) {
@@ -398,6 +526,14 @@ class CollectionCorrectionService
             $a->receipt->update(['decision_state' => $a->state, 'reviewed_at' => null, 'reviewed_by' => null, 'version' => $a->receipt->version + 1]);
             $a->increment('version');
             $c->update(['state' => 'verified']);
+            if ($target && ($allocation->purchase_snapshot['subsidiary_mode'] ?? null) === 'independent') {
+                $replacement = $a->purchase_snapshot;
+                $replacement['subsidiary'] = null;
+                $replacement['subsidiary_mode'] = 'independent';
+                $replacement['subsidiary_platform_id'] = $allocation->purchase_snapshot['subsidiary_platform_id'];
+                $a->update(['purchase_snapshot' => $replacement]);
+                app(CollectionSubsidiaryFulfillmentService::class)->ensure($a, $target);
+            }
             DB::table('collection_profile_holds')->where('allocation_id', $a->id)->delete();
             app(CollectionPurchaseService::class)->audit($a->receipt, $actor->id, 'correction_verified', ['correction_id' => $c->id, 'cash_changed' => false, 'payment_id' => $payment->id], 'correction-verified:'.$c->id);
         }, 3);

@@ -293,6 +293,28 @@ class FieldSalesWorkflowTest extends TestCase
         $this->get('/api/crm/admin/commissions/export?status=earned')->assertOk();
     }
 
+    public function test_scoreboard_and_funnel_keep_an_agent_whose_role_later_changed(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
+        $platform = Platform::factory()->create(['field_activation_commission_rate' => 0.15]);
+        $agent = User::factory()->create(['role' => 'field_sales', 'status' => 'active', 'name' => 'Promoted Agent']);
+        $client = Client::factory()->create(['platform_id' => $platform->id, 'signup_source' => 'field', 'created_by' => $agent->id]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'KES']);
+        $deal = Deal::factory()->create(['platform_id' => $platform->id, 'client_id' => $client->id, 'product_id' => $product->id, 'is_free_trial' => false,
+            'activated_by_field_agent' => $agent->id, 'activated_at' => now(), 'amount' => 2000, 'currency' => 'KES', 'status' => 'active']);
+        app(CommissionService::class)->recordActivationCommission($deal);
+        $agent->update(['role' => 'sub_admin']);
+        User::factory()->create(['role' => 'sub_admin', 'status' => 'active', 'name' => 'Unrelated Manager']);
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/admin/commissions?status=earned')->assertOk();
+        $response->assertJsonCount(1, 'leaderboard');
+        $response->assertJsonPath('leaderboard.0.id', $agent->id);
+        $response->assertJsonPath('leaderboard.0.paid_deals', 1);
+        $response->assertJsonPath('summary.funnel.acquired', 1);
+        $this->assertContains($agent->id, array_column($response->json('agents'), 'id'));
+    }
+
     public function test_admin_can_save_field_sales_settings(): void
     {
         $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);

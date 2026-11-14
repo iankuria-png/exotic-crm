@@ -120,6 +120,11 @@ class CollectionSalesFulfillmentService
 
     public function prepare(CollectionReceipt $receipt, User $actor, array $input): array
     {
+        return app(CollectionWriterGuard::class)->forReceiptSale($receipt, fn () => $this->prepareReceiptSale($receipt, $actor, $input));
+    }
+
+    private function prepareReceiptSale(CollectionReceipt $receipt, User $actor, array $input): array
+    {
         $sales = app(CollectionSalesService::class);
         $key = $this->key($receipt, $actor, $input);
         $digest = $sales->inputDigest($input);
@@ -136,7 +141,7 @@ class CollectionSalesFulfillmentService
             $projection = $preview;
             unset($projection['preview_token']);
             if (($token['actor'] ?? null) !== $actor->id || ($token['receipt'] ?? null) !== $receipt->id
-                || ($token['expires'] ?? 0) <= now()->timestamp || ! hash_equals($token['digest'] ?? '', $sales->digest($projection))) {
+                || ($token['expires'] ?? 0) <= now()->timestamp || ! hash_equals($token['digest'] ?? '', $sales->previewDigest($projection))) {
                 throw new CollectionException('activation_preview_changed');
             }
             if (! $preview['can_activate']) {
@@ -174,7 +179,7 @@ class CollectionSalesFulfillmentService
                     unset($fresh['preview_token']);
                     $original = $preview;
                     unset($original['preview_token']);
-                    if ($sales->digest($fresh) !== $sales->digest($original)) {
+                    if ($sales->previewDigest($fresh) !== $sales->previewDigest($original)) {
                         throw new CollectionException('activation_preview_changed');
                     }
                     $refs = array_merge([$r->reference_norm], DB::table('collection_receipt_aliases')->where('receipt_id', $r->id)->where('account_id', $r->account_id)->pluck('reference')->all());

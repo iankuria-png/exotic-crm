@@ -258,7 +258,7 @@ class FreeTrialApprovalController extends Controller
             abort_unless($deal && $deal->platform_id !== $market, 422, 'Choose a separate subsidiary market.');
             $preview = app(\App\Services\SubsidiaryTrialService::class)->previewForDeal($deal, Platform::findOrFail($market), ! empty($input['client_id']) ? (int) $input['client_id'] : null,
                 ['duration_mode' => $input['duration_mode'] ?? null, 'duration_days' => $input['duration_days'] ?? null, 'copy' => empty($input['client_id']),
-                    'copy_region_id' => $input['copy_region_id'] ?? null, 'copy_city_id' => $input['copy_city_id'] ?? null, 'copy_currency_id' => $input['copy_currency_id'] ?? null]);
+                    'copy_region_id' => $input['copy_region_id'] ?? null, 'copy_city_id' => $input['copy_city_id'] ?? null, 'copy_currency_id' => $input['copy_currency_id'] ?? null, 'collection_obligation_id' => $input['collection_obligation_id'] ?? null]);
             abort_if((bool) $preview['config_errors'], 422, implode('; ', $preview['config_errors']));
             abort_unless(in_array($preview['resolution']['kind'], ['existing', 'create_if_needed']), 409, 'Resolve the target profile or existing coverage before requesting a trial.');
             abort_if((bool) $preview['duration']['error'], 422, $preview['duration']['message'] ?? 'Review the subscription period.');
@@ -272,6 +272,9 @@ class FreeTrialApprovalController extends Controller
             $clientIds = $target ? [$target->id] : [];
             abort_unless($target || ! empty($input['create_confirmed']), 422, 'Confirm creation of a WordPress subsidiary profile.');
             $input['subsidiary_seed'] = $preview['will_create'] ?? ['name' => $deal->client->name, 'phone_normalized' => app(\App\Services\SubsidiaryClientResolver::class)->targetPhone($deal->client, Platform::findOrFail($market)), 'email' => $deal->client->email, 'city' => $deal->client->city];
+            if ($preview['resolution']['kind'] === 'create_if_needed') {
+                $input['subsidiary_seed']['separate_account'] = true;
+            }
             if (! $target && $copyStatus !== 'off') {
                 // A paired new profile is only created with its complete public copy.
                 $promotion += app(\App\Services\SubsidiaryProfileCopyService::class)->terms($preview['copy_preview'], $input['subsidiary_seed'], (string) ($input['request_key'] ?? \Illuminate\Support\Str::uuid()));
@@ -284,7 +287,7 @@ class FreeTrialApprovalController extends Controller
             $product = (int) ($input['product_id'] ?? 0);
         }
 
-        return array_filter(($promotion ?? []) + ['action' => $action, 'platform_id' => $market, 'source_deal_id' => $deal?->id, 'client_ids' => $clientIds, 'product_id' => $product, 'duration_days' => $days,
+        return array_filter(($promotion ?? []) + ['collection_obligation_id' => $input['collection_obligation_id'] ?? null, 'action' => $action, 'platform_id' => $market, 'source_deal_id' => $deal?->id, 'client_ids' => $clientIds, 'product_id' => $product, 'duration_days' => $days,
             'product_price_id' => $input['product_price_id'] ?? $deal?->product_price_id, 'targets' => $action === 'seo_boost' ? $input['targets'] : null,
             'subsidiary_basis' => $action === 'subsidiary' ? app(\App\Services\SubsidiaryTrialWorkflow::class)->basis(['source_deal_id' => $deal->id, 'product_id' => $product]) : null,
             'subsidiary_identity' => $action === 'subsidiary' ? ($input['subsidiary_identity'] ?? null) : null, 'subsidiary_manual' => $action === 'subsidiary' ? ($input['subsidiary_manual'] ?? false) : null,
@@ -305,7 +308,12 @@ class FreeTrialApprovalController extends Controller
     {
         abort_if($request->attributes->get('crm_impersonator'), 403);
         $this->approvals->access($request->user(), $r->platform_id);
+        if (! empty($r->terms_json['collection_obligation_id'])) {
+            $o = app(\App\Services\Collections\CollectionSubsidiaryFulfillmentService::class)->forRequest($r);
+            app(\App\Services\Collections\CollectionAccessService::class)->receipt($request->user(), $o->allocation->receipt_id);
+        } else {
         abort_unless($request->user()->role === 'admin' || (int) $r->requester_id === (int) $request->user()->id, 403);
+        }
     }
 
     private function serialize(FreeTrialRequest $r): array

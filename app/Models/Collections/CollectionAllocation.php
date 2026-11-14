@@ -30,6 +30,11 @@ class CollectionAllocation extends Model
         return $this->hasMany(CollectionBenefitEffect::class, 'allocation_id');
     }
 
+    public function subsidiaryObligation()
+    {
+        return $this->hasOne(CollectionSubsidiaryObligation::class, 'allocation_id')->ofMany('source_generation', 'max');
+    }
+
     public function payment()
     {
         return $this->belongsTo(\App\Models\Payment::class);

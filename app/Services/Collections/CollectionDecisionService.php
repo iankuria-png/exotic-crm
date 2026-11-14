@@ -46,7 +46,7 @@ class CollectionDecisionService
                     }
                     app(CollectionAutomationEpoch::class)->assertReceipt($r);
                     $platforms = [(int) \App\Models\Client::findOrFail($matching['selected_client_id'])->platform_id];
-                    if ($secondary = config('collection.subsidiary_platforms.'.$platforms[0])) {
+                    if (! app(CollectionAutomationPolicy::class)->independentSubsidiary($r->account) && ($secondary = config('collection.subsidiary_platforms.'.$platforms[0]))) {
                         $platforms[] = (int) $secondary;
                     }
                     app(CollectionGate::class)->assertWrites($r->account, $platforms, true);
@@ -109,7 +109,7 @@ class CollectionDecisionService
     {
         $platformIds = DB::table('collection_account_platforms')->where('account_id', $receipt->account_id)->pluck('platform_id')->all();
         $references = array_unique(array_merge([$receipt->reference_norm], DB::table('collection_receipt_aliases')->where('account_id', $receipt->account_id)->where('receipt_id', $receipt->id)->pluck('reference')->all()));
-        $payments = Payment::with(['manualSubmission', 'deal'])->whereIn('platform_id', $platformIds)->where('amount', '>', 0)
+        $payments = Payment::with(['manualSubmission', 'deal'])->withoutReceiptDuplicates()->whereIn('platform_id', $platformIds)->where('amount', '>', 0)
             ->where(function ($q) use ($references) {
                 foreach ($references as $ref) {
                     $q->orWhere('transaction_reference', 'like', '%'.$ref.'%')->orWhere('reference_number', 'like', '%'.$ref.'%')->orWhere('reference_root', 'like', '%'.$ref.'%');

@@ -31,7 +31,10 @@ class CollectionReceiptService
             if (! in_array($observation['kind'], ['credit', 'hold']) || empty($observation['reference'])) {
                 $event->fill(['state' => 'quarantined', 'quarantine_reason' => $observation['reason'] ?? 'reference_missing'])->save();
                 if (($observation['kind'] ?? '') === 'hold') {
-                    $account->update(['suspended_at' => now(), 'suspension_reason' => 'unresolved_reversal_reference']);
+                    // Flag for staff; a reversal never stops the wallet (Ian, 11 Nov 2026).
+                    DB::table('collection_audit')->insertOrIgnore(['receipt_id' => null, 'account_id' => $account->id, 'actor_id' => null,
+                        'action' => 'unmatched_reversal_flagged', 'context' => json_encode(['event_id' => $event->id, 'reason' => $observation['reason'] ?? null]),
+                        'dedupe_key' => 'unmatched-reversal:'.$event->id, 'created_at' => now()]);
                 } elseif (preg_match('/^\S+\s+(?:confirmed|imethibitishwa).*?(?:received|Umepokea|Receive)/is', $event->normalized['message'] ?? '')) {
                     $account->update(['suspended_at' => now(), 'suspension_reason' => 'receiving_parser_drift']);
                 }
@@ -55,8 +58,11 @@ class CollectionReceiptService
             $conflicts = $receipt->conflicts ?? [];
             $provenance = $receipt->field_provenance ?? [];
             if ($observation['kind'] === 'hold') {
-                $account->update(['suspended_at' => now(), 'suspension_reason' => 'receiving_reversal_or_hold']);
+                // Flag the payment for staff; the wallet keeps receiving and activating other payments.
                 $receipt->funds_state = $observation['reason'] === 'reversal_completed' ? 'reversed' : 'disputed';
+                DB::table('collection_audit')->insertOrIgnore(['receipt_id' => $receipt->id, 'account_id' => $account->id, 'actor_id' => null,
+                    'action' => 'receipt_reversed_by_provider', 'context' => json_encode(['event_id' => $event->id, 'funds_state' => $receipt->funds_state]),
+                    'dedupe_key' => 'provider-reversal:'.$receipt->id.':'.$receipt->funds_state, 'created_at' => now()]);
                 $provenance['funds_state'][] = $event->id;
             } else {
                 foreach (['principal_minor', 'currency', 'payer_phone'] as $field) {

@@ -34,6 +34,27 @@ class ClientProvisioningWorkflowTest extends TestCase
         parent::tearDown();
     }
 
+    public function test_paired_creation_uses_a_separate_account_when_login_email_is_already_owned(): void
+    {
+        [$platform, $name, $connectionConfig] = $this->createWordPressProvisioningFixture();
+        $owner = $this->seedWordPressUser($name, 'existing-owner', 'shared@customer.test', 'Existing owner');
+        $before = (array) DB::connection($name)->table('users')->where('ID', $owner)->first();
+        $service = new WpDirectProvisioningService($platform, $connectionConfig);
+        $payload = ['name' => 'New paired profile', 'email' => 'shared@customer.test', 'phone' => '255712345678',
+            'post_status' => 'private', 'separate_account' => true, 'provision_request_id' => 'paired-separate-account'];
+        $result = $service->provisionEscort($payload);
+        $again = $service->provisionEscort($payload);
+        $this->assertNotSame($owner, $result['wp_user_id']);
+        $this->assertTrue($result['placeholder_email_used']);
+        $this->assertFalse($result['linked_existing_user']);
+        $this->assertNotSame('shared@customer.test', $result['wp_email']);
+        $this->assertSame($result['wp_post_id'], $again['wp_post_id']);
+        $this->assertSame($result['wp_user_id'], $again['wp_user_id']);
+        $this->assertSame($before, (array) DB::connection($name)->table('users')->where('ID', $owner)->first());
+        $this->assertSame(2, DB::connection($name)->table('users')->count());
+        $this->assertNotSame($service->payloadFingerprint($payload), $service->payloadFingerprint(array_diff_key($payload, ['separate_account' => true])));
+    }
+
     public function test_direct_provisioning_writes_sales_intake_profile_meta(): void
     {
         [$platform, $connectionName, $connectionConfig] = $this->createWordPressProvisioningFixture();

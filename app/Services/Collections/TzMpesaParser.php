@@ -87,6 +87,19 @@ class TzMpesaParser
         return ['name' => $name, 'party' => mb_substr($party, 0, 180), 'reference' => $credit['reference'], 'phone' => $credit['payer_phone']];
     }
 
+    /** Receiving-wallet balance reported in a credit SMS ("New M-Pesa balance is Tsh…", "and balance Tsh…", Swahili "salio"). */
+    public function balanceMinor(string $body): ?int
+    {
+        if (! preg_match('/(?:new\s+m-?pesa\s+balance|m-?pesa\s+balance|and\s+balance|salio(?:\s+jipya)?(?:\s+la\s+m-?pesa)?)\s+(?:is\s+|ni\s+)?(?:tsh|tzs)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/iu', $body, $match)) {
+            return null;
+        }
+        try {
+            return $this->minor($match[1]);
+        } catch (CollectionException) {
+            return null;
+        }
+    }
+
     public function minor(string $amount): int
     {
         $parts = explode('.', str_replace(',', '', $amount));

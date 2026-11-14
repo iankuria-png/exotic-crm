@@ -194,6 +194,77 @@ class CollectionSalesWorkflowTest extends CollectionWorkflowTestCase
         $this->assertSame(1, DB::table('payments')->count());
     }
 
+    public function test_activation_is_not_blocked_by_status_clock_or_background_sync_between_preview_and_confirm(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $this->fakeWordPress();
+        $input = $this->accepted($this->input($r, $client, $price), $r, $actor);
+        $sales = app(\App\Services\Collections\CollectionSalesService::class);
+        $first = $sales->preview($r, $actor, $input);
+        $this->travel(7)->seconds();
+        $client->forceFill(['last_synced_at' => now()])->save();
+        $second = $sales->preview($r->fresh(), $actor, $input);
+        unset($first['preview_token'], $second['preview_token']);
+        $this->assertSame($sales->previewDigest($first), $sales->previewDigest($second));
+        $result = app(\App\Services\Collections\CollectionSalesFulfillmentService::class)->prepare($r->fresh(), $actor, $input);
+        $this->assertSame('prepared', $result['session']['state']);
+    }
+
+    public function test_queue_names_the_staff_member_who_activated_a_receipt_sale(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $this->fakeWordPress();
+        $this->getJson('/api/crm/collections/receipts')->assertOk()->assertJsonPath('data.0.activation', null);
+        $input = $this->accepted($this->input($r, $client, $price), $r, $actor);
+        $service = app(\App\Services\Collections\CollectionSalesFulfillmentService::class);
+        $service->prepare($r, $actor, $input);
+        $this->getJson('/api/crm/collections/receipts')->assertOk()->assertJsonPath('data.0.activation.kind', 'staff')
+            ->assertJsonPath('data.0.activation.pending', true)->assertJsonPath('data.0.activation.actor.name', $actor->name);
+        $service->resume(\App\Models\Collections\CollectionSalesItem::firstOrFail()->id);
+        $this->getJson('/api/crm/collections/receipts')->assertOk()->assertJsonPath('data.0.activation.kind', 'staff')
+            ->assertJsonPath('data.0.activation.pending', false)->assertJsonPath('data.0.activation.actor.id', $actor->id);
+        $this->getJson('/api/crm/collections/receipts/'.$r->id)->assertOk()->assertJsonPath('activation.actor.name', $actor->name);
+    }
+
+    public function test_automatic_catalogue_match_is_not_reused_as_a_saved_staff_choice(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $automatic = $intent->replicate();
+        $automatic->id = (string) Str::uuid();
+        $automatic->authority = 'matched_catalogue';
+        $automatic->provider_reference = $r->reference_norm;
+        $automatic->save();
+        $this->getJson('/api/crm/collections/receipts/'.$r->id.'/review-context?workflow=manual')->assertOk()->assertJsonPath('saved_choice', null);
+        $input = $this->input($r, $client, $price);
+        $input['items'][0]['saved_intent_id'] = $automatic->id;
+        $this->postJson('/api/crm/collections/receipts/'.$r->id.'/sales/preview', $input)
+            ->assertStatus(409)->assertJsonPath('reason', 'saved_purchase_changed');
+        unset($input['items'][0]['saved_intent_id']);
+        $this->postJson('/api/crm/collections/receipts/'.$r->id.'/sales/preview', $input)->assertOk()->assertJsonPath('items.0.client_id', $client->id);
+    }
+
+    public function test_live_automation_match_for_the_same_receipt_does_not_block_staff_activation(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $this->fakeWordPress();
+        $intent->update(['revoked_at' => now()]);
+        $account->update(['mode' => 'auto']);
+        $own = $intent->replicate();
+        $own->forceFill(['id' => (string) Str::uuid(), 'authority' => 'matched_catalogue', 'provider_reference' => $r->reference_norm, 'revoked_at' => null, 'valid_until' => now()->addHour()])->save();
+        $other = $own->replicate();
+        $other->forceFill(['id' => (string) Str::uuid(), 'provider_reference' => 'OTHERREF123'])->save();
+        $service = app(\App\Services\Collections\CollectionSalesFulfillmentService::class);
+        try {
+            $service->prepare($r, $actor, $this->accepted($this->input($r, $client, $price), $r, $actor));
+            $this->fail('A live automation choice for another receipt must still own the profile');
+        } catch (\App\Services\Collections\CollectionException $e) {
+            $this->assertSame('use_collection_payment_workspace', $e->reason);
+        }
+        $other->update(['revoked_at' => now()]);
+        $result = $service->prepare($r, $actor, $this->accepted($this->input($r, $client, $price), $r, $actor));
+        $this->assertSame('prepared', $result['session']['state']);
+    }
+
     public function test_shared_unknown_stops_siblings_and_readback_keeps_confirmed_children(): void
     {
         [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();

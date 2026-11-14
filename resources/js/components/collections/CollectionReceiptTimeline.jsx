@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import api from '../../services/api';
 
 const actions = {
+    existing_subscription_linked: 'Existing subscription linked to received payment',
     payer_relationship_reviewed: 'Payer relationship reviewed', purchase_authority_reviewed: 'Exact purchase approved',
     purchase_choice_saved: 'Purchase choice saved', receipt_sale_prepared: 'Activation prepared', receipt_sale_confirmed: 'Site confirmed activation',
     correction_reserved: 'Correction started', correction_verified: 'Correction confirmed', correction_held: 'Correction needs checking',
@@ -15,8 +16,8 @@ export default function CollectionReceiptTimeline({ timeline, receiptId }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     if (!timeline) return null;
-    return <details className="border-t border-slate-200 pt-4"><summary className="cursor-pointer py-2 text-sm font-semibold text-slate-800">Payment activity · staff and system</summary>
-        {timeline.items?.length ? <ol className="mt-3 space-y-4">{[...(timeline.items || []), ...more].filter((item, i, all) => all.findIndex(row => row.id === item.id) === i).map(item => <li key={item.id} className="border-l-2 border-slate-200 pl-3 text-sm">
+    return <details className="group pb-1"><summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-3 text-sm font-medium text-slate-800 [&::-webkit-details-marker]:hidden">Payment activity · staff and system<svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90"><path d="M7.5 5l5 5-5 5" /></svg></summary>
+        {timeline.items?.length ? <ol className="relative mb-3 ml-1.5 space-y-4 border-l border-slate-200">{[...(timeline.items || []), ...more].filter((item, i, all) => all.findIndex(row => row.id === item.id) === i).map(item => <li key={item.id} className="relative pl-5 text-sm"><span aria-hidden="true" className={`absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full ring-2 ring-white ${item.actor === 'System' || /automatic/.test(item.action) ? 'bg-teal-600' : 'bg-slate-400'}`} />
             <p className="font-medium text-slate-800">{actions[item.action] || item.action.replaceAll('_', ' ')}</p>
             <p className="mt-1 text-xs text-slate-500">{item.actor} · {new Date(String(item.at).replace(' ', 'T') + (/(?:Z|[+-]\d\d:\d\d)$/.test(item.at) ? '' : 'Z')).toLocaleString('en-GB', { timeZone: 'Africa/Dar_es_Salaam' })} EAT</p>
             {item.reason && <p className="mt-1 text-slate-600">{item.reason.replaceAll('_', ' ')}</p>}

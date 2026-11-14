@@ -125,6 +125,7 @@ class Payment extends Model
     public const RECORD_CLASSIFICATION_TEST = 'test';
     public const RESOLUTION_REVERSED = 'reversed';
     public const RESOLUTION_INVALID_REFERENCE = 'invalid_reference';
+    public const RESOLUTION_RECEIPT_DUPLICATE = 'duplicate_receipt_link';
 
     protected $fillable = [
         'user_id',
@@ -341,6 +342,14 @@ class Payment extends Model
     public function scopeWalletTopups($query)
     {
         return $query->where('purpose', self::PURPOSE_WALLET_TOPUP);
+    }
+
+    /** Historical duplicate rows remain visible, while receipt matching uses only their canonical payment. */
+    public function scopeWithoutReceiptDuplicates(Builder $query): Builder
+    {
+        $column = self::qualifiedColumn($query, 'resolution_code');
+
+        return $query->where(fn ($q) => $q->whereNull($column)->orWhere($column, '!=', self::RESOLUTION_RECEIPT_DUPLICATE));
     }
 
     public function scopeSubscriptionRevenue($query)

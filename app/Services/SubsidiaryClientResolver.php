@@ -41,7 +41,8 @@ class SubsidiaryClientResolver
     {
         return ['name' => trim((string) $seed['name']) ?: 'Client', 'email' => (string) ($seed['email'] ?? ''),
             'phone' => $seed['phone_normalized'], 'whatsapp' => $seed['phone_normalized'], 'city' => (string) ($seed['city'] ?? ''),
-            'post_status' => 'private', 'provision_request_id' => $requestId];
+            'post_status' => 'private', 'provision_request_id' => $requestId]
+            + (! empty($seed['separate_account']) ? ['separate_account' => true] : []);
     }
 
     public function resolveFrozen(Platform $target, array $seed, string $requestId): Client

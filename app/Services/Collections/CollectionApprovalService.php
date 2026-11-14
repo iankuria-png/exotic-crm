@@ -31,7 +31,10 @@ class CollectionApprovalService
 
             return $existing;
         }
-        $ids = array_map('intval', array_filter([$intent->client_id, data_get($intent->purchase_snapshot, 'subsidiary.client_id')]));
+        // Expected holds must not acquire a lifecycle lease that survives an outer transaction.
+        $this->eligibility($receipt, $intent, $actor, $automatic);
+        $independent = $automatic && app(CollectionAutomationPolicy::class)->independentSubsidiary($receipt->account);
+        $ids = array_map('intval', array_filter([$intent->client_id, $independent ? null : data_get($intent->purchase_snapshot, 'subsidiary.client_id')]));
         sort($ids, SORT_NUMERIC);
         $reservation = new CollectionAllocation(['id' => (string) Str::uuid()]);
 
@@ -56,7 +59,8 @@ class CollectionApprovalService
         }
         $p = $intent->purchase_snapshot;
         $platforms = [(int) $client->platform_id];
-        if (! empty($p['subsidiary'])) {
+        $independent = $automatic && app(CollectionAutomationPolicy::class)->independentSubsidiary($account);
+        if (! $independent && ! empty($p['subsidiary'])) {
             $platforms[] = (int) $p['subsidiary']['platform_id'];
             if ($actor) {
                 app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, (int) $p['subsidiary']['platform_id']);
@@ -65,7 +69,7 @@ class CollectionApprovalService
                 || now()->gte(\Illuminate\Support\Carbon::parse($account->policy['subsidiary_grant_valid_until']))) {
                 throw new CollectionException('subsidiary_policy_grant_required');
             }
-        } elseif (config('collection.subsidiary_platforms.'.$client->platform_id)) {
+        } elseif (! $independent && config('collection.subsidiary_platforms.'.$client->platform_id)) {
             throw new CollectionException('linked_subsidiary_profile_required');
         }
         app(CollectionGate::class)->assertWrites($account, $platforms, $automatic);
@@ -73,7 +77,7 @@ class CollectionApprovalService
         if ($payment && PaymentFulfillmentOperation::where('payment_id', $payment->id)->exists()) {
             throw new CollectionException('existing_fulfillment_owner_requires_review');
         }
-        $ids = array_filter([$client->id, data_get($p, 'subsidiary.client_id')]);
+        $ids = array_filter([$client->id, $independent ? null : data_get($p, 'subsidiary.client_id')]);
         foreach ($ids as $clientId) {
             $profile = Client::findOrFail($clientId);
             if (DB::table('collection_profile_holds')->where('client_id', $profile->id)->exists()) {
@@ -121,6 +125,12 @@ class CollectionApprovalService
             $client = $eligibility['client'];
             $payment = $eligibility['payment'];
             $p = $intent->purchase_snapshot;
+            if ($automatic && app(CollectionAutomationPolicy::class)->independentSubsidiary($account)) {
+                $p['subsidiary_selection'] = $p['subsidiary'] ?? null;
+                $p['subsidiary'] = null;
+                $p['subsidiary_mode'] = 'independent';
+                $p['subsidiary_platform_id'] = (int) config('collection.subsidiary_platforms.'.$client->platform_id);
+            }
             $operationId = (string) Str::uuid();
             $ids = array_filter([$client->id, data_get($p, 'subsidiary.client_id')]);
             $ids = array_map('intval', $ids);

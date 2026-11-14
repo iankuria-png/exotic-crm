@@ -20,7 +20,12 @@ return new class extends Migration
             $t->boolean('automation_eligible_at_ingest')->default(false);
         });
         // Actual retained server arrival only. Existing rows never gain eligibility.
-        DB::statement('UPDATE collection_receipts r JOIN (SELECT receipt_id, MIN(ingested_at) AS first_ingested FROM collection_events WHERE receipt_id IS NOT NULL GROUP BY receipt_id) e ON e.receipt_id = r.id SET r.first_ingested_at = e.first_ingested WHERE r.first_ingested_at IS NULL');
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement('UPDATE collection_receipts r JOIN (SELECT receipt_id, MIN(ingested_at) AS first_ingested FROM collection_events WHERE receipt_id IS NOT NULL GROUP BY receipt_id) e ON e.receipt_id = r.id SET r.first_ingested_at = e.first_ingested WHERE r.first_ingested_at IS NULL');
+        } else {
+            // Portable equivalent for the SQLite test database; same rows, same values.
+            DB::statement('UPDATE collection_receipts SET first_ingested_at = (SELECT MIN(e.ingested_at) FROM collection_events e WHERE e.receipt_id = collection_receipts.id) WHERE first_ingested_at IS NULL AND EXISTS (SELECT 1 FROM collection_events e WHERE e.receipt_id = collection_receipts.id)');
+        }
     }
 
     public function down(): void

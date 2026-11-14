@@ -26,15 +26,13 @@ class SubsidiaryWpIdentityLookup
         $limit = config('subsidiary_trials.lookup_limit', 50000);
         $phone = $seed['phone_normalized'];
         abort_unless($phone, 409, 'Select an existing profile when the source phone is missing.');
-        $helper = app(SubsidiaryActivationPreviewService::class);
-        $email = $helper->email($seed['email'] ?? null);
         // Query caps are connection-local; no application setting is changed.
         $version = (string) $db->selectOne('SELECT VERSION() AS version')->version;
         $db->statement(str_contains($version, 'MariaDB') ? 'SET SESSION max_statement_time=10' : 'SET SESSION MAX_EXECUTION_TIME=10000');
         $db->statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
         $db->statement('SET TRANSACTION READ ONLY');
 
-        return $db->transaction(function () use ($db, $target, $deadline, $limit, $phone, $email, $helper) {
+        return $db->transaction(function () use ($db, $target, $deadline, $limit, $phone) {
             $siteurl = (string) $db->table('options')->where('option_name', 'siteurl')->value('option_value');
             // CRM API settings may use the bare host while WordPress stores its www alias.
             // Keep the market boundary: no other subdomain or hostname is interchangeable.
@@ -52,13 +50,12 @@ class SubsidiaryWpIdentityLookup
                 $seen += $rows->count();
                 abort_if($seen > $limit, 409, 'Profile lookup limit reached. Creation is held for review.');
                 $phones = $db->table('postmeta')->whereIn('post_id', $rows->pluck('ID'))->where('meta_key', 'phone')->get()->groupBy('post_id');
-                $emails = $db->table('users')->whereIn('ID', $rows->pluck('post_author'))->pluck('user_email', 'ID');
                 foreach ($rows as $row) {
                     $last = (int) $row->ID;
                     $numbers = collect($phones[$row->ID] ?? [])->map(fn ($m) => PhoneNormalizer::normalize($m->meta_value, $target->phone_prefix));
-                    $targetEmail = $helper->email($emails[$row->post_author] ?? null);
-                    if ($numbers->contains($phone) || ($email && $targetEmail === $email)) {
-                        abort_unless($numbers->contains($phone) && (! $email || ! $targetEmail || $email === $targetEmail) && in_array($row->post_status, ['publish', 'private', 'draft', 'pending']), 409, 'Conflicting site profile found. Review its identity before creation.');
+                    if ($numbers->contains($phone)) {
+                        // Login emails can differ across markets; never use a shared email to match a different phone.
+                        abort_unless(in_array($row->post_status, ['publish', 'private', 'draft', 'pending']), 409, 'Conflicting site profile found. Review its identity before creation.');
                         $matches[] = ['wp_post_id' => (int) $row->ID, 'wp_user_id' => (int) $row->post_author];
                     }
                 }

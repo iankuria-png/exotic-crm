@@ -76,9 +76,36 @@ class SubsidiaryActivationSummaryService
 
             return $out;
         }
-        if ($trial && ((int) $trial->platform_id !== $targetId || (int) ($trial->terms_json['source_deal_id'] ?? 0) !== (int) $main->id || ($actor->role !== 'admin' && (int) $trial->requester_id !== (int) $actor->id))) {
+        if ($trial && ((int) $trial->platform_id !== $targetId || (int) ($trial->terms_json['source_deal_id'] ?? 0) !== (int) $main->id || ($actor->role !== 'admin' && (int) $trial->requester_id !== (int) $actor->id && empty($trial->terms_json['collection_obligation_id'])))) {
             $out['subsidiary'] = ['status' => 'restricted'];
 
+            return $out;
+        }
+        if ($trial && ! empty($trial->terms_json['collection_obligation_id'])) {
+            $owner = app(\App\Services\Collections\CollectionSubsidiaryFulfillmentService::class)->forRequest($trial);
+            app(\App\Services\Collections\CollectionAccessService::class)->receipt($actor, $owner->allocation->receipt_id);
+        }
+        if (! empty($intent['collection_obligation_id'])) {
+            $o = \App\Models\Collections\CollectionSubsidiaryObligation::findOrFail($intent['collection_obligation_id']);
+            abort_unless((int) $o->source_deal_id === (int) $main->id && (int) $o->target_platform_id === $targetId, 409);
+            app(\App\Services\Collections\CollectionAccessService::class)->receipt($actor, $o->allocation->receipt_id);
+            $effect = $o->dependent_effect_id ? \App\Models\Collections\CollectionBenefitEffect::find($o->dependent_effect_id) : null;
+            $client = ! empty($o->target_identity['client_id']) ? Client::where('platform_id', $targetId)->find($o->target_identity['client_id']) : null;
+            $coverage = $effect?->state === 'succeeded' ? Deal::find($effect->deal_id) : null;
+            $state = match ($o->state) {
+                'succeeded' => $coverage && $coverage->expires_at?->isFuture() ? 'active' : 'expired',
+                'already_active' => $o->interval['end'] > now()->timestamp ? 'already_active' : 'expired',
+                'needs_approval' => 'pending_approval', 'needs_profile' => 'setup_paused', 'copying' => 'setting_up', 'canceled' => 'cancelled',
+                'uncertain' => 'uncertain', default => 'activating'
+            };
+            $copy = $trial ? app(SubsidiaryProfileCopyService::class)->projection(app(SubsidiaryProfileCopyService::class)->run($trial), $actor) : null;
+            $out['subsidiary'] = $this->row($client, $state, $coverage) + ['request_id' => $trial?->id, 'request_version' => $trial?->version,
+                'can_review' => $actor->role === 'admin' && $trial?->status === 'pending', 'can_recover' => $actor->role === 'admin' && $o->state === 'uncertain',
+                'copy' => $copy, 'copied_from' => $copy ? $main->client?->platform?->name : null];
+            $out['subsidiary']['market'] = \App\Models\Platform::find($targetId)?->name;
+            if ($o->state === 'already_active') {
+                $out['subsidiary']['expires_at'] = \Illuminate\Support\Carbon::createFromTimestamp($o->interval['end'])->toIso8601String();
+            }
             return $out;
         }
         $status = 'unknown';
