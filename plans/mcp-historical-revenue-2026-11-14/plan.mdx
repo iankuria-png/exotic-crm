@@ -1,0 +1,41 @@
+---
+title: Reliable historical MCP revenue requests
+objective: Honour historical dates in revenue tools and graphs, refuse silent fallback, and distinguish client history from retained payment coverage.
+status: shipping authorised; Ian deploys
+owner: Ian Kuria
+date: 2026-11-14
+scope: Correct remaining gaps on top of reporting release 33a77116; inspect production read-only.
+non_goals:
+  - production deployment or permission changes
+  - payment, customer or provider mutations
+---
+
+## Evidence and decisions
+
+The connected tool schema lacks from/to on trend and market tools. A live summary with from=2026-08-01 and to=2026-11-14 returned window.from=2026-10-16 and window.to=2026-11-14 while meta.filters echoed the requested dates and result_state=complete. The legacy CeoDashboardDataService::context only uses explicit dates when horizon=custom; its default branch substitutes 30d. Source release 33a77116 already adds exact-date dispatch and an aggregate payment view but deployment remains unverified. Its parser still rejects intervals over 366 days; the catalogue's coverage.from comes from Client.created_at.
+
+Reuse the existing exact reporting path and aggregate SQL view. Preserve the default dashboard calculation for recognised preset windows. Validate unsupported/missing custom windows before dispatch, never silently substitute 30d. Permit historical intervals over a year while retaining the 50,000 candidate and 9,000 bucket limits as explicit errors. Keep the existing coverage.from/to fields for compatibility, label them client-record history, and add separately scoped retained payment-candidate dates with a completeness caveat. Do not claim retention proves provider settlement or that missing history means zero revenue.
+
+<Steps items={[
+ {"title":"Verify the deployed defect","reuses":"Existing fleet-ops bin/mkt read checks and connected MCP tool","adds":"Saved bounded evidence of served code, date fallback and deployment readiness","files":"docs/agent/tasks/mcp-historical-revenue-2026-11-14.md","verify":"Inspect live source/view availability using registered read-only checks; no deployment"},
+ {"title":"Close historical request and coverage gaps","reuses":"RevenueReportingWindow, preciseRevenue dispatch, RevenueReportingQuery::candidates, ToolRegistry and existing revenue app","adds":"Strict preset handling including CEO dashboard adapter inference, longer explicit windows, full historical graph series in a scrollable region, actionable tool descriptions and separate client/payment coverage semantics","files":"app/Services/Mcp/McpServer.php; app/Services/Mcp/RevenueReportingWindow.php; app/Services/Mcp/ToolRegistry.php; app/Services/Mcp/McpRequestAdapter.php; resources/mcp/apps/revenue-dashboard-v1.html; resources/mcp/reporting-views.md","verify":"August–November monthly totals, multi-year history, invalid windows, scoped catalogue dates and all four protocol adapters"},
+ {"title":"Verify and record the correction","reuses":"Disposable SQLite reporting test schema, existing app contract script and release checklist","adds":"Regression evidence and exact pending deployment/connector-refresh steps","files":"tests/Feature/Mcp/McpHourlyRevenueReportingTest.php; docs/agent/tasks/mcp-historical-revenue-2026-11-14.md","verify":"Focused PHP tests, app contract, scoped Pint and diff checks; raw payments SQL remains refused"}
+]} />
+
+<Endpoint method="POST" path="/api/mcp" auth="Existing active staff token/OAuth, per-tool grant and role, intersected platform permissions. SQL keeps admin-only explicit enablement and aggregate view allowlist." request={{"name":"exotic_revenue_trend","arguments":{"from":"2026-08-01","to":"2026-11-14","bucket":"month"}}} response="Four dated monthly points using the requested interval, original currencies and USD availability; same reporting window across summary, trend and app" errors="Invalid or incomplete intervals and unknown presets return invalid_params; resource limits return report_limit rather than a truncated result" />
+
+<Risks items={[
+ {"risk":"Earlier source is pushed but production still serves old reporting code","impact":"high","mitigation":"Verify deployed sources and view readiness read-only, hand off combined release prerequisites, and distinguish local tests from live acceptance"},
+ {"risk":"Catalogue retention dates are mistaken for proof of full revenue history","impact":"high","mitigation":"Label client history and candidate payment retention separately; include scope and explicit completeness caveats"},
+ {"risk":"Long intervals exceed safe reporting work","impact":"medium","mitigation":"Keep explicit record/bucket limits without silent truncation; production-volume performance remains a deployment acceptance check"}
+]} />
+
+## Verification and rollback
+
+Run /usr/local/opt/php@8.2/bin/php artisan test --filter=McpHourlyRevenueReportingTest and node tests/scripts/mcp-revenue-app-contract.cjs, then scoped Pint and git diff --check. Fixtures must prove four historical monthly values survive all supported MCP protocols and the graph payload, reject unsupported windows, permit a two-year monthly interval and enforce market scope. Retain existing SQL-view safety regression. Reverse only this correction's task-owned diff to roll back; the earlier reporting migration is unchanged. No frontend build is required: the MCP app is served directly from its versioned HTML resource. Add app assertions that the final point of a 107-day history and a 24-month history remains rendered. Test recognised legacy preset dispatch and fail explicitly for unsupported presets, missing custom bounds and more than 9,000 buckets. Preserve CEO dashboard calendar-day calculations while inferring custom horizon from complete date bounds.
+
+## Audit history
+
+Round 1: NOT READY. Corrected two blockers: CEO dashboard adapter still ignored dates without custom horizon; embedded app silently displayed only its first twelve points. Added preset compatibility and bucket-limit acceptance tests. Round 2: READY. Added labelled keyboard-focusable chart region and period count. Implemented and verified: 29 backend tests / 317 assertions; 24 app contract assertions. Ian's explicit request to implement corrections authorises this scope; Ian authorised source shipping and will deploy personally before live testing.
+
+<Questions items={[]} />

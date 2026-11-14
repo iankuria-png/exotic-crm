@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reliable historical MCP revenue requests — plan</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+--bg:#0a0a0b;--bg2:#101013;--card:#131317;--card2:#17171c;--line:#26262e;
+--line2:#33333d;--ink:#ededf2;--mut:#9a9aa8;--mut2:#6e6e7d;--acc:#7c5cff;
+--acc2:#a48bff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--info:#58a6ff;
+--r:10px;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+--wf-paper:#0d0d10;--wf-card:#17171c;--wf-ink:#ededf2;--wf-muted:#8b8b99;
+--wf-line:#2c2c36;--wf-accent:#7c5cff;--wf-accent-soft:#241d47;
+--wf-warn:#d29922;--wf-ok:#3fb950;--wf-radius:8px;
+}
+@media(prefers-color-scheme:light){:root{
+--bg:#fbfbfd;--bg2:#fff;--card:#fff;--card2:#f7f7fa;--line:#e3e3ea;
+--line2:#d0d0da;--ink:#16161c;--mut:#5c5c6b;--mut2:#8a8a99;--acc:#6247d6;
+--acc2:#7c5cff;--wf-paper:#fff;--wf-card:#f7f7fa;--wf-ink:#16161c;
+--wf-muted:#5c5c6b;--wf-line:#e3e3ea;--wf-accent:#6247d6;--wf-accent-soft:#efecff;
+}}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:minmax(0,1fr);max-width:1180px;margin:0 auto;padding:0 28px 120px}
+@media(min-width:1080px){.shell{grid-template-columns:232px minmax(0,1fr);gap:56px;padding-left:32px}}
+nav.toc{display:none}
+@media(min-width:1080px){nav.toc{display:block;position:sticky;top:0;align-self:start;
+max-height:100vh;overflow:auto;padding:96px 0 40px;font-size:13px}}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:5px 10px;
+border-left:2px solid transparent;border-radius:0 4px 4px 0}
+nav.toc a:hover{color:var(--ink);background:var(--card);border-left-color:var(--acc)}
+nav.toc a.l3{padding-left:22px;font-size:12.5px;color:var(--mut2)}
+header.hero{padding:72px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+color:var(--acc2);margin-bottom:18px}
+h1{font-size:clamp(30px,4.2vw,44px);line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;font-weight:660}
+.obj{font-size:18px;color:var(--mut);max-width:70ch;margin:0 0 26px;line-height:1.6}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 12px/1 var(--sans);color:var(--mut);background:var(--card);
+border:1px solid var(--line);border-radius:999px;padding:7px 13px}
+.chip b{color:var(--ink);font-weight:600}
+main h2{font-size:24px;letter-spacing:-.02em;margin:56px 0 14px;padding-top:10px;font-weight:640}
+main h3{font-size:17px;margin:34px 0 10px;font-weight:620;letter-spacing:-.01em}
+main h4{font-size:15px;margin:0 0 8px;font-weight:620}
+main p{margin:0 0 14px;max-width:76ch}
+main ul,main ol{margin:0 0 16px;padding-left:22px;max-width:76ch}
+main li{margin:5px 0}
+a{color:var(--acc2)}
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+blockquote{margin:0 0 16px;padding:2px 0 2px 18px;border-left:3px solid var(--line2);color:var(--mut)}
+code{font-family:var(--mono);font-size:.875em;background:var(--card2);
+border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre.code{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);
+padding:14px 16px;overflow-x:auto;margin:0 0 16px}
+pre.code code{background:none;border:0;padding:0;font-size:12.75px;line-height:1.6}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{text-align:left;font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+.blk{margin:30px 0;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.bh{font:600 11.5px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+color:var(--mut);padding:14px 18px;border-bottom:1px solid var(--line);background:var(--card2)}
+.bh code{background:none;border:0;padding:0;text-transform:none;letter-spacing:0;
+font-size:12.5px;color:var(--ink)}
+.bb{padding:18px}
+.bb>.tw,.bb>*:last-child{margin-bottom:0}
+.cap{color:var(--mut2);font-size:13px;margin:10px 0 0!important}
+.tag{font:500 10.5px/1 var(--mono);color:var(--mut2);border:1px solid var(--line);
+border-radius:4px;padding:3px 6px;text-transform:uppercase;letter-spacing:.07em}
+.pill{display:inline-block;font:600 10.5px/1 var(--mono);border-radius:999px;
+padding:4px 9px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.p-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.p-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.p-bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.p-mut{color:var(--mut);background:var(--card2)}
+.callout{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
+margin:22px 0;padding:15px 17px;border:1px solid var(--line);border-left-width:3px;
+border-radius:var(--r);background:var(--card)}
+.callout .ct{font:600 10.5px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.callout .cb>*:last-child{margin-bottom:0}
+.t-note{border-left-color:var(--info)} .t-note .ct{color:var(--info)}
+.t-decision{border-left-color:var(--acc)} .t-decision .ct{color:var(--acc2)}
+.t-risk{border-left-color:var(--bad)} .t-risk .ct{color:var(--bad)}
+.t-warn{border-left-color:var(--warn)} .t-warn .ct{color:var(--warn)}
+.t-ok{border-left-color:var(--ok)} .t-ok .ct{color:var(--ok)}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+li.step{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 0;
+border-bottom:1px solid var(--line)}
+li.step:first-child{padding-top:0} li.step:last-child{border-bottom:0;padding-bottom:0}
+.sn{width:28px;height:28px;border-radius:8px;background:var(--wf-accent-soft);
+color:var(--acc2);font:600 12.5px/28px var(--mono);text-align:center}
+.sc h4{margin:3px 0 8px}
+.sm{display:grid;grid-template-columns:64px 1fr;gap:10px;font-size:13px;margin-top:5px}
+.sm .k{font:600 10.5px/1.7 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut2)}
+.sm .v{color:var(--mut)}
+.ty{font:500 12px/1 var(--mono);color:var(--acc2)}
+.rels{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.rel{font:500 11.5px/1 var(--mono);color:var(--mut);background:var(--card2);
+border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+.ep-h{display:flex;align-items:center;gap:11px;margin-bottom:12px;flex-wrap:wrap}
+.verb{font:700 11px/1 var(--mono);letter-spacing:.08em;padding:6px 9px;border-radius:6px;color:#0a0a0b}
+.v-GET{background:var(--info)} .v-POST{background:var(--ok)}
+.v-PUT,.v-PATCH{background:var(--warn)} .v-DELETE{background:var(--bad)}
+.v-HEAD,.v-OPTIONS{background:var(--mut)}
+.path{font-size:13.5px;background:none;border:0;padding:0}
+.sub{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin:14px 0 7px}
+table.ac{font-family:var(--mono);font-size:12.5px}
+table.ac td{padding:2px 10px;border:0;vertical-align:top}
+.ln{color:var(--mut2);text-align:right;user-select:none;width:1%;padding-right:14px!important}
+.cd code{background:none;border:0;padding:0;white-space:pre}
+.cl.hl{background:var(--wf-accent-soft)}
+.cl.hl .ln{color:var(--acc2)}
+.nt{font-family:var(--sans);color:var(--mut);font-size:12.5px;width:34%}
+.an b{color:var(--ink)}
+.diff{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line);
+border-radius:var(--r);overflow:hidden;font-family:var(--mono);font-size:12.5px}
+@media(min-width:760px){.diff{grid-template-columns:1fr 1fr}}
+.dcol{background:var(--bg2);padding-bottom:10px}
+.dh{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:11px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.dl{padding:1px 14px;white-space:pre-wrap;word-break:break-word}
+.d-del{background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.d-add{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.dg{padding:6px 2px;overflow-x:auto}
+.dg svg{max-width:100%;height:auto}
+.wfw{display:flex;justify-content:center}
+.wf{background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:12px;
+overflow:hidden;width:100%}
+.wf.s-desktop{max-width:100%} .wf.s-tablet{max-width:720px}
+.wf.s-mobile{max-width:378px} .wf.s-panel{max-width:440px}
+.wfbar{display:flex;gap:6px;padding:10px 13px;border-bottom:1px solid var(--wf-line);
+background:var(--wf-card)}
+.wfbar i{width:9px;height:9px;border-radius:50%;background:var(--wf-line)}
+.wfb{padding:16px;color:var(--wf-ink);font-size:13.5px}
+.cmp{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.cmp{grid-template-columns:1fr 1fr}}
+.ccol{border:1px solid var(--line);border-radius:var(--r);padding:15px;background:var(--bg2)}
+.ch{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin-bottom:11px}
+.ccol>*:last-child{margin-bottom:0}
+ol.qs{list-style:none;margin:0;padding:0}
+li.q{padding:16px 0;border-bottom:1px solid var(--line)}
+li.q:first-child{padding-top:0} li.q:last-child{border-bottom:0;padding-bottom:0}
+.qh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.qn{font:700 11px/1 var(--mono);color:var(--acc2)}
+.qt{font-weight:600;flex:1;min-width:200px}
+ul.opts{list-style:none;margin:11px 0 0;padding:0}
+ul.opts li{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;
+padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin:0 0 7px;background:var(--bg2)}
+.box{width:14px;height:14px;border:1.5px solid var(--line2);border-radius:3px;margin-top:4px}
+.box.m{border-radius:3px} .ol{font-size:14px}
+.od{display:block;color:var(--mut);font-size:13px;margin-top:2px}
+.freeform{border:1px dashed var(--line2);border-radius:8px;padding:15px;
+color:var(--mut2);font-size:13px;margin-top:11px}
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+color:var(--mut2);font-size:12.5px}
+@media print{
+ nav.toc{display:none}.shell{grid-template-columns:1fr;max-width:none;padding:0}
+ .blk,.callout,.tw{break-inside:avoid}body{background:#fff;color:#000}
+}
+</style>
+</head><body>
+<div class="shell">
+<nav class="toc"><a class="l2" href="#evidence-and-decisions">Evidence and decisions</a><a class="l2" href="#verification-and-rollback">Verification and rollback</a><a class="l2" href="#audit-history">Audit history</a><a class="l2" href="#open-questions">Open questions</a></nav>
+<div>
+<header class="hero">
+<div class="eyebrow">Implementation plan</div>
+<h1>Reliable historical MCP revenue requests</h1>
+<p class="obj">Honour historical dates in revenue tools and graphs, refuse silent fallback, and distinguish client history from retained payment coverage.</p>
+<div class="meta"><span class="chip">Status <b>shipping authorised; Ian deploys</b></span><span class="chip">Owner <b>Ian Kuria</b></span><span class="chip">Date <b>2026-11-14</b></span><span class="chip">Scope <b>Correct remaining gaps on top of reporting release 33a77116; inspect production read-only.</b></span><span class="chip">Non-goals <b>production deployment or permission changes; payment, customer or provider mutations</b></span></div>
+</header>
+<main><h2 id="evidence-and-decisions">Evidence and decisions</h2>
+<p>The connected tool schema lacks from/to on trend and market tools. A live summary with from=2026-08-01 and to=2026-11-14 returned window.from=2026-10-16 and window.to=2026-11-14 while meta.filters echoed the requested dates and result_state=complete. The legacy CeoDashboardDataService::context only uses explicit dates when horizon=custom; its default branch substitutes 30d. Source release 33a77116 already adds exact-date dispatch and an aggregate payment view but deployment remains unverified. Its parser still rejects intervals over 366 days; the catalogue&#x27;s coverage.from comes from Client.created_at.</p>
+<p>Reuse the existing exact reporting path and aggregate SQL view. Preserve the default dashboard calculation for recognised preset windows. Validate unsupported/missing custom windows before dispatch, never silently substitute 30d. Permit historical intervals over a year while retaining the 50,000 candidate and 9,000 bucket limits as explicit errors. Keep the existing coverage.from/to fields for compatibility, label them client-record history, and add separately scoped retained payment-candidate dates with a completeness caveat. Do not claim retention proves provider settlement or that missing history means zero revenue.</p>
+<section class="blk"><header class="bh">Implementation steps</header><div class="bb"><ol class="steps"><li class="step"><div class="sn">1</div><div class="sc"><h4>Verify the deployed defect</h4><div class="sm"><span class="k">Reuses</span><span class="v">Existing fleet-ops bin/mkt read checks and connected MCP tool</span></div><div class="sm"><span class="k">Adds</span><span class="v">Saved bounded evidence of served code, date fallback and deployment readiness</span></div><div class="sm"><span class="k">Files</span><span class="v">docs/agent/tasks/mcp-historical-revenue-2026-11-14.md</span></div><div class="sm"><span class="k">Verify</span><span class="v">Inspect live source/view availability using registered read-only checks; no deployment</span></div></div></li><li class="step"><div class="sn">2</div><div class="sc"><h4>Close historical request and coverage gaps</h4><div class="sm"><span class="k">Reuses</span><span class="v">RevenueReportingWindow, preciseRevenue dispatch, RevenueReportingQuery::candidates, ToolRegistry and existing revenue app</span></div><div class="sm"><span class="k">Adds</span><span class="v">Strict preset handling including CEO dashboard adapter inference, longer explicit windows, full historical graph series in a scrollable region, actionable tool descriptions and separate client/payment coverage semantics</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Mcp/McpServer.php; app/Services/Mcp/RevenueReportingWindow.php; app/Services/Mcp/ToolRegistry.php; app/Services/Mcp/McpRequestAdapter.php; resources/mcp/apps/revenue-dashboard-v1.html; resources/mcp/reporting-views.md</span></div><div class="sm"><span class="k">Verify</span><span class="v">August–November monthly totals, multi-year history, invalid windows, scoped catalogue dates and all four protocol adapters</span></div></div></li><li class="step"><div class="sn">3</div><div class="sc"><h4>Verify and record the correction</h4><div class="sm"><span class="k">Reuses</span><span class="v">Disposable SQLite reporting test schema, existing app contract script and release checklist</span></div><div class="sm"><span class="k">Adds</span><span class="v">Regression evidence and exact pending deployment/connector-refresh steps</span></div><div class="sm"><span class="k">Files</span><span class="v">tests/Feature/Mcp/McpHourlyRevenueReportingTest.php; docs/agent/tasks/mcp-historical-revenue-2026-11-14.md</span></div><div class="sm"><span class="k">Verify</span><span class="v">Focused PHP tests, app contract, scoped Pint and diff checks; raw payments SQL remains refused</span></div></div></li></ol></div></section>
+<section class="blk"><header class="bh">Endpoint</header><div class="bb"><div class="ep"><div class="ep-h"><span class="verb v-POST">POST</span><code class="path">/api/mcp</code></div><div class="sm"><span class="k">Auth</span><span class="v">Existing active staff token/OAuth, per-tool grant and role, intersected platform permissions. SQL keeps admin-only explicit enablement and aggregate view allowlist.</span></div><div class="sub">Request</div><pre class="code"><code>{
+  &quot;name&quot;: &quot;exotic_revenue_trend&quot;,
+  &quot;arguments&quot;: {
+    &quot;from&quot;: &quot;2026-08-01&quot;,
+    &quot;to&quot;: &quot;2026-11-14&quot;,
+    &quot;bucket&quot;: &quot;month&quot;
+  }
+}</code></pre><div class="sm"><span class="k">Response</span><span class="v">Four dated monthly points using the requested interval, original currencies and USD availability; same reporting window across summary, trend and app</span></div><div class="sm"><span class="k">Errors</span><span class="v">Invalid or incomplete intervals and unknown presets return invalid_params; resource limits return report_limit rather than a truncated result</span></div></div></div></section>
+<section class="blk"><header class="bh">Risks</header><div class="bb"><div class="tw"><table><thead><tr><th>Risk</th><th>Impact</th><th>Likelihood</th><th>Mitigation</th></tr></thead><tbody><tr><td>Earlier source is pushed but production still serves old reporting code</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Verify deployed sources and view readiness read-only, hand off combined release prerequisites, and distinguish local tests from live acceptance</td></tr><tr><td>Catalogue retention dates are mistaken for proof of full revenue history</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Label client history and candidate payment retention separately; include scope and explicit completeness caveats</td></tr><tr><td>Long intervals exceed safe reporting work</td><td><span class="pill p-warn">medium</span></td><td>—</td><td>Keep explicit record/bucket limits without silent truncation; production-volume performance remains a deployment acceptance check</td></tr></tbody></table></div></div></section>
+<h2 id="verification-and-rollback">Verification and rollback</h2>
+<p>Run /usr/local/opt/php@8.2/bin/php artisan test --filter=McpHourlyRevenueReportingTest and node tests/scripts/mcp-revenue-app-contract.cjs, then scoped Pint and git diff --check. Fixtures must prove four historical monthly values survive all supported MCP protocols and the graph payload, reject unsupported windows, permit a two-year monthly interval and enforce market scope. Retain existing SQL-view safety regression. Reverse only this correction&#x27;s task-owned diff to roll back; the earlier reporting migration is unchanged. No frontend build is required: the MCP app is served directly from its versioned HTML resource. Add app assertions that the final point of a 107-day history and a 24-month history remains rendered. Test recognised legacy preset dispatch and fail explicitly for unsupported presets, missing custom bounds and more than 9,000 buckets. Preserve CEO dashboard calendar-day calculations while inferring custom horizon from complete date bounds.</p>
+<h2 id="audit-history">Audit history</h2>
+<p>Round 1: NOT READY. Corrected two blockers: CEO dashboard adapter still ignored dates without custom horizon; embedded app silently displayed only its first twelve points. Added preset compatibility and bucket-limit acceptance tests. Round 2: READY. Added labelled keyboard-focusable chart region and period count. Implemented and verified: 29 backend tests / 317 assertions; 24 app contract assertions. Ian&#x27;s explicit request to implement corrections authorises this scope; Ian authorised source shipping and will deploy personally before live testing.</p>
+<section class="blk" id="open-questions"><header class="bh">Open questions</header><div class="bb"><ol class="qs"></ol></div></section></main>
+<footer>Rendered from <code>plan.mdx</code> · review surface only — no code was written to produce this.</footer>
+</div></div></body></html>

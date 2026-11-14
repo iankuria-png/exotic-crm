@@ -510,6 +510,9 @@ class McpServer
 
     private function preciseRevenue(array $arguments): bool
     {
+        // Refuse unknown presets instead of allowing the dashboard's 30d fallback.
+        RevenueReportingWindow::fromArguments($arguments);
+
         return RevenueReportingWindow::explicit($arguments) || ($arguments['window'] ?? '') === 'custom' || isset($arguments['country']) || isset($arguments['timezone']) || ($arguments['bucket'] ?? '') === 'hour';
     }
 
@@ -574,7 +577,13 @@ class McpServer
         return [
             'tools' => $visibleTools,
             'markets' => $markets,
-            'coverage' => ['from' => Client::query()->when(is_array($allowed), fn ($query) => $query->whereIn('platform_id', $allowed))->min('created_at'), 'to' => now()->toDateString()],
+            'coverage' => [
+                'from' => Client::query()->when(is_array($allowed), fn ($query) => $query->whereIn('platform_id', $allowed))->min('created_at'),
+                'to' => now()->toDateString(),
+                'basis' => 'client_record_creation',
+                'caveat' => 'Client record dates do not establish payment retention or complete revenue history.',
+            ],
+            'payment_retention' => $this->paymentRetention($user, $abilities, $allowed),
             'audit_access' => [
                 'administrator_active' => $user->role === 'admin' && $user->isActive(),
                 'subscription_audit_granted' => in_array('mcp:subscription-audit', $abilities ?? [], true),
@@ -582,6 +591,23 @@ class McpServer
                 'named_audit_ready' => count(array_intersect($visibleTools, ['exotic_subscription_audit_profiles', 'exotic_subscription_audit_events', 'exotic_subscription_audit_trace'])) > 0 && $user->role === 'admin' && $user->isActive() && in_array('mcp:subscription-audit', $abilities ?? [], true) && in_array('mcp:identified-clients', $abilities ?? [], true),
                 'instructions' => 'Use the enabled subscription audit profiles tool for active profiles and retained payment history. Named reads require identified=true and purpose. An administrator can enable named audit access in Settings or reconnect with named audit consent.',
             ],
+        ];
+    }
+
+    private function paymentRetention(User $user, ?array $abilities, ?array $allowed): array
+    {
+        if (! $this->registry->available('exotic_revenue_summary', $user, $this->settings, $abilities)) {
+            return ['availability' => 'unavailable', 'reason' => 'Revenue reporting is not granted.'];
+        }
+        $dates = DB::query()->fromSub(app(RevenueReportingQuery::class)->candidates(), 'retained')
+            ->when(is_array($allowed), fn ($query) => $query->whereIn('retained.platform_id', $allowed))
+            ->selectRaw('MIN(occurred_at) AS first_at, MAX(occurred_at) AS last_at')->first();
+
+        return [
+            'availability' => $dates->first_at === null ? 'no_data' : 'available',
+            'from' => $dates->first_at, 'to' => $dates->last_at, 'timezone' => 'UTC',
+            'basis' => 'retained_successful_payment_candidates',
+            'caveat' => 'Scoped candidate dates before receipt-ambiguity checks. Retention does not prove continuous collection, complete revenue history or provider settlement.',
         ];
     }
 

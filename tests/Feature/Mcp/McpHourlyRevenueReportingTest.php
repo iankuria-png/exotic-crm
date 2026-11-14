@@ -120,6 +120,151 @@ class McpHourlyRevenueReportingTest extends TestCase
         return $extra + ['from' => '2026-11-12T20:00:00+03:00', 'to' => '2026-11-13T05:09:00+03:00'];
     }
 
+    private function rpc(string $name, array $arguments, string $protocol = '2026-07-28', ?User $user = null): array
+    {
+        $request = Request::create('/api/mcp', 'POST', [], [], [], ['CONTENT_TYPE' => 'application/json', 'HTTP_ACCEPT' => 'application/json, text/event-stream', 'HTTP_MCP_PROTOCOL_VERSION' => $protocol], json_encode([
+            'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call', 'params' => ['name' => $name, 'arguments' => $arguments, '_meta' => ['io.modelcontextprotocol/protocolVersion' => $protocol]],
+        ]));
+        $this->app->instance('request', $request);
+        $request->setUserResolver(fn () => $user ?? $this->admin);
+        $response = app(McpServer::class)->handle($request);
+
+        return [$response->getStatusCode(), $response->getData(true)];
+    }
+
+    private function resultData(array $payload): array
+    {
+        return $payload['result']['structuredContent']['data'] ?? json_decode($payload['result']['content'][0]['text'], true);
+    }
+
+    public function test_august_to_november_monthly_history_agrees_across_tools_and_protocols_without_custom_flag(): void
+    {
+        foreach (['2026-08-15' => 10, '2026-09-15' => 20, '2026-10-15' => 30, '2026-11-12' => 40] as $date => $amount) {
+            $this->payment(['amount' => $amount, 'completed_at' => $date.' 09:00:00']);
+        }
+        $this->payment(['amount' => 900, 'completed_at' => '2026-07-31 20:59:59']);
+        $this->payment(['amount' => 800, 'completed_at' => '2026-11-14 21:00:00']);
+        $arguments = ['from' => '2026-08-01', 'to' => '2026-11-14', 'bucket' => 'month'];
+        foreach (['2025-03-26', '2025-06-18', '2025-11-25', '2026-07-28'] as $protocol) {
+            foreach (['exotic_revenue_summary', 'exotic_revenue_trend', 'exotic_market_breakdown', 'exotic_render_revenue_dashboard'] as $tool) {
+                $toolArguments = $arguments;
+                if (in_array($tool, ['exotic_revenue_summary', 'exotic_market_breakdown'], true)) {
+                    unset($toolArguments['bucket']);
+                }
+                [$status, $payload] = $this->rpc($tool, $toolArguments, $protocol);
+                $this->assertSame(200, $status, json_encode($payload));
+                $data = $this->resultData($payload);
+                if ($tool === 'exotic_render_revenue_dashboard') {
+                    $this->assertSame($data['summary']['window'], $data['trend']['window']);
+                    $this->assertSame($data['summary']['window'], $data['market_breakdown']['window']);
+                    $this->assertEquals(100, $data['summary']['collections']['new_cash']['normalized_total']);
+                    $data = $data['trend'];
+                }
+                $this->assertSame('2026-08-01T00:00:00+03:00', $data['window']['from_local']);
+                $this->assertSame('2026-11-15T00:00:00+03:00', $data['window']['to_local']);
+                if (isset($data['points'])) {
+                    $this->assertEquals([10, 20, 30, 40], array_column($data['points'], 'value'));
+                } elseif (isset($data['collections'])) {
+                    $this->assertEquals(100, $data['collections']['new_cash']['normalized_total']);
+                } else {
+                    $this->assertEquals(100, $data['total']);
+                }
+            }
+        }
+    }
+
+    public function test_multi_year_history_is_available_and_excessive_bucket_counts_are_explicit_errors(): void
+    {
+        $this->payment(['amount' => 25, 'completed_at' => '2025-01-10 10:00:00']);
+        $this->payment(['amount' => 50, 'completed_at' => '2026-11-12 10:00:00']);
+        $args = ['from' => '2025-01-01', 'to' => '2026-12-31', 'bucket' => 'month'];
+        [$status, $payload] = $this->rpc('exotic_revenue_trend', $args);
+        $this->assertSame(200, $status);
+        $data = $this->resultData($payload);
+        $this->assertCount(24, $data['points']);
+        $this->assertEquals(75, array_sum(array_column($data['points'], 'value')));
+        [$status, $payload] = $this->rpc('exotic_revenue_trend', array_merge($args, ['bucket' => 'hour']));
+        $this->assertSame(422, $status);
+        $this->assertStringContainsString('coarser bucket', json_encode($payload));
+        $this->assertArrayNotHasKey('result', $payload);
+    }
+
+    public function test_unknown_presets_and_incomplete_custom_bounds_never_fall_back_to_thirty_days(): void
+    {
+        foreach (['exotic_revenue_summary', 'exotic_revenue_trend', 'exotic_market_breakdown', 'exotic_render_revenue_dashboard', 'exotic_ceo_dashboard'] as $tool) {
+            foreach ([['window' => '4m'], ['window' => 'custom'], ['from' => '2026-08-01'], ['to' => '2026-11-14']] as $args) {
+                [$status, $payload] = $this->rpc($tool, $args);
+                $this->assertSame(422, $status, $tool.' '.json_encode($payload));
+                $this->assertArrayNotHasKey('result', $payload);
+            }
+        }
+    }
+
+    public function test_legacy_presets_keep_dashboard_dispatch_and_ceo_dates_infer_custom_calendar_window(): void
+    {
+        $dashboard = \Mockery::mock(\App\Services\CeoDashboardDataService::class);
+        foreach (['today', 'day', '7d', '30d', '90d', 'ytd'] as $preset) {
+            $dashboard->shouldReceive('summary')->once()->withArgs(fn ($request) => $request->query('horizon') === $preset)
+                ->andReturn(['window' => ['horizon' => $preset], 'metrics' => [], 'customer_mix' => [], 'visitor_revenue' => [], 'insights' => []]);
+        }
+        $this->app->instance(\App\Services\CeoDashboardDataService::class, $dashboard);
+        foreach (['today', 'day', '7d', '30d', '90d', 'ytd'] as $preset) {
+            [$status, $payload] = $this->rpc('exotic_revenue_summary', ['window' => $preset]);
+            $this->assertSame(200, $status);
+            $this->assertSame($preset, $this->resultData($payload)['window']['horizon']);
+        }
+        $request = app(\App\Services\Mcp\McpRequestAdapter::class)->build(['from' => '2026-08-01', 'to' => '2026-11-14'], $this->admin);
+        $this->assertSame('custom', $request->query('horizon'));
+        $this->app->forgetInstance(\App\Services\CeoDashboardDataService::class);
+        $context = app(\App\Services\CeoDashboardDataService::class)->context($request);
+        $this->assertSame('2026-08-01', $context['from']->toDateString());
+        $this->assertSame('2026-11-14', $context['to']->toDateString());
+        $this->assertSame(106, $context['days']);
+    }
+
+    public function test_catalogue_distinguishes_client_history_from_scoped_payment_retention(): void
+    {
+        Schema::create('clients', function (Blueprint $t) {
+            $t->id();
+            $t->unsignedBigInteger('platform_id');
+            $t->dateTime('created_at');
+        });
+        DB::table('clients')->insert(['platform_id' => 1, 'created_at' => '2026-03-18 10:00:00']);
+        $this->payment(['platform_id' => 1, 'completed_at' => '2026-08-10 10:00:00']);
+        $this->payment(['platform_id' => 5, 'completed_at' => '2026-01-05 10:00:00']);
+        $this->payment(['platform_id' => 1, 'completed_at' => '2025-01-01 10:00:00', 'status' => 'failed']);
+        $user = new User(['role' => 'sub_admin', 'status' => 'active', 'assigned_market_ids' => [1]]);
+        $user->id = 7;
+        [$status, $payload] = $this->rpc('exotic_catalog', [], user: $user);
+        $this->assertSame(200, $status, json_encode($payload));
+        $data = $this->resultData($payload);
+        $this->assertSame('client_record_creation', $data['coverage']['basis']);
+        $this->assertSame('2026-03-18 10:00:00', $data['coverage']['from']);
+        $this->assertSame('2026-08-10 10:00:00', $data['payment_retention']['from']);
+        $this->assertSame('2026-08-10 10:00:00', $data['payment_retention']['to']);
+        $this->assertStringContainsString('does not prove', $data['payment_retention']['caveat']);
+        $user->role = 'sales';
+        [$status, $payload] = $this->rpc('exotic_catalog', [], user: $user);
+        $this->assertSame(200, $status);
+        $this->assertSame('unavailable', $this->resultData($payload)['payment_retention']['availability']);
+        $this->assertArrayNotHasKey('from', $this->resultData($payload)['payment_retention']);
+    }
+
+    public function test_ceo_dashboard_passes_complete_historical_bounds_to_every_existing_calculation(): void
+    {
+        $dashboard = \Mockery::mock(\App\Services\CeoDashboardDataService::class);
+        foreach (['summary', 'revenueTrend', 'marketPie', 'peakHours', 'agentPerformance', 'context'] as $method) {
+            $dashboard->shouldReceive($method)->times(4)->withArgs(fn ($request) => $request->query('horizon') === 'custom'
+                && $request->query('from') === '2026-08-01' && $request->query('to') === '2026-11-14')->andReturn([]);
+        }
+        $this->app->instance(\App\Services\CeoDashboardDataService::class, $dashboard);
+        foreach (['2025-03-26', '2025-06-18', '2025-11-25', '2026-07-28'] as $protocol) {
+            [$status, $payload] = $this->rpc('exotic_ceo_dashboard', ['from' => '2026-08-01', 'to' => '2026-11-14'], $protocol);
+            $this->assertSame(200, $status, json_encode($payload));
+            $this->assertSame('CeoDashboardDataService', $this->resultData($payload)['source']);
+        }
+    }
+
     public function test_exact_offset_boundaries_and_multiple_sites_country_category_funding_sums(): void
     {
         $this->payment(['amount' => 900, 'completed_at' => '2026-11-12 16:59:59']);

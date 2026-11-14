@@ -47,8 +47,8 @@ final class RevenueReportingWindow
             };
             $to = $now;
         }
-        if ($from->greaterThanOrEqualTo($to) || $from->diffInSeconds($to) > 366 * 86400) {
-            throw McpProtocolException::rpc(-32602, 'Reporting interval must be positive and at most 366 days.', 'invalid_params', 422);
+        if ($from->greaterThanOrEqualTo($to)) {
+            throw McpProtocolException::rpc(-32602, 'Reporting interval must be positive.', 'invalid_params', 422);
         }
 
         return new self($from->utc(), $to->utc(), $timezone);

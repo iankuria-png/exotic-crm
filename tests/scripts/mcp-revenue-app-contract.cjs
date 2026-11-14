@@ -25,4 +25,14 @@ vm.runInContext('render(fixture)',context);
 assert.match(get('metrics').innerHTML,/Collected Revenue/);
 assert.match(get('metrics').innerHTML,/\$50.00/);
 assert.doesNotMatch(get('metrics').innerHTML,/New cash · all services/);
-console.log('MCP revenue app contract: 13 assertions PASS');
+for (const count of [4, 24, 107]) {
+    context.fixture = {data:{summary:{},trend:{bucket:'day',points:Array.from({length:count},(_,i)=>({label:`Historical period ${i+1}`,value:i+1,normalized_currency:'USD'}))},market_breakdown:{}},meta:{}};
+    vm.runInContext('render(fixture)',context);
+    assert.equal((get('trend').innerHTML.match(/class="bar-row"/g)||[]).length,count);
+    assert.match(get('trend').innerHTML,new RegExp(`Historical period ${count}`));
+    assert.equal(get('bucket').textContent,`day · ${count} periods`);
+}
+const html = fs.readFileSync('resources/mcp/apps/revenue-dashboard-v1.html','utf8');
+assert.match(html, /id="trend"[^>]*role="region"[^>]*aria-label="Full revenue trend"[^>]*tabindex="0"/);
+assert.match(html, /overflow-y: auto/);
+console.log('MCP revenue app contract: 24 assertions PASS');
