@@ -27,3 +27,5 @@ Reusable checkpoint lessons: `docs/agent/lessons.md`. Compare current commits be
 - Exact hourly collections: [task](tasks/crm-hourly-reporting-2026-11-13.md).
 - Country/site demand and requested profile cities: [task](tasks/visitor-demand-country-2026-11-13.md).
 - Reporting release and cPanel checklist: [task](tasks/reporting-release-2026-11-14.md).
+
+- Historical MCP revenue dates, graphs and coverage: [task](tasks/mcp-historical-revenue-2026-11-14.md).

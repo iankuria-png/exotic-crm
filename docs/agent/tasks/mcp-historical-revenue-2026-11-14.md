@@ -1,6 +1,6 @@
 # Historical MCP revenue requests — 14 November 2026
 
-Status: **shipping authorised; source commit/push in progress; not deployed**. CRM baseline `d98da588`. Ian requested root-cause diagnosis and corrections, then explicitly authorised fleet ops checks of live CRM. No production deployment, migration or permission change was requested.
+Status: **source correction `3b46191b` PUSHED to `origin/main`; NOT DEPLOYED**. CRM baseline `d98da588`. Ian requested root-cause diagnosis and corrections, then explicitly authorised fleet ops checks of live CRM. No production deployment, migration or permission change was requested.
 
 ## Confirmed root causes
 
@@ -38,8 +38,14 @@ Fixtures prove August–November monthly amounts agree across summary, trend, ma
 
 The task-owned diff and hashes are saved under `output/mcp-historical-revenue-2026-11-14/`; the patch is against `d98da588` and contains only the eight corrected source/test/reference files. No unrelated billing/collections/build overlays are included. No frontend rebuild is needed for this correction: the MCP app is served directly from its HTML resource. Preserve the existing release's separately built assets when shipping it.
 
-Ian will perform deployment and notify Codex when live testing may start. Use the [earlier reporting release checklist](reporting-release-2026-11-14.md) together with this correction: protect deployed overlays; ship the reviewed correction; inspect the actual live-to-release delta; deploy the reporting prerequisites; apply only `2026_11_13_180000_create_mcp_payment_collections_view.php` after a verified database backup; refresh serving PHP/config; verify the newly advertised trend/market historical schemas. The SQL hatch can remain disabled; retain existing grants and raw-table protection. A stored SQL view allowlist/SELECT grant only needs reconciliation if using that optional hatch.
+Ian will perform deployment and notify Codex when live testing may start. Use the [earlier reporting release checklist](reporting-release-2026-11-14.md) together with this correction: protect deployed overlays; pull the reviewed correction `3b46191b` or its documentation successor; inspect the actual live-to-release delta; deploy the reporting prerequisites; apply only `2026_11_13_180000_create_mcp_payment_collections_view.php` after a verified database backup; refresh serving PHP/config; verify the newly advertised trend/market historical schemas. The SQL hatch can remain disabled; retain existing grants and raw-table protection. A stored SQL view allowlist/SELECT grant only needs reconciliation if using that optional hatch.
 
 Then verify August–November through the actual connector: monthly point labels, summary/trend/market/app interval agreement, November-to-date labelling, native-currency reconciliation and missing-FX handling. Measure runtime on retained production volume and verify the final chart point in ChatGPT. Neither live historical financial reconciliation nor production performance acceptance is complete. Do not mark this incident live-fixed until those checks pass.
 
 Rollback: revert only the eight-file corrective diff and refresh serving PHP/resources; no data repair is involved. The earlier release's view rollback is separate and must follow its migration/deployment checklist. The initial correction pass made no commit or push. On 14 November Ian authorised source shipping only; no production runtime/config/grant change or customer/provider mutation is included.
+
+## Shipping handoff
+
+Ian authorised shipping on 14 November, retaining deployment and specifying live testing only after his notification. Source correction `3b46191b` is pushed to `origin/main` on top of `d98da588`; the earlier reporting prerequisites `33a77116` remain included. All eight reviewed runtime/test/reference hashes still match the tested manifest, and five PHP syntax checks pass. No frontend bundle was rebuilt: this change updates the directly served MCP HTML resource. Unrelated dirty billing/collections/build files remain outside the release.
+
+For the manual cPanel deployment, preserve deployed overlays and use the earlier release checklist. The outstanding reporting migration is `php artisan migrate --path=database/migrations/2026_11_13_180000_create_mcp_payment_collections_view.php --force` using the server PHP binary, after a verified database backup. Refresh serving PHP/config through the established procedure. Do not enable the SQL hatch or change financial flags for ordinary MCP reporting. **Await Ian’s deployment confirmation before any new live test.**
