@@ -1,6 +1,6 @@
 # Long-range MCP revenue performance — 15 November 2026
 
-Status: correction verified locally and prepared for the authorised source commit/push. Production still requires Ian's cPanel pull and the exact connector retest. No migration, configuration change or frontend rebuild is required.
+Status: **correction04cb36d8 PUSHED to origin/main** after verified local and production-SELECT-only checks. Production still requires Ian's cPanel pull and the exact connector retest. No migration, configuration change or frontend rebuild is required.
 
 Ian requested resolving and shipping the long-range failure observed in [live acceptance](mcp-live-acceptance-2026-11-14.md). Both August–November Uganda summary and dashboard failed after about60seconds with an HTTP405 transport response. The earlier date/bucket corrections were deployed; the remaining problem was execution cost.
 

@@ -1,7 +1,7 @@
 {
   "checked_at_utc": "2026-11-15T05:18:55.192203+00:00",
   "base_head": "a472e35911bc7fbbf4f0e325f515bbafb31482cf",
-  "stage": "local_ready_to_ship",
+  "stage": "source_pushed_deployment_pending",
   "sqlite": "33 tests / 494 assertions PASS",
   "mariadb": "34 tests / 506 assertions PASS, includes 42,000-row benchmark",
   "mcp_app": "24 assertions PASS",
@@ -16,5 +16,6 @@
   "database_migration_required": false,
   "frontend_build_required": false,
   "production_runtime_unchanged": true,
-  "live_retest_pending_after_pull": true
+  "live_retest_pending_after_pull": true,
+  "source_commit": "04cb36d8"
 }
