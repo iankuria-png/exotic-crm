@@ -2,7 +2,7 @@
 
 Owner: Ian Kuria. Scope authorised: identify the Demand UX problems, implement the redesign and ship CRM source/assets. Established CRM ship workflow applies: push origin/main; Ian performs cPanel deployment.
 
-Status: implementation and scoped release build complete, shipping source and matching assets. **Production deployment remains pending.**
+Status: source and matching compiled assets **PUSHED to origin/main as `4cef4051`**. Remote ref independently confirmed during the 15 November handoff. **Production deployment remains pending.**
 
 ## What changed and why
 
