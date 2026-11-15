@@ -1,0 +1,20 @@
+{
+  "checked_at_utc": "2026-11-15T05:18:55.192203+00:00",
+  "base_head": "a472e35911bc7fbbf4f0e325f515bbafb31482cf",
+  "stage": "local_ready_to_ship",
+  "sqlite": "33 tests / 494 assertions PASS",
+  "mariadb": "34 tests / 506 assertions PASS, includes 42,000-row benchmark",
+  "mcp_app": "24 assertions PASS",
+  "source_hashes": {
+    "app/Services/Mcp/RevenueReportingQuery.php": "56823167e187268526ea57ed2a08fc13eab7889a041a4f816416b4102597f21b",
+    "app/Services/Mcp/RevenueReportingService.php": "65ade6bc86e960656109455fd820acac4f74046606214acc62ee472ce6c485ce",
+    "app/Services/Mcp/McpServer.php": "964a97960dae36112b705878699fdf8b7332f3f3f613b3f939cc02dd0a3dceeb",
+    "tests/Feature/Mcp/McpHourlyRevenueReportingTest.php": "9afcd85f65cd743ffa9eede650e754e8952efbed69e09b0348227a6521d4e78b"
+  },
+  "core_query_ms": 1589.85,
+  "full_dashboard_ms": 1972.7,
+  "database_migration_required": false,
+  "frontend_build_required": false,
+  "production_runtime_unchanged": true,
+  "live_retest_pending_after_pull": true
+}

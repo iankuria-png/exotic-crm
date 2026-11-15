@@ -539,9 +539,16 @@ class McpServer
     {
         $trendArguments = $arguments;
         $trendArguments['bucket'] = (string) ($trendArguments['bucket'] ?? 'day');
-        $summary = $this->dashboardSummary($arguments, $user);
-        $trend = $this->revenueTrend($trendArguments, $user);
-        $markets = $this->marketBreakdown($arguments, $user);
+        if ($this->preciseRevenue($arguments)) {
+            $report = app(RevenueReportingService::class)->dashboard($trendArguments, $user);
+            $summary = $report['summary'];
+            $trend = $report['trend'];
+            $markets = $report['market_breakdown'];
+        } else {
+            $summary = $this->dashboardSummary($arguments, $user);
+            $trend = $this->revenueTrend($trendArguments, $user);
+            $markets = $this->marketBreakdown($arguments, $user);
+        }
         $meta = $this->reportMetadata($summary);
         unset($summary['_report_meta'], $trend['_report_meta'], $markets['_report_meta']);
 

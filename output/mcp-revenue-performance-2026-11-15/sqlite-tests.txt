@@ -1,0 +1,40 @@
+
+   PASS  Tests\Feature\ContactUnlockCountryDemandTest
+  ✓ disabled sites have attempts grouped by country and site without cl… 0.20s
+  ✓ country filter intersects authorisation and platform and cannot wid… 0.03s
+  ✓ missing collection is unavailable and inactive sites stay visible    0.03s
+  ✓ locations are cta only current profile cities and bad cross site li… 0.03s
+  ✓ pulse endpoint intersects country with sales assignments and reject… 0.12s
+  ✓ pulse endpoint accepts both tanzania sites for admin                 0.03s
+  ✓ pulse endpoint requires authentication                               0.04s
+  ✓ requested location limit is explicit and does not truncate attempt…  0.06s
+  ✓ existing event ingestion records and deduplicates interest with che… 0.06s
+
+   PASS  Tests\Feature\Mcp\McpHourlyRevenueReportingTest
+  ✓ joined receipt dispositions match an independent pairwise oracle wi… 0.23s
+  ✓ exact dashboard reads candidate data once and preserves per payment… 0.08s
+  ✓ numeric receipt groups follow database collation across sites and o… 0.05s
+  ✓ default and preset dashboards keep all three legacy presenters       0.08s
+  ✓ august to november monthly history agrees across tools and protocol… 0.16s
+  ✓ multi year history is available and excessive bucket counts are exp… 0.34s
+  ✓ unknown presets and incomplete custom bounds never fall back to thi… 0.06s
+  ✓ legacy presets keep dashboard dispatch and ceo dates infer custom c… 0.04s
+  ✓ catalogue distinguishes client history from scoped payment retentio… 0.06s
+  ✓ ceo dashboard passes complete historical bounds to every existing c… 0.04s
+  ✓ exact offset boundaries and multiple sites country category funding… 0.04s
+  ✓ historical uganda case preserves 15 hour start and date only inclus… 0.03s
+  ✓ real hourly buckets across midnight keep distinct dates and partial… 0.04s
+  ✓ business visibility exclusions and aggregate view have identical el… 0.04s
+  ✓ duplicate outside window is not counted but split bundle and receiv… 0.04s
+  ✓ wallet variants unknown funding and missing cached fx are not new c… 0.07s
+  ✓ cached historical fx and timestamp fallback are reported without ex… 0.11s
+  ✓ invalid ranges and unscoped country are refused instead of defaulti… 0.11s
+  ✓ equivalent offsets and subsecond bounds select the same instant      0.05s
+  ✓ view default amount is cash while earned value is explicit and ambi… 0.06s
+  ✓ exact market rows retain app contract and requested currency is not… 0.06s
+  ✓ exact render dashboard uses one interval and preserves partial fx t… 0.05s
+  ✓ all mcp protocol adapters preserve exact values metadata and sql sa… 0.06s
+  ✓ visitor country arguments and unavailable coverage survive all prot… 0.04s
+
+  Tests:    33 passed (494 assertions)
+  Duration: 3.37s

@@ -1,0 +1,121 @@
+{
+    "driver": "mysql",
+    "server": "11.4.13-MariaDB-ubu2404",
+    "retained_rows": 42000,
+    "requested_all_status_rows": 1557,
+    "core_query_ms": 1589.85,
+    "full_dashboard_ms": 1972.7,
+    "candidate_reads": 1,
+    "cash": {
+        "source_breakdown": {
+            "UGX": 3362600
+        },
+        "normalized_total": 843.54,
+        "normalized_currency": "USD",
+        "payments_count": 1299,
+        "normalization_meta": {
+            "partial": false,
+            "cached_only": true,
+            "stale": false
+        }
+    },
+    "earned": {
+        "source_breakdown": {
+            "UGX": 3693700
+        },
+        "normalized_total": 927.07,
+        "normalized_currency": "USD",
+        "payments_count": 1457,
+        "normalization_meta": {
+            "partial": false,
+            "cached_only": true,
+            "stale": false
+        }
+    },
+    "plan": [
+        {
+            "table": "<derived2>",
+            "type": "ALL",
+            "key": null,
+            "rows": "41553"
+        },
+        {
+            "table": "<derived8>",
+            "type": "ref",
+            "key": "key0",
+            "rows": "10"
+        },
+        {
+            "table": "payments",
+            "type": "ALL",
+            "key": null,
+            "rows": "41553"
+        },
+        {
+            "table": "platforms",
+            "type": "eq_ref",
+            "key": "PRIMARY",
+            "rows": "1"
+        },
+        {
+            "table": "manual_payment_bundles",
+            "type": "eq_ref",
+            "key": "PRIMARY",
+            "rows": "1"
+        },
+        {
+            "table": "collection_sales_items",
+            "type": "ALL",
+            "key": null,
+            "rows": "1"
+        },
+        {
+            "table": "collection_sales_sessions",
+            "type": "ALL",
+            "key": null,
+            "rows": "1"
+        },
+        {
+            "table": "billing_routing_decisions",
+            "type": "ref",
+            "key": "billing_routing_decisions_payment_id_billing_surface_index",
+            "rows": "1"
+        },
+        {
+            "table": "payments",
+            "type": "ALL",
+            "key": null,
+            "rows": "41553"
+        },
+        {
+            "table": "platforms",
+            "type": "eq_ref",
+            "key": "PRIMARY",
+            "rows": "1"
+        },
+        {
+            "table": "manual_payment_bundles",
+            "type": "eq_ref",
+            "key": "PRIMARY",
+            "rows": "1"
+        },
+        {
+            "table": "collection_sales_items",
+            "type": "ALL",
+            "key": null,
+            "rows": "1"
+        },
+        {
+            "table": "collection_sales_sessions",
+            "type": "ALL",
+            "key": null,
+            "rows": "1"
+        },
+        {
+            "table": "billing_routing_decisions",
+            "type": "ref",
+            "key": "billing_routing_decisions_payment_id_billing_surface_index",
+            "rows": "1"
+        }
+    ]
+}

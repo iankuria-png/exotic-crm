@@ -109,7 +109,23 @@ final class RevenueReportingService
 
     public function summary(array $arguments, User $user): array
     {
+        return $this->presentSummary($this->report($arguments, $user));
+    }
+
+    /** All dashboard sections share one request-local financial snapshot. */
+    public function dashboard(array $arguments, User $user): array
+    {
         $report = $this->report($arguments, $user);
+
+        return [
+            'summary' => $this->presentSummary($report),
+            'trend' => $this->presentTrend($report, (string) ($arguments['bucket'] ?? 'day')),
+            'market_breakdown' => $this->presentMarkets($report),
+        ];
+    }
+
+    private function presentSummary(array $report): array
+    {
         $rows = $report['_rows'];
         $subscription = $this->money($rows->whereIn('category', ['subscription', 'renewal']));
         $visitor = $this->money($rows->where('category', 'contact_unlock'));
@@ -126,9 +142,12 @@ final class RevenueReportingService
 
     public function trend(array $arguments, User $user): array
     {
-        $report = $this->report($arguments, $user);
+        return $this->presentTrend($this->report($arguments, $user), (string) ($arguments['bucket'] ?? 'day'));
+    }
+
+    private function presentTrend(array $report, string $bucket): array
+    {
         $window = $report['_window'];
-        $bucket = (string) ($arguments['bucket'] ?? 'day');
         if (! in_array($bucket, ['hour', 'day', 'week', 'month'], true)) {
             throw McpProtocolException::rpc(-32602, 'Unsupported revenue bucket.', 'invalid_params', 422);
         }
@@ -158,7 +177,11 @@ final class RevenueReportingService
 
     public function marketBreakdown(array $arguments, User $user): array
     {
-        $report = $this->report($arguments, $user);
+        return $this->presentMarkets($this->report($arguments, $user));
+    }
+
+    private function presentMarkets(array $report): array
+    {
 
         return ['window' => $report['window'], 'total' => $report['new_cash']['normalized_total'],
             'channels' => [], 'markets' => array_map(fn ($row) => $row + [

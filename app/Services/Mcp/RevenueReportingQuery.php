@@ -4,6 +4,7 @@ namespace App\Services\Mcp;
 
 use App\Models\Payment;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Query\JoinClause;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -55,8 +56,11 @@ final class RevenueReportingQuery
     {
         // Search all retained eligible records before window/platform filtering.
         // A repeat just outside the requested interval must still be detected.
-        $collision = DB::query()->fromSub($this->candidates(), 'other_receipt')->selectRaw('1')
-            ->whereColumn('other_receipt.id', '!=', 'reported.id')
+        // Both sides rank the same full retained universe before requested filters.
+        // SQL collation defines the cohorts; no binary hash or receipt truncation.
+        $ranked = DB::query()->fromSub($this->candidates(), 'retained')->select('retained.*')
+            ->selectRaw('DENSE_RANK() OVER (ORDER BY receipt_key, currency, provider_scope, environment_scope) AS receipt_group');
+        $collision = DB::query()->whereColumn('other_receipt.id', '!=', 'reported.id')
             ->whereNotNull('reported.receipt_key')->where('reported.receipt_key', '!=', '')
             ->whereColumn('other_receipt.receipt_key', 'reported.receipt_key')
             ->whereColumn('other_receipt.currency', 'reported.currency')
@@ -78,9 +82,19 @@ final class RevenueReportingQuery
                                 ->orWhereNull('reported.reference_sequence')->orWhereNull('other_receipt.reference_sequence'));
                     });
             });
+        $predicate = substr($collision->getGrammar()->compileWheres($collision), strlen('where '));
 
-        return DB::query()->fromSub($this->candidates(), 'reported')->select('reported.*')
-            ->selectRaw('CASE WHEN EXISTS ('.$collision->toSql().") THEN 'ambiguous_receipt' ELSE 'included' END AS disposition", $collision->getBindings());
+        return DB::query()->fromSub($ranked, 'reported')
+            ->leftJoinSub(clone $ranked, 'other_receipt', function (JoinClause $join) use ($predicate, $collision): void {
+                // Keep the small numeric cohort as the sole index lookup. The full
+                // predicate still decides collisions, including SQL NULL behaviour.
+                $join->on('other_receipt.receipt_group', '=', 'reported.receipt_group')
+                    ->whereRaw('CASE WHEN ('.$predicate.') THEN 1 ELSE 0 END = 1', $collision->getBindings());
+            })
+            ->select('reported.*')
+            ->selectRaw("CASE WHEN other_receipt.id IS NULL THEN 'included' ELSE 'ambiguous_receipt' END AS disposition")
+            // Several collision partners still represent one reported payment.
+            ->distinct();
     }
 
     public function aggregateView(): Builder

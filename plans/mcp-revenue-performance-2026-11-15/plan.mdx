@@ -1,0 +1,54 @@
+---
+title: Complete multi-month MCP revenue reports within the request budget
+objective: Remove repeated retained-history receipt scans while preserving report eligibility, exact bounds, funding partitions and response contracts.
+status: validated for shipping
+owner: Ian Kuria
+date: 2026-11-15
+scope: MCP revenue query execution and one-report dashboard composition
+non_goals:
+  - provider or customer data changes
+  - frontend rebuild or payment feature changes
+---
+
+## Failure and evidence
+
+The live August–November Uganda summary and dashboard both fail after approximately 60 seconds with HTTP405 transport responses. A SELECT-only MariaDB11.4.13 EXPLAIN identifies the receipt-collision dependent subquery reading an estimated41,963 payments per reported row. There are1,557 all-status Uganda records in this interval. A SELECT-only experiment materializing the existing EXISTS subquery still scans its entire derived result and exceeded its five-second cap. Dashboard composition separately executes the same report three times.
+
+## Design
+
+Compute a query-local DENSE_RANK over the full retained candidate universe ordered by normalised receipt, currency, provider and environment, then LEFT JOIN the two ranked candidate relations by their numeric receipt_group. DENSE_RANK preserves the database's own collation/equality rules, including Unicode equivalence and padding; no string truncation or binary hash is used. Both ranks are computed before country/date/platform filtering so cross-site and outside-window collisions remain detectable. Windowed derived relations materialize with a small numeric lookup key even when a UTF-8 receipt exceeds temporary string-index limits. Keep every collision predicate unchanged: different payment ID; nonempty normalised receipt; matching currency/provider/environment; known receiving account across sites or same-site fallback when either account is missing; different economic identity or repeated/null split-bundle sequence. Select only reported fields and an included/ambiguous disposition, with outer DISTINCT so multiple collisions never duplicate an economic row. The numeric equality join lets MariaDB build a small temporary lookup key. The internal group is a query-only cohort and is never exposed as a stable/public identifier; presenters and aggregate view select their existing fields. Verify the actual plan and runtime; do not infer improvement from SQL shape alone.
+
+The dashboard will call RevenueReportingService once and present summary/trend/market outputs from that same in-memory report. Standalone tool presenters retain their argument-based methods. Reuse is explicit within one request, without persistent financial caching, a cross-user cache or long-lived service state. Preserve per-payment native/USD rounding and cached-only FX.
+
+The existing stored SQL view keeps its equivalent eligibility semantics. This correction targets typed MCP queries; it does not recreate or migrate the existing view. Its standalone production-volume performance remains a separate limitation. Reverting the scoped source restores the previous execution path without schema/data changes.
+
+<Steps items={[
+ {"title":"Prove and replace the collision execution path","reuses":"RevenueReportingQuery::candidates and all existing receipt/account/bundle predicates","adds":"full-retention DENSE_RANK candidate relations joined on numeric group, outer DISTINCT and independent predicate-oracle/collation regressions","files":"app/Services/Mcp/RevenueReportingQuery.php; tests/Feature/Mcp/McpHourlyRevenueReportingTest.php","verify":"Differential dispositions for seeded account/site/bundle/null-sequence cases; existing exact-window and view-parity fixtures; MariaDB EXPLAIN uses a keyed derived lookup and production-sized fixture completes within budget"},
+ {"title":"Compose the exact dashboard from one report","reuses":"RevenueReportingService report and existing summary/trend/market money presenters","adds":"explicit report-to-output helpers and a dashboard composition entry point; exact McpServer path delegates once","files":"app/Services/Mcp/RevenueReportingService.php; app/Services/Mcp/McpServer.php","verify":"One candidate-data query per exact dashboard; summary/trend/market windows and partitions agree; explicit no-argument/preset render-dashboard regression proves all three existing legacy presenters remain selected; four protocols remain passing"},
+ {"title":"Validate and ship the scoped backend fix","reuses":"PHP8.2, disposable SQLite/MariaDB fixtures, existing app contract checks and CRM ship workflow","adds":"retained-volume timing/source evidence and exact manual deployment/live retest instructions","files":"docs/agent/tasks/mcp-revenue-performance-2026-11-15.md; output/mcp-revenue-performance-2026-11-15","verify":"All relevant regressions and per-payment FX checks pass on scoped release source; no frontend changes/build or new migration; commit/push origin main and complete separate changelog workflow"}
+]} />
+
+<Risks items={[
+ {"risk":"JOIN multiplicity changes totals","impact":"high","mitigation":"Select no fields from the collision partner, outer DISTINCT collapses all matches; independent pairwise predicate oracle plus SQL/view/native partition regressions"},
+ {"risk":"Optimizer still scans the materialized result","impact":"high","mitigation":"Gate implementation acceptance on MariaDB11.4 EXPLAIN and realistic retained-volume timing; no increased timeouts or reduced history"},
+ {"risk":"Dashboard reuse leaks data across requests or changes rounding","impact":"high","mitigation":"Explicit report argument passed only within dashboard composition; no static/persistent cache; preserve per-payment normalization and existing money presenters"},
+ {"risk":"Stored aggregate view remains slow for long windows","impact":"medium","mitigation":"Document unchanged stored-view plan; typed summary/trend/market/dashboard correction needs no migration; assess view optimization separately if required"}
+]} />
+
+## Verification and delivery
+
+Run the existing McpHourlyRevenueReportingTest and ContactUnlockCountryDemandTest on disposable SQLite. For MariaDB11.4.13, use an explicit test-copy adapter that replaces only the hardcoded in-memory connection setup with a newly created unique database per test inside the loopback-bound disposable container. Assert PDO driver=mysql and the actual server version in retained harness output. Never configure, migrate or reset the application/Local/production database; preserve original committed test setup. Run that adapted test directory explicitly against the scoped release source and destroy the task container afterward. Add collision-oracle, join multiplicity and dashboard query-count coverage. Use a labelled synthetic retained-history fixture approximating42,000 records and a1,500-row requested interval to measure the optimized query/presenters and inspect its EXPLAIN. Retain old/new SQL timing under bounded limits. Gate on a keyed derived lookup, a core query under five seconds and the full exact dashboard (including cached FX and all presenters) under fifteen seconds on the labelled 42,000-row fixture. Include missing/known receiving accounts, cross-site references, repeated bundle/null sequences, routing provenance and mixed eligibility in the fixture; performance cannot justify a changed disposition or rounded total. Keep cached FX only, null USD on missing rates, all dates/buckets and 50,000-row/9,000-bucket errors.
+
+The user explicitly requested resolving and shipping this failure. Local implementation and source commit/push are authorised; use the existing main checkout and preserve unrelated source/build/staging. Ian performs cPanel deployment. No new migration or frontend artifact is required. After the pull, repeat the exact live August–November summary/dashboard and check all four monthly points; do not claim live resolution before that succeeds.
+
+## Volume follow-up
+
+The realistic single-currency fixture exposed an optimizer edge case: the receipt VARCHAR255 under utf8mb4 exceeds the temporary string-index budget, leaving a low-selectivity currency key or a full scan. This invalidated the initial string-key-only gate. The revised numeric-group plan must pass the same timing and financial checks, with explicit Unicode/case/padding comparison tests on MariaDB.
+
+## Audit record
+
+Round one: two SHOULD-FIX findings addressed: explicit disposable MariaDB test-copy connection adapter with verified engine, and full default/preset dashboard legacy-routing regressions. Timing budgets and realistic provenance/collision distribution also made explicit. Fresh round two returned READY with no BLOCKER/SHOULD-FIX findings. The indexed-join SELECT-only production probe completed the full historical aggregate in1,729.75ms and known-week aggregate in1,391.62ms, with `key0` lookup replacing the dependent full scan. Evidence: `/Users/ian/Projects/exotic-ops/var/reporting-indexed-join-probe-2026-11-15.out`. No stored view or runtime was changed by that probe.
+
+Round three returned READY for the numeric-cohort refinement. Final SQLite33/494 and MariaDB34/506 checks pass;42,000-row full dashboard1,972.70ms with one candidate read.
+
+<Questions items={[]} />

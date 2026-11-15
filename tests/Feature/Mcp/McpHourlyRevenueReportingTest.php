@@ -35,15 +35,17 @@ class McpHourlyRevenueReportingTest extends TestCase
             $t->id();
             $t->string('name');
             $t->string('country');
-            $t->string('currency_code');
+            $t->string('currency_code', 3);
         });
         Schema::create('payments', function (Blueprint $t) {
             $t->id();
             $t->unsignedBigInteger('platform_id');
             $t->decimal('amount', 14, 2);
-            $t->string('currency')->nullable();
+            $t->string('currency', 3)->nullable();
             foreach (['status', 'purpose', 'source', 'provider_key', 'provider_environment', 'record_classification', 'reconciliation_state', 'resolution_code', 'subscription_lifecycle', 'reference_root', 'transaction_reference', 'reference_number'] as $name) {
-                $t->string($name)->nullable();
+                $t->string($name, match ($name) {
+                    'provider_key' => 30, 'provider_environment' => 20, default => 255,
+                })->nullable();
             }
             foreach (['manual_payment_bundle_id', 'wallet_transaction_id', 'reference_sequence'] as $name) {
                 $t->unsignedBigInteger($name)->nullable();
@@ -135,6 +137,133 @@ class McpHourlyRevenueReportingTest extends TestCase
     private function resultData(array $payload): array
     {
         return $payload['result']['structuredContent']['data'] ?? json_decode($payload['result']['content'][0]['text'], true);
+    }
+
+    public function test_joined_receipt_dispositions_match_an_independent_pairwise_oracle_without_multiplying_rows(): void
+    {
+        for ($i = 1; $i <= 7; $i++) {
+            DB::table('manual_payment_bundles')->insert(['id' => $i, 'status' => 'committed']);
+        }
+        for ($i = 0; $i < 240; $i++) {
+            $this->payment([
+                'platform_id' => [5, 16, 1][$i % 3],
+                'transaction_reference' => $i % 17 === 0 ? null : 'SHARED-'.(($i * 37) % 53),
+                'reference_root' => $i % 13 === 0 ? 'ROOT-'.($i % 11) : null,
+                'reference_number' => $i % 17 === 0 ? 'FALLBACK-'.($i % 7) : null,
+                'provider_key' => $i % 2 === 0 ? 'provider_a' : 'provider_b',
+                'currency' => $i % 5 === 0 ? 'UGX' : 'USD',
+                'manual_payment_bundle_id' => $i % 4 === 0 ? ($i % 7) + 1 : null,
+                'reference_sequence' => $i % 6 === 0 ? null : $i % 3,
+                'wallet_transaction_id' => $i % 19 === 0 ? 100 + ($i % 5) : null,
+                'payment_data' => $i % 3 === 0 ? '{}' : json_encode(['collection' => ['account_id' => 'receiver-'.($i % 4)]]),
+                'completed_at' => $i % 7 === 0 ? '2026-07-01 00:00:00' : '2026-11-12 17:00:00',
+            ]);
+        }
+        $candidates = app(RevenueReportingQuery::class)->candidates()->get();
+        $expected = [];
+        foreach ($candidates as $a) {
+            $ambiguous = false;
+            foreach ($candidates as $b) {
+                if ($a->id === $b->id || $a->receipt_key === null || $a->receipt_key === '') {
+                    continue;
+                }
+                $sameReceipt = $a->receipt_key === $b->receipt_key && $a->currency === $b->currency
+                    && $a->provider_scope === $b->provider_scope && $a->environment_scope === $b->environment_scope;
+                $sameAccount = ($a->account_key !== null && $a->account_key === $b->account_key)
+                    || ($a->platform_id === $b->platform_id && ($a->account_key === null || $b->account_key === null));
+                $conflictingAllocation = $a->receipt_identity !== $b->receipt_identity
+                    || ($a->manual_payment_bundle_id !== null && ($a->reference_sequence === null
+                        || $b->reference_sequence === null || $a->reference_sequence === $b->reference_sequence));
+                if ($sameReceipt && $sameAccount && $conflictingAllocation) {
+                    $ambiguous = true;
+                    break;
+                }
+            }
+            $expected[$a->id] = $ambiguous ? 'ambiguous_receipt' : 'included';
+        }
+        $rows = app(RevenueReportingQuery::class)->rows()->get();
+        $actual = $rows->pluck('disposition', 'id')->all();
+        ksort($expected);
+        ksort($actual);
+        $this->assertSame($expected, $actual);
+        $this->assertCount($candidates->count(), $rows);
+        $this->assertCount($rows->count(), $rows->unique('id'));
+        $this->assertContains('included', $actual);
+        $this->assertContains('ambiguous_receipt', $actual);
+    }
+
+    public function test_exact_dashboard_reads_candidate_data_once_and_preserves_per_payment_fx_rounding(): void
+    {
+        DB::table('reporting_fx_rates')->insert(['provider' => 'manual', 'source_currency' => 'UGX', 'target_currency' => 'USD', 'rate_date' => '2026-11-12', 'rate' => 0.05]);
+        $this->payment(['amount' => 0.10, 'currency' => 'UGX']);
+        $this->payment(['amount' => 0.10, 'currency' => 'UGX']);
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            [$status, $payload] = $this->rpc('exotic_render_revenue_dashboard', $this->arguments(['bucket' => 'hour']));
+            $queries = collect(DB::getQueryLog())->filter(fn ($query) => str_contains($query['query'], 'other_receipt') && str_contains($query['query'], 'disposition'));
+        } finally {
+            DB::disableQueryLog();
+        }
+        $this->assertSame(200, $status, json_encode($payload));
+        $data = $this->resultData($payload);
+        $this->assertCount(1, $queries);
+        $this->assertEquals(0.02, $data['summary']['collections']['new_cash']['normalized_total']);
+        $this->assertEquals(0.02, collect($data['trend']['points'])->sum('value'));
+        $this->assertEquals(0.02, $data['market_breakdown']['total']);
+        $this->assertSame($data['summary']['window'], $data['trend']['window']);
+        $this->assertSame($data['summary']['window'], $data['market_breakdown']['window']);
+        Http::assertNothingSent();
+    }
+
+    public function test_numeric_receipt_groups_follow_database_collation_across_sites_and_outside_the_window(): void
+    {
+        $query = app(RevenueReportingQuery::class);
+        $expected = [];
+        foreach ([['réceipt-A', 'RECEIPT-A'], ['straße-B', 'STRASSE-B'], ['receipt-C', 'RECEIPT-C   '], [str_repeat('L', 254).'D', str_repeat('L', 254).'D']] as [$left, $right]) {
+            $attributes = ['payment_data' => '{"collection":{"account_id":"shared-receiver"}}'];
+            $id = $this->payment($attributes + ['transaction_reference' => $left]);
+            $other = $this->payment($attributes + ['transaction_reference' => $right, 'platform_id' => 1, 'completed_at' => '2026-07-01 00:00:00']);
+            $equal = DB::query()->fromSub($query->candidates()->where('payments.id', $id), 'a')
+                ->crossJoinSub($query->candidates()->where('payments.id', $other), 'b')
+                ->selectRaw('CASE WHEN a.receipt_key = b.receipt_key THEN 1 ELSE 0 END AS matches')->first()->matches;
+            $expected[$id] = (int) $equal === 1 ? 'ambiguous_receipt' : 'included';
+        }
+        $rows = $query->rows()->where('reported.platform_id', 5)->where('reported.occurred_at', '>=', '2026-11-12 17:00:00')->get();
+        $actual = $rows->pluck('disposition', 'id')->all();
+        ksort($expected);
+        ksort($actual);
+        $this->assertSame($expected, $actual);
+        $public = app(RevenueReportingService::class)->summary($this->arguments(['platform_id' => 5]), $this->admin);
+        $this->assertStringNotContainsString('receipt_group', json_encode($public));
+    }
+
+    public function test_default_and_preset_dashboards_keep_all_three_legacy_presenters(): void
+    {
+        $dashboard = \Mockery::mock(\App\Services\CeoDashboardDataService::class);
+        foreach ([null, 'today', 'day', '7d', '30d', '90d', 'ytd'] as $preset) {
+            $window = ['horizon' => $preset ?? 'default'];
+            foreach (['summary', 'revenueTrend', 'marketPie'] as $method) {
+                $output = match ($method) {
+                    'summary' => ['window' => $window, 'metrics' => [], 'customer_mix' => [], 'visitor_revenue' => [], 'insights' => []],
+                    'revenueTrend' => ['window' => $window, 'bucket' => 'day', 'points' => []],
+                    default => ['window' => $window, 'total' => 0, 'channels' => [], 'markets' => []],
+                };
+                $dashboard->shouldReceive($method)->times(4)->withArgs(fn ($request) => $request->query('horizon') === $preset)->andReturn($output);
+            }
+        }
+        $this->app->instance(\App\Services\CeoDashboardDataService::class, $dashboard);
+        foreach (['2025-03-26', '2025-06-18', '2025-11-25', '2026-07-28'] as $protocol) {
+            foreach ([null, 'today', 'day', '7d', '30d', '90d', 'ytd'] as $preset) {
+                [$status, $payload] = $this->rpc('exotic_render_revenue_dashboard', $preset === null ? [] : ['window' => $preset], $protocol);
+                $this->assertSame(200, $status, json_encode($payload));
+                $data = $this->resultData($payload);
+                foreach (['summary', 'trend', 'market_breakdown'] as $section) {
+                    $this->assertSame($preset ?? 'default', $data[$section]['window']['horizon']);
+                }
+                $this->assertArrayNotHasKey('collections', $data['summary']);
+            }
+        }
     }
 
     public function test_august_to_november_monthly_history_agrees_across_tools_and_protocols_without_custom_flag(): void
@@ -333,7 +462,7 @@ class McpHourlyRevenueReportingTest extends TestCase
         (require database_path('migrations/2026_11_13_180000_create_mcp_payment_collections_view.php'))->up();
         $this->assertEquals(10, DB::table(RevenueReportingQuery::VIEW)->where('disposition', 'included')->sum('amount'));
         $columns = Schema::getColumnListing(RevenueReportingQuery::VIEW);
-        foreach (['payment_id', 'client_id', 'name', 'phone', 'receipt_key', 'account_key'] as $private) {
+        foreach (['payment_id', 'client_id', 'name', 'phone', 'receipt_key', 'account_key', 'receipt_group'] as $private) {
             $this->assertNotContains($private, $columns);
         }
         (require database_path('migrations/2026_11_13_180000_create_mcp_payment_collections_view.php'))->down();

@@ -1,0 +1,12 @@
+PHPUnit 10.5.63 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.2.30
+Configuration: /Users/ian/.cache/exotic-crm-reporting-perf-2026-11-14/release/phpunit.xml
+
+Verified fixture driver=mysql server=11.4.13-MariaDB-ubu2404
+.........Verified fixture driver=mysql server=11.4.13-MariaDB-ubu2404
+.........................                                34 / 34 (100%)
+
+Time: 00:12.438, Memory: 136.50 MB
+
+OK (34 tests, 506 assertions)
