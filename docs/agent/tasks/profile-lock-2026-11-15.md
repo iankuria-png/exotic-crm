@@ -34,6 +34,7 @@ locked) with a reason, reusing the WordPress lifecycle path SEO Recovery already
   ClientLifecycleFunnelAndSegmentation): 103 passed / 559 assertions (738s).
 
 ## Release status
+- PUSHED 15 Nov: origin/main = 5bce002c (parent e940ae8f). Not deployed.
 - Released as two commits on main: first `Land the live flexible amounts and pay link
   integration` (the 80-path Kenya overlay, byte-for-byte from the 15 Nov Ops restoration
   snapshot; its rebuilt JS is byte-identical to live `app-C0GQYIIZ.js`), then this lock commit
