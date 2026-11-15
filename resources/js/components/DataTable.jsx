@@ -186,7 +186,9 @@ export default function DataTable({
                             const disabled = loading || !!action.disabled || !!action.isDisabled?.(selectedRows);
                             const disabledReason = disabled ? action.getDisabledReason?.(selectedRows) : undefined;
 
-                            const className = isPrimary
+                            const className = action.className
+                                ? `${action.className} disabled:cursor-not-allowed disabled:opacity-50`
+                                : isPrimary
                                 ? 'crm-btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50'
                                 : isDanger
                                     ? 'crm-btn-danger px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50'

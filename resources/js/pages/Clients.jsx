@@ -19,6 +19,7 @@ import SeoRecoveryView from '../components/clients/SeoRecoveryView';
 import ProfileUrlHealthView from '../components/clients/ProfileUrlHealthView';
 import BioTextHealthView from '../components/clients/BioTextHealthView';
 import SmartDeleteDialog from '../components/clients/SmartDeleteDialog';
+import LockProfilesDialog, { LockIcon } from '../components/clients/LockProfilesDialog';
 import QuickReplyModal from '../components/clients/QuickReplyModal';
 import ClientCreateModal from '../components/clients/ClientCreateModal';
 import { useToast } from '../components/ToastProvider';
@@ -569,7 +570,7 @@ export default function Clients() {
     const allowedNewUsersFilters = new Set(['today', '7d', '30d', 'custom']);
     const allowedClientSegments = new Set(CLIENT_SEGMENT_KEYS);
     const allowedContactUnlockFilters = new Set(['attempted', 'successful', 'failed', 'pending']);
-    const allowedRecoveryOriginFilters = new Set(['seo_recovered', 'natural']);
+    const allowedRecoveryOriginFilters = new Set(['seo_recovered', 'natural', 'staff_locked']);
     const allowedSubscriptionStateFilters = new Set(['expired']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -584,6 +585,7 @@ export default function Clients() {
     const canSelectClients = canBulkRefreshThumbnails || canDeleteClients || canRunArchiveRecovery;
     const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canBulkExpire = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
+    const canLockProfiles = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     // SEO Recovery republishes public content, so it matches the admin-only
     // API routes behind it — a sales user deep-linking to the tab falls back to All.
     const canRecoverSeo = ['admin', 'sub_admin'].includes(String(user?.role || ''));
@@ -706,6 +708,7 @@ export default function Clients() {
     const [bulkThumbnailRefreshSelection, setBulkThumbnailRefreshSelection] = useState([]);
     const [showBulkThumbnailRefreshConfirm, setShowBulkThumbnailRefreshConfirm] = useState(false);
     const [bulkExpireSelection, setBulkExpireSelection] = useState([]);
+    const [lockSelection, setLockSelection] = useState([]);
     const [showBulkExpireConfirm, setShowBulkExpireConfirm] = useState(false);
     const [bulkSeoPrivateSelection, setBulkSeoPrivateSelection] = useState([]);
     const [showBulkSeoPrivateConfirm, setShowBulkSeoPrivateConfirm] = useState(false);
@@ -1569,6 +1572,23 @@ export default function Clients() {
     };
 
     const bulkActions = [
+        ...(canLockProfiles ? [{
+            key: 'bulk-lock-profiles',
+            label: (
+                <span className="inline-flex items-center gap-1.5">
+                    <LockIcon />
+                    Lock profiles
+                </span>
+            ),
+            className: 'inline-flex items-center rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500',
+            onClick: (rowsSelection) => setLockSelection(rowsSelection.map((row) => ({ id: row.id, name: row.name }))),
+            isDisabled: (rowsSelection) => !rowsSelection.some((row) => Number(row.wp_post_id || 0) > 0),
+            getDisabledReason: (rowsSelection) => (
+                rowsSelection.some((row) => Number(row.wp_post_id || 0) > 0)
+                    ? undefined
+                    : 'Only WordPress-linked profiles can be locked.'
+            ),
+        }] : []),
         ...(canBulkRefreshThumbnails ? [{
             key: 'bulk-refresh-client-thumbnails',
             label: 'Refresh thumbnails',
@@ -2838,6 +2858,7 @@ export default function Clients() {
                             { value: '', label: 'All sources' },
                             { value: 'seo_recovered', label: 'SEO recovered' },
                             { value: 'natural', label: 'Natural lifecycle' },
+                            { value: 'staff_locked', label: 'Locked by staff' },
                         ]}
                     />
 
@@ -3507,6 +3528,25 @@ export default function Clients() {
                     {bulkThumbnailRefreshSelection.length.toLocaleString()} selected client{bulkThumbnailRefreshSelection.length === 1 ? '' : 's'} will have their cached thumbnails refreshed.
                 </div>
             </ConfirmDialog>
+
+            <LockProfilesDialog
+                open={lockSelection.length > 0}
+                clients={lockSelection}
+                onClose={() => setLockSelection([])}
+                onCompleted={({ locked, skipped, failed }) => {
+                    setClearSelectionKey((current) => current + 1);
+                    const summary = [
+                        `${locked} locked`,
+                        skipped ? `${skipped} skipped` : null,
+                        failed ? `${failed} failed` : null,
+                    ].filter(Boolean).join(' · ');
+                    if (failed > 0) {
+                        toast.warning(`Lock finished with issues: ${summary}.`);
+                    } else {
+                        toast.success(`Lock complete: ${summary}.`);
+                    }
+                }}
+            />
 
             {(() => {
                 const eligible = bulkExpireSelection.filter(isBulkDeactivationCandidate);

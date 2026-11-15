@@ -234,13 +234,20 @@ class ClientSyncService
             $syncData['notactive'] = (bool) ($wpClient['notactive'] ?? false);
         }
 
-        if ($this->payloadLooksActivelySubscribed($syncData)) {
+        if ($this->payloadLooksActivelySubscribed($syncData) && ! $this->staffLockHolds($syncData, $client)) {
             $syncData['lifecycle_state'] = \App\Support\ClientLifecycleState::ACTIVE;
             $syncData['lifecycle_expired_at'] = null;
             $syncData['lifecycle_archived_at'] = null;
             $syncData['lifecycle_archive_deferred_until'] = null;
             $syncData['lifecycle_restored_at'] = null;
             $syncData['lifecycle_restore_run_id'] = null;
+        }
+
+        // WordPress back in Active means an activation lifted the restriction, so
+        // a staff lock has ended. A lock never outlives the state it holds.
+        if ($client->profile_locked_at !== null
+            && ($syncData['lifecycle_state'] ?? null) === \App\Support\ClientLifecycleState::ACTIVE) {
+            $syncData['profile_locked_at'] = null;
         }
 
         // signup_source is a CRM-side attribution signal. 'field' is set by the field-sales
@@ -770,6 +777,7 @@ class ClientSyncService
                         'lifecycle_archived_at',
                         'lifecycle_restored_at',
                         'lifecycle_restore_run_id',
+                        'profile_locked_at',
                         'premium',
                         'premium_expire',
                         'featured',
@@ -895,6 +903,7 @@ class ClientSyncService
             'lifecycle_archive_deferred_until' => $existing?->lifecycle_archive_deferred_until,
             'lifecycle_restored_at' => $existing?->lifecycle_restored_at,
             'lifecycle_restore_run_id' => $existing?->lifecycle_restore_run_id,
+            'profile_locked_at' => $existing?->profile_locked_at,
             'premium' => (bool) ($wpClient['premium'] ?? false),
             'premium_expire' => $premiumExpire,
             'featured' => (bool) ($wpClient['featured'] ?? false),
@@ -930,13 +939,18 @@ class ClientSyncService
             'updated_at' => $now,
         ];
 
-        if ($this->payloadLooksActivelySubscribed($row)) {
+        if ($this->payloadLooksActivelySubscribed($row) && ! $this->staffLockHolds($row, $existing)) {
             $row['lifecycle_state'] = \App\Support\ClientLifecycleState::ACTIVE;
             $row['lifecycle_expired_at'] = null;
             $row['lifecycle_archived_at'] = null;
             $row['lifecycle_archive_deferred_until'] = null;
             $row['lifecycle_restored_at'] = null;
             $row['lifecycle_restore_run_id'] = null;
+        }
+
+        if ($row['profile_locked_at'] !== null
+            && ($row['lifecycle_state'] ?? null) === \App\Support\ClientLifecycleState::ACTIVE) {
+            $row['profile_locked_at'] = null;
         }
 
         return $row;
@@ -1194,6 +1208,17 @@ class ClientSyncService
         }
 
         return [];
+    }
+
+    /**
+     * A staff lock keeps a paid profile Expired while its plan runs on. When
+     * WordPress still reports the restriction, its future expiry is not a sign
+     * the profile went live again.
+     */
+    private function staffLockHolds(array $payload, ?Client $existing): bool
+    {
+        return $existing?->profile_locked_at !== null
+            && \App\Support\ClientLifecycleState::isPubliclyRestricted($payload['lifecycle_state'] ?? null);
     }
 
     /**

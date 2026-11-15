@@ -136,7 +136,7 @@ class ClientController extends Controller
             'city_key' => 'nullable|string|max:120',
             'contact_unlock' => 'nullable|string|in:attempted,successful,failed,pending',
             'include_unlock_stats' => 'nullable|boolean',
-            'recovery_origin' => 'nullable|string|in:seo_recovered,natural',
+            'recovery_origin' => 'nullable|string|in:seo_recovered,natural,staff_locked',
             'subscription_state' => 'nullable|string|in:expired',
             // Typeahead pickers (shared-payment bundle, subsidiary search, conversations)
             // legitimately ask for 8-40 rows. A whitelist of the table's own page sizes 422'd
@@ -210,10 +210,12 @@ class ClientController extends Controller
 
         if (! empty($validated['recovery_origin'])) {
             $query->whereIn('lifecycle_state', [ClientLifecycleState::EXPIRED, ClientLifecycleState::ARCHIVED]);
-            if ($validated['recovery_origin'] === 'seo_recovered') {
-                $query->whereNotNull('lifecycle_restored_at');
+            if ($validated['recovery_origin'] === 'staff_locked') {
+                $query->whereNotNull('profile_locked_at');
+            } elseif ($validated['recovery_origin'] === 'seo_recovered') {
+                $query->whereNotNull('lifecycle_restored_at')->whereNull('profile_locked_at');
             } else {
-                $query->whereNull('lifecycle_restored_at');
+                $query->whereNull('lifecycle_restored_at')->whereNull('profile_locked_at');
             }
         }
 

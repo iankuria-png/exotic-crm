@@ -71,6 +71,10 @@ class Client extends Model
         'profile_reverted_at',
         'profile_paused_at',
         'profile_paused_by',
+        'profile_locked_at',
+        'profile_locked_by',
+        'profile_lock_reason_code',
+        'profile_lock_reason_note',
         'needs_payment',
         'notactive',
         'is_high_risk',
@@ -170,6 +174,8 @@ class Client extends Model
         'profile_removal_requested_at' => 'datetime',
         'profile_reverted_at' => 'datetime',
         'profile_paused_at' => 'datetime',
+        'profile_locked_at' => 'datetime',
+        'profile_locked_by' => 'integer',
         'churned_at' => 'datetime',
         'first_activated_at' => 'datetime',
         'first_contact_at' => 'datetime',
@@ -369,6 +375,16 @@ class Client extends Model
         return $this->profile_paused_at !== null
             && (bool) $this->notactive
             && (string) $this->profile_status === 'private';
+    }
+
+    /**
+     * Held in a restricted lifecycle state by staff, with a reason. The flag only
+     * counts while WordPress still restricts the profile; an activation that
+     * returns it to Active ends the lock.
+     */
+    public function isProfileLocked(): bool
+    {
+        return $this->profile_locked_at !== null && $this->isPubliclyRestricted();
     }
 
     /**

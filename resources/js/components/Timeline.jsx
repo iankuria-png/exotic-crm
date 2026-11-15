@@ -11,6 +11,8 @@ const eventTones = {
     profile_unarchived: 'bg-teal-100 text-teal-700',
     profile_paused: 'bg-indigo-100 text-indigo-700',
     profile_resumed: 'bg-teal-100 text-teal-700',
+    profile_locked: 'bg-slate-800 text-white',
+    profile_unlocked: 'bg-teal-100 text-teal-700',
     profile_bio_scrubbed: 'bg-amber-100 text-amber-800',
     profile_bio_restored: 'bg-emerald-100 text-emerald-700',
     note_added: 'bg-amber-100 text-amber-700',
@@ -58,6 +60,10 @@ function formatEventDescription(event) {
             return content.post_status === 'private'
                 ? 'Pause lifted — plan lapsed while paused, profile stays hidden until payment'
                 : 'Profile resumed — public again';
+        case 'profile_locked':
+            return `Profile locked${content.reason ? ` — ${content.reason}` : ''}${content.mode === 'republish' ? ' (republished from offline)' : ''}${content.had_paid_plan ? ', paid plan still running' : ''}${content.note ? `: "${content.note}"` : ''}`;
+        case 'profile_unlocked':
+            return `${content.outcome === 'active' ? 'Profile unlocked — live again on its paid plan' : 'Lock lifted — stays Expired until payment'}${content.note ? `: "${content.note}"` : ''}`;
         case 'profile_bio_scrubbed':
             return `Contact details redacted from bio (${content.redactions || 0}${content.kinds ? ': ' + Object.keys(content.kinds).join(', ') : ''}) — original kept for renewal`;
         case 'profile_bio_restored':

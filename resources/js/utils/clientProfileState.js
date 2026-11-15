@@ -107,6 +107,17 @@ export function deriveClientProfileState(client) {
         // Expired lifecycle: published & indexed for SEO, but contacts are hidden and
         // editing is locked on the website. Either the terminal lifecycle=expired state,
         // or a transient stuck profile (server-derived expiry_state) awaiting reconcile.
+        if (lifecycleState === 'expired' && client?.profile_locked_at) {
+            return {
+                status: 'expired_public',
+                tone: 'expired_public',
+                label: 'Locked',
+                detail: 'Locked by staff — published for SEO, contacts hidden',
+                isConflict: false,
+                isPubliclyActive: true,
+            };
+        }
+
         if (lifecycleState === 'expired' || String(client?.expiry_state || '') === 'expired_public') {
             return {
                 status: 'expired_public',
@@ -179,6 +190,15 @@ export function deriveClientRecoveryOrigin(client) {
     const state = String(client?.lifecycle_state || '').toLowerCase();
     if (!['expired', 'archived'].includes(state)) {
         return null;
+    }
+
+    if (client?.profile_locked_at) {
+        return {
+            key: 'staff_locked',
+            label: 'Locked by staff',
+            tone: 'bg-slate-800 text-white ring-slate-800',
+            date: client.profile_locked_at,
+        };
     }
 
     if (client?.lifecycle_restored_at) {

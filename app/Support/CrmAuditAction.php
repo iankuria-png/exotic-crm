@@ -262,6 +262,10 @@ final class CrmAuditAction
 
     public const CLIENT_PROFILE_RESUME = 'client_profile_resume';
 
+    public const CLIENT_PROFILE_LOCK = 'client_profile_lock';
+
+    public const CLIENT_PROFILE_UNLOCK = 'client_profile_unlock';
+
     public const CLIENT_SUPPORT_BOARD_PROFILE_SYNC = 'client_support_board_profile_sync';
 
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';

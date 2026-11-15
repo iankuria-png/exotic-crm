@@ -48,6 +48,8 @@ class ArchiveExpiredProfiles extends Command
             ->lifecycle(ClientLifecycleState::EXPIRED)
             ->whereNotNull('lifecycle_expired_at')
             ->where('lifecycle_expired_at', '<=', $cutoff)
+            // Staff-locked profiles stay where staff put them; Archive is manual for them.
+            ->whereNull('profile_locked_at')
             ->where(function ($builder): void {
                 $builder->whereNull('lifecycle_archive_deferred_until')
                     ->orWhere('lifecycle_archive_deferred_until', '<=', now());

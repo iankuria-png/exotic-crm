@@ -14,6 +14,17 @@ use Illuminate\Support\Collection;
 
 class ActiveSubscriptionProfileRepairService
 {
+    /**
+     * Repairs that may end a staff lock: a fresh activation that WordPress has
+     * already applied, and the staff Unlock itself. Everything else (background
+     * repair, duplicate activation callbacks, recovery skips) leaves it alone.
+     */
+    public const LOCK_RELEASING_SOURCES = [
+        'subscription_activation',
+        'renewal_activation_sync_failed',
+        'profile_unlock',
+    ];
+
     public function __construct(private readonly ClientLifecycleMutationLock $lifecycleLock) {}
 
     public function hasFutureActiveDeal(Client $client): bool
@@ -44,6 +55,14 @@ class ActiveSubscriptionProfileRepairService
     {
         $query = Client::query()
             ->whereNull('profile_removal_requested_at')
+            // A staff lock deliberately keeps a paid profile restricted.
+            ->where(function (Builder $builder): void {
+                $builder->whereNull('profile_locked_at')
+                    ->orWhereNotIn('lifecycle_state', [
+                        ClientLifecycleState::EXPIRED,
+                        ClientLifecycleState::ARCHIVED,
+                    ]);
+            })
             ->with(['platform', 'deals' => fn ($dealQuery) => $this->applyFutureActiveDealScope($dealQuery)])
             ->whereHas('deals', fn ($dealQuery) => $this->applyFutureActiveDealScope($dealQuery))
             ->where(function (Builder $builder): void {
@@ -94,6 +113,17 @@ class ActiveSubscriptionProfileRepairService
         return $this->repairClientLocked($client, $deal, $dryRun, $source, false);
     }
 
+    /**
+     * Repair and publish to WordPress for a caller that already holds the
+     * client's lifecycle lock (the lock is not re-entrant).
+     *
+     * @return array<string, mixed>
+     */
+    public function repairClientHeld(Client $client, string $source, ?Deal $deal = null): array
+    {
+        return $this->repairClientLocked($client, $deal, false, $source, true);
+    }
+
     private function repairClientLocked(Client $client, ?Deal $deal, bool $dryRun, string $source, bool $syncWordPress): array
     {
         $client->refresh();
@@ -118,6 +148,12 @@ class ActiveSubscriptionProfileRepairService
             return $row;
         }
 
+        if ($client->isProfileLocked() && ! in_array($source, self::LOCK_RELEASING_SOURCES, true)) {
+            $row['reason'] = 'profile_locked';
+
+            return $row;
+        }
+
         if (! $deal || (int) $deal->client_id !== (int) $client->id || ! $this->isFutureActiveDeal($deal)) {
             $row['reason'] = 'no_future_active_deal';
 
@@ -125,6 +161,9 @@ class ActiveSubscriptionProfileRepairService
         }
 
         $columns = $this->repairColumnsForDeal($deal, $client);
+        if ($client->profile_locked_at !== null) {
+            $columns['profile_locked_at'] = null;
+        }
         $changes = [];
         foreach ($columns as $key => $value) {
             if ($client->{$key} != $value) {

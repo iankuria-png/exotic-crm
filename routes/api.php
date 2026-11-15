@@ -623,6 +623,10 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::get('/clients/churned', [ClientController::class, 'churned'])->middleware('role:admin,sub_admin,sales,marketing,field_sales');
     Route::post('/clients/bulk-close', [ClientController::class, 'bulkClose'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/bulk-expire', [ClientController::class, 'bulkExpire'])->middleware('role:admin,sub_admin,sales,field_sales');
+    // Staff lock — hold profiles Expired (published, indexed, contacts hidden) with a reason.
+    Route::get('/clients/lock-reasons', [\App\Http\Controllers\CRM\ClientProfileLockController::class, 'reasons'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/bulk-lock/preview', [\App\Http\Controllers\CRM\ClientProfileLockController::class, 'preview'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/bulk-lock', [\App\Http\Controllers\CRM\ClientProfileLockController::class, 'bulkLock'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/bulk-seo-placeholder-private', [ClientController::class, 'bulkTakeSeoPlaceholdersPrivate'])->middleware('role:admin,sub_admin');
     Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/clients/{client}/contact-unlocks', [ClientController::class, 'contactUnlocks'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
@@ -638,6 +642,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/clients/{client}/deactivate-subscription', [ClientController::class, 'deactivateSubscription'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/revert', [ClientController::class, 'revertProfile'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/expire-now', [ClientController::class, 'expireNow'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/lock', [\App\Http\Controllers\CRM\ClientProfileLockController::class, 'lock'])->middleware('role:admin,sub_admin,sales,field_sales');
+    Route::post('/clients/{client}/unlock', [\App\Http\Controllers\CRM\ClientProfileLockController::class, 'unlock'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/archive', [ClientController::class, 'archive'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/unarchive', [ClientController::class, 'unarchive'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/{client}/pause', [ClientController::class, 'pauseProfile'])->middleware('role:admin,sub_admin,sales');

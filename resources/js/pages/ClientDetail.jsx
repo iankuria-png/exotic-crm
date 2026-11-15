@@ -33,6 +33,8 @@ import CompliancePanel from '../components/compliance/CompliancePanel';
 import { proxyImageUrl } from '../utils/imageProxy';
 import ClientMediaPreview from '../components/clients/ClientMediaPreview';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
+import LockProfilesDialog, { LockIcon, UnlockProfileDialog } from '../components/clients/LockProfilesDialog';
+import { isClientStaffLocked, lockReasonLabel } from '../utils/profileLock';
 import { MEDIA_UPLOAD_LIMITS, getMediaUploadPreflight, isImageUploadFile, isVideoUploadFile, useMediaUploads } from '../components/MediaUploadProvider';
 import AgencyManagedProfileModal from '../components/clients/AgencyManagedProfileModal';
 import {
@@ -1166,6 +1168,8 @@ export default function ClientDetail() {
     const [pauseReason, setPauseReason] = useState('');
     const [revertProfileReason, setRevertProfileReason] = useState('');
     const [revertProfileError, setRevertProfileError] = useState(null);
+    const [lockDialogOpen, setLockDialogOpen] = useState(false);
+    const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
     const [showReopenConfirm, setShowReopenConfirm] = useState(false);
     const [deletePreview, setDeletePreview] = useState(null);
     const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -1559,6 +1563,10 @@ export default function ClientDetail() {
     const canManageWallet = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(currentUser?.role || ''));
     const canDeleteClient = !isAgency && ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
     const canPauseProfile = !isAgency && ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
+    const canLockProfile = !isReadOnly
+        && ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(currentUser?.role || ''))
+        && Number(client?.wp_post_id || 0) > 0;
+    const isStaffLocked = isClientStaffLocked(client);
     const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
     const boostLimit = client?.boost_limit || null;
     const boostLimitApplies = boostLimit?.applies_to_actor === true;
@@ -4092,6 +4100,21 @@ export default function ClientDetail() {
                             </div>
                         ) : null}
 
+                        {isStaffLocked ? (
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                <span className="inline-flex items-center gap-1.5 font-semibold">
+                                    <LockIcon />
+                                    Locked by staff · {lockReasonLabel(client.profile_lock_reason_code)}
+                                </span>
+                                <span className="text-amber-800/80">
+                                    Since {formatDateTime(client.profile_locked_at)}. Published for SEO, contacts hidden{client.active_deal ? ', paid plan still running' : ''}.
+                                </span>
+                                {client.profile_lock_reason_note ? (
+                                    <span className="basis-full italic text-amber-800/80">&ldquo;{client.profile_lock_reason_note}&rdquo;</span>
+                                ) : null}
+                            </div>
+                        ) : null}
+
                         {/* Consequence row */}
                         {(!isReadOnly || canDeleteClient) ? (
                             <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
@@ -4131,6 +4154,28 @@ export default function ClientDetail() {
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10H4V5m0 5a8 8 0 111 8" />
                                         </svg>
                                         {client.profile_removal_requested_at ? 'Retry profile removal' : 'Revert profile'}
+                                    </button>
+                                ) : null}
+                                {canLockProfile && isStaffLocked ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setUnlockDialogOpen(true)}
+                                        title="Lift the staff lock"
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-teal-300 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800 transition hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                    >
+                                        <LockIcon open />
+                                        Unlock profile
+                                    </button>
+                                ) : null}
+                                {canLockProfile && !isStaffLocked && !client.profile_removal_requested_at ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setLockDialogOpen(true)}
+                                        title="Keep it published and indexed, but hide contacts and block edits"
+                                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-1"
+                                    >
+                                        <LockIcon />
+                                        Lock profile
                                     </button>
                                 ) : null}
                                 {canPauseProfile && profileState.status === 'paused' ? (
@@ -7023,6 +7068,37 @@ export default function ClientDetail() {
                     confirmDisabled={syncMutation.isPending}
                     isPending={syncMutation.isPending}
                 />
+            ) : null}
+
+            {canLockProfile ? (
+                <>
+                    <LockProfilesDialog
+                        open={lockDialogOpen}
+                        clients={[{ id: client.id, name: client.name }]}
+                        onClose={() => setLockDialogOpen(false)}
+                        onCompleted={({ locked, failed }) => {
+                            queryClient.invalidateQueries({ queryKey: ['client', id] });
+                            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+                            if (locked > 0) {
+                                toast.success('Profile locked. Contacts are hidden on the website.');
+                                setLockDialogOpen(false);
+                            } else if (failed > 0) {
+                                toast.error('The lock was not confirmed by WordPress. Retry from the dialog.');
+                            }
+                        }}
+                    />
+                    <UnlockProfileDialog
+                        open={unlockDialogOpen}
+                        client={client}
+                        onClose={() => setUnlockDialogOpen(false)}
+                        onUnlocked={(payload) => {
+                            setUnlockDialogOpen(false);
+                            queryClient.invalidateQueries({ queryKey: ['client', id] });
+                            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+                            toast.success(payload?.message || 'Profile unlocked.');
+                        }}
+                    />
+                </>
             ) : null}
 
             {canPauseProfile ? (
