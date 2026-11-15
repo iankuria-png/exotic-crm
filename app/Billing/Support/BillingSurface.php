@@ -16,4 +16,5 @@ enum BillingSurface: string
     case ManualConfirmation = 'manual_confirmation';
     case ProxyHostedCheckout = 'proxy_hosted_checkout';
     case SelfCheckout = 'self_checkout';
+    case PayLink = 'pay_link';
 }

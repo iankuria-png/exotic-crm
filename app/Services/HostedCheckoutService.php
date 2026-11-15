@@ -18,6 +18,7 @@ class HostedCheckoutService
 
     public function initializePaystack(Payment $payment, array $context, array $options = []): array
     {
+        app(\App\Services\PayLink\WriterGuard::class)->prepareDispatch($payment);
         $secretKey = (string) data_get($context, 'provider_credentials.secret_key', '');
         $publicKey = (string) data_get($context, 'provider_credentials.public_key', '');
         $email = $this->customerEmail($payment)
@@ -59,6 +60,7 @@ class HostedCheckoutService
 
     public function initializePesapal(Payment $payment, array $context, array $options = []): array
     {
+        app(\App\Services\PayLink\WriterGuard::class)->prepareDispatch($payment);
         $accessToken = $this->fetchPesapalAccessToken($context);
         $providerCredentials = $context['provider_credentials'];
         $callbackUrl = $this->callbackUrl($payment, $context, $options);
@@ -103,6 +105,7 @@ class HostedCheckoutService
 
     public function initializePawaPay(Payment $payment, array $context, array $options = []): array
     {
+        app(\App\Services\PayLink\WriterGuard::class)->prepareDispatch($payment);
         $apiKey = trim((string) data_get($context, 'provider_credentials.api_key', ''));
         if ($apiKey === '') {
             throw new RuntimeException('pawaPay credentials are incomplete for the active environment.');
@@ -292,6 +295,11 @@ class HostedCheckoutService
 
     public function verifyPawaPayDeposit(Payment $payment, array $context, string $depositId): array
     {
+        if ($payment->source === 'self_service_pay_link') {
+            return app(\App\Billing\Providers\PawaPay\PawaPayDirectDepositAdapter::class)->verify(
+                \App\Models\PayLinkCharge::where('payment_id', $payment->id)->firstOrFail()
+            );
+        }
         $apiKey = trim((string) data_get($context, 'provider_credentials.api_key', ''));
         if ($apiKey === '') {
             throw new RuntimeException('pawaPay credentials are incomplete for the active environment.');

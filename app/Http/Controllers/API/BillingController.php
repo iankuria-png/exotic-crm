@@ -371,6 +371,10 @@ class BillingController extends Controller
             return null;
         }
 
+        if (data_get($payment->payment_data, 'pricing_mode') === 'flexible') {
+            return preg_replace('/#.*$/', '', $profileUrl).'#flexible-checkout';
+        }
+
         if ((string) $payment->purpose !== 'wallet_topup') {
             return $profileUrl;
         }

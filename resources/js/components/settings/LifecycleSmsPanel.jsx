@@ -5,7 +5,7 @@ import api from '../../services/api';
 const FLOW_META = {
     onboarding: { label: 'Onboarding', hint: 'Welcome new Fast Signup / Full Registration clients with a pay link.' },
     recovery: { label: 'Failed-payment recovery', hint: 'Client SMS with a fresh link when an automated payment fails.' },
-    renewal: { label: 'Renewal links', hint: 'Let renewal reminder templates embed {{payment_link}}.' },
+    renewal: { label: 'Renewal links', hint: 'Templates can use {{pay_link}} for a permanent link, or {{payment_link}} for a one-time checkout.' },
     reactivation: { label: 'Reactivation', hint: 'Win back clients N days after their subscription lapsed.' },
 };
 

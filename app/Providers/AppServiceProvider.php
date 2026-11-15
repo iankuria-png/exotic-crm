@@ -44,6 +44,8 @@ class AppServiceProvider extends ServiceProvider
         ));
         $this->app->singleton(BillingDiagnosticsAssemblerContract::class, BillingDiagnosticsAssembler::class);
         $this->app->singleton(BillingRouteResolverContract::class, BillingRouteResolver::class);
+        $this->app->scoped(\App\Services\PayLink\WriterGuard::class);
+        $this->app->scoped(\App\Services\FlexibleAmounts\FlexibleAttemptGuard::class);
 
         // Register provider routing executors
         $this->app->singleton(ProviderRoutingDispatcher::class, function ($app) {
@@ -53,9 +55,9 @@ class AppServiceProvider extends ServiceProvider
             $dispatcher->register(
                 $app->make(HostedCheckoutRoutingExecutor::class),
                 'paystack',
-                'pesapal',
-                'pawapay'
+                'pesapal'
             );
+            $dispatcher->register($app->make(\App\Services\Routing\PawaPayRoutingExecutor::class), 'pawapay');
             
             // Register M-Pesa STK executor
             $dispatcher->register(

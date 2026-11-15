@@ -23,6 +23,12 @@ class ProviderStatusQueryOrchestrator
 
     public function verify(Payment $payment, array $options = []): array
     {
+        if ($payment->source === 'self_service_pay_link') {
+            $charge = \App\Models\PayLinkCharge::where('payment_id', $payment->id)->firstOrFail();
+            $result = app(\App\Billing\Providers\PawaPay\PawaPayDirectDepositAdapter::class)->verify($charge);
+            return $result + ['payment_id' => $payment->id, 'provider' => 'pawapay', 'provider_environment' => $charge->environment,
+                'provider_reference' => $charge->deposit_id, 'checked_at' => now()->toDateTimeString()];
+        }
         $payment->loadMissing(['platform']);
 
         $provider = $this->resolveProviderType($payment);
@@ -338,6 +344,7 @@ class ProviderStatusQueryOrchestrator
         $surface = strtolower(trim((string) $surface));
 
         return match ($surface) {
+            BillingSurface::PayLink->value => BillingSurface::PayLink->value,
             'payment_link', 'link', 'proxy_hosted_checkout' => BillingSurface::ProxyHostedCheckout->value,
             BillingSurface::SubscriptionLink->value => BillingSurface::SubscriptionLink->value,
             BillingSurface::SubscriptionPush->value => BillingSurface::SubscriptionPush->value,

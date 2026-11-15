@@ -209,7 +209,9 @@ class SubscriptionProvisioningService
             $wpSync->bypassHealthGate();
         }
 
-        $wpActivation = $wpSync->activateClient($wpPostId, (string) $deal->plan_type, $durationDays, (int) $deal->id);
+        $wpActivation = $payment && data_get($payment->payment_data, 'pricing_mode') === 'flexible'
+            ? app(\App\Services\FlexibleAmounts\FlexibleFulfilmentService::class)->apply($payment, $deal, $client, $durationDays)
+            : $wpSync->activateClient($wpPostId, (string) $deal->plan_type, $durationDays, (int) $deal->id);
 
         $this->wordPressActivations[(int) $deal->id] = true;
 
@@ -398,6 +400,7 @@ class SubscriptionProvisioningService
 
     public function provisionCompletedPayment(Payment $payment, array $options = []): Deal
     {
+        if ($payment->source === 'self_service_pay_link') throw new InvalidArgumentException('Pay-link subscriptions use their saved relative-day operation.');
         $payment->loadMissing(['client.platform', 'platform', 'product']);
 
         if ((string) $payment->status !== 'completed') {

@@ -50,7 +50,7 @@ class DealPaymentService
         int $productId,
         ?int $productPriceId,
         ?string $duration,
-        int $actorId,
+        ?int $actorId,
         ?int $leadId
     ): Deal {
         $client->loadMissing('platform');
@@ -97,7 +97,7 @@ class DealPaymentService
             'duration' => $resolvedDuration,
             'duration_days' => $durationDays,
             'status' => 'pending',
-            'assigned_to' => $actorId,
+            'assigned_to' => $actorId ?? $client->assigned_to,
             'subscription_lifecycle' => $lifecycle['subscription_lifecycle'],
             'subscription_lifecycle_source' => $lifecycle['subscription_lifecycle_source'],
             'subscription_lifecycle_reason' => $lifecycle['subscription_lifecycle_reason'],

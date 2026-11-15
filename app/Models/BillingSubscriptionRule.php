@@ -11,6 +11,7 @@ class BillingSubscriptionRule extends Model
 
     protected $fillable = [
         'market_id',
+        'flexible_amounts',
         'activation_method_json',
         'renewal_method_json',
         'free_trial_json',
@@ -19,6 +20,7 @@ class BillingSubscriptionRule extends Model
     ];
 
     protected $casts = [
+        'flexible_amounts' => 'array',
         'activation_method_json' => 'array',
         'renewal_method_json' => 'array',
         'free_trial_json' => 'array',

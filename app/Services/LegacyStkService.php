@@ -21,6 +21,7 @@ class LegacyStkService
 
     public function initiate(Payment $payment, array $attributes = []): array
     {
+        app(\App\Services\PayLink\WriterGuard::class)->prepareDispatch($payment);
         $payment->loadMissing(['platform', 'client', 'product']);
         $platform = $payment->platform ?: Platform::query()->findOrFail((int) $payment->platform_id);
         $environment = $this->resolveEnvironment($platform, $payment, $attributes['environment'] ?? null);

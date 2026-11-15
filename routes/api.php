@@ -233,7 +233,30 @@ Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
 });
 
 // CRM Protected Routes (Sanctum token required)
+Route::prefix('wp-svc/flexible-amounts')->middleware(['wallet.auth:access', 'throttle:120,1'])->group(function () {
+    Route::post('/catalogue', [\App\Http\Controllers\Wp\FlexibleAmountsController::class, 'catalogue']);
+    Route::post('/quote', [\App\Http\Controllers\Wp\FlexibleAmountsController::class, 'quote']);
+    Route::post('/checkout', [\App\Http\Controllers\Wp\FlexibleAmountsController::class, 'start']);
+    Route::post('/status', [\App\Http\Controllers\Wp\FlexibleAmountsController::class, 'status']);
+});
+Route::prefix('wp-svc/pay-link')->middleware([\App\Http\Middleware\PayLinkPrivacy::class, 'wallet.auth:access'])->group(function () {
+    Route::post('/resolve', [\App\Http\Controllers\Wp\PayLinkController::class, 'resolve']);
+    Route::post('/quote', [\App\Http\Controllers\Wp\PayLinkController::class, 'quote']);
+    Route::post('/charges', [\App\Http\Controllers\Wp\PayLinkController::class, 'start']);
+    Route::post('/charges/{ref}/status', [\App\Http\Controllers\Wp\PayLinkController::class, 'status'])->whereUuid('ref');
+    Route::post('/pair', [\App\Http\Controllers\Wp\PayLinkController::class, 'pair']);
+});
 Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation'])->prefix('crm')->group(function () {
+    Route::get('/clients/{client}/pay-link', [\App\Http\Controllers\CRM\ClientPayLinkController::class, 'show']);
+    Route::post('/clients/{client}/pay-link', [\App\Http\Controllers\CRM\ClientPayLinkController::class, 'mint']);
+    Route::post('/clients/{client}/pay-link/suggestion', [\App\Http\Controllers\CRM\ClientPayLinkController::class, 'suggestion']);
+    Route::post('/clients/{client}/pay-link/quote', [\App\Http\Controllers\CRM\ClientPayLinkController::class, 'quote']);
+    Route::post('/clients/{client}/pay-link/rotate', [\App\Http\Controllers\CRM\ClientPayLinkController::class, 'rotate']);
+    Route::post('/clients/{client}/pay-link/revoke', [\App\Http\Controllers\CRM\ClientPayLinkController::class, 'revoke']);
+    Route::get('/settings/pay-link/{platform}', [\App\Http\Controllers\CRM\PayLinkSettingsController::class, 'show']);
+    Route::put('/settings/pay-link/{platform}', [\App\Http\Controllers\CRM\PayLinkSettingsController::class, 'save']);
+    Route::post('/settings/pay-link/{platform}/pairing', [\App\Http\Controllers\CRM\PayLinkSettingsController::class, 'pairing']);
+    Route::post('/pay-link/charges/{charge}/recheck', [\App\Http\Controllers\CRM\PayLinkSettingsController::class, 'recheck']);
     Route::get('/reports/subscription-audit/{kind}', [\App\Http\Controllers\CRM\SubscriptionAuditController::class, 'show'])
         ->where('kind', 'summary|events|trace|coverage|profiles')->middleware('role:admin');
     Route::get('/settings/send-love/{platform}', [\App\Http\Controllers\CRM\SendLoveController::class, 'settings']);
@@ -982,6 +1005,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
 
     Route::get('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'billingWalletRules']);
     Route::put('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'storeBillingWalletRules']);
+    Route::get('/settings/billing/subscription-rules/{market}/flexible-amounts', [\App\Http\Controllers\CRM\FlexibleAmountsController::class, 'show']);
+    Route::post('/settings/billing/subscription-rules/{market}/flexible-amounts/preview', [\App\Http\Controllers\CRM\FlexibleAmountsController::class, 'preview']);
     Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);
     Route::put('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'storeBillingSubscriptionRules']);
     Route::get('/settings/billing/contact-unlock', [ContactUnlockAdminController::class, 'index'])->middleware('role:admin,sub_admin,sales');

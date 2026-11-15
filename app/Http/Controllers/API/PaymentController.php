@@ -2410,6 +2410,11 @@ class PaymentController extends Controller
 
     public function selfCheckout(Request $request)
     {
+        if ($request->input('pricing_mode') === 'flexible') {
+            return app(\App\Http\Middleware\AuthenticateWalletRequest::class)->handle($request, function ($signedRequest) {
+                return response()->json(app(\App\Services\FlexibleAmounts\FlexibleSelfCheckoutService::class)->start($signedRequest), 201);
+            }, 'access');
+        }
         $payment = null;
         $attemptStartedAt = null;
         $attemptRequestMeta = [];

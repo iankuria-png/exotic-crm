@@ -30,6 +30,7 @@ class PawaPayAdapter extends AbstractProviderAdapter
                     ProviderCapability::SandboxAvailable,
                 ],
                 surfaces: [
+                    BillingSurface::PayLink,
                     BillingSurface::WalletFunding,
                     BillingSurface::SubscriptionLink,
                     BillingSurface::SelfCheckout,

@@ -8,6 +8,11 @@ class RebateChannelResolver
 {
     public function resolve(Payment $payment): ?string
     {
+        if ($payment->source === 'self_service_pay_link') {
+            if (data_get($payment->payment_data,'pricing_mode')!=='flexible' || $payment->status!=='completed' || (float)$payment->amount<=0
+                || !\App\Models\PayLinkCharge::where('payment_id',$payment->id)->where('activation_state','applied')->exists()) return null;
+            return data_get($payment->payment_data,'initiator')==='staff_link'?'staff_link':'self_checkout';
+        }
         if ((string) $payment->status !== 'completed' || (float) $payment->amount <= 0) {
             return null;
         }

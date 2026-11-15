@@ -62,6 +62,21 @@ class CollectionWriterGuard
     /** Serialize captured-reference cash inserts with receipt claims, including legacy entry points. */
     public function paymentWrite(Payment $payment, Closure $callback): mixed
     {
+        $guardedCallback = $callback;
+        if (($payment->purpose === null || $payment->purpose === Payment::PURPOSE_SUBSCRIPTION)
+            && (!$payment->exists || $payment->isDirty(['platform_id','client_id','deal_id','amount','currency','product_id']))) {
+            $client = app(\App\Services\PayLink\WriterGuard::class)->paymentClient($payment);
+            if ($client) $guardedCallback = fn () => DB::transaction(function () use ($client, $callback) {
+                Client::whereKey($client->id)->lockForUpdate()->firstOrFail();
+                app(\App\Services\PayLink\WriterGuard::class)->assertClient((int)$client->id);
+                return $callback();
+            });
+        }
+        return $this->paymentWriteUnderReceiptLocks($payment, $guardedCallback);
+    }
+
+    private function paymentWriteUnderReceiptLocks(Payment $payment, Closure $callback): mixed
+    {
         $this->assertLinkedPayment($payment, false);
         if ($this->saleItem || ($payment->exists && ! $payment->isDirty(['platform_id', 'amount', 'currency', 'client_id', 'deal_id', 'transaction_reference', 'reference_number', 'reference_root'])) || ! Schema::hasTable('collection_sales_sessions')
             || ! in_array($payment->purpose, [null, Payment::PURPOSE_SUBSCRIPTION], true)) {

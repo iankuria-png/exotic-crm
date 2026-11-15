@@ -1527,6 +1527,7 @@ export default function Payments() {
     const canAccessFraudAudit = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
+    const [pricingModeFilter, setPricingModeFilter] = useState(() => ['flexible','package'].includes(searchParams.get('pricing_mode')) ? searchParams.get('pricing_mode') : '');
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [fromDate, setFromDate] = useState('');
@@ -1710,6 +1711,7 @@ export default function Payments() {
     const activeFilters = useMemo(() => ({
         ...(search && { search }),
         ...(statusFilter && { status: statusFilter }),
+        ...(pricingModeFilter && { pricing_mode: pricingModeFilter }),
         ...(matchFilter && { matched: matchFilter }),
         ...(attributionFilter && { attribution_state: attributionFilter }),
         ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
@@ -1731,6 +1733,7 @@ export default function Payments() {
     }), [
         search,
         statusFilter,
+        pricingModeFilter,
         matchFilter,
         attributionFilter,
         hasDiscountFilter,
@@ -1753,7 +1756,7 @@ export default function Payments() {
     ]);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, attributionFilter, hasDiscountFilter, hideLifecycle, platformFilter, sourceFilter, purposeFilter, collectionChannelFilter, manualSubmissionFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['payments', page, perPage, search, statusFilter, pricingModeFilter, matchFilter, attributionFilter, hasDiscountFilter, hideLifecycle, platformFilter, sourceFilter, purposeFilter, collectionChannelFilter, manualSubmissionFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -1761,6 +1764,7 @@ export default function Payments() {
                     per_page: perPage,
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
+        ...(pricingModeFilter && { pricing_mode: pricingModeFilter }),
                     ...(matchFilter && { matched: matchFilter }),
         ...(attributionFilter && { attribution_state: attributionFilter }),
                     ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
@@ -3061,7 +3065,7 @@ export default function Payments() {
             key: 'amount',
             label: 'Amount',
             width: '8.5rem',
-            render: (row) => <span className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount, resolveCurrency(row.currency))}</span>,
+            render: (row) => <span className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount, resolveCurrency(row.currency))}{row.payment_data?.pricing_mode === 'flexible' ? <span className="ml-2 inline-flex rounded bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-800">Flexible</span> : null}</span>,
         },
         {
             key: 'discount',
@@ -3790,6 +3794,7 @@ export default function Payments() {
                         options={platformOptionsWithFlags(platformOptions)}
                     />
 
+                    <FilterSelect label="Pricing" value={pricingModeFilter} onChange={event => { setPricingModeFilter(event.target.value); setPage(1); }} options={[{value:'',label:'All pricing'},{value:'flexible',label:'Flexible'},{value:'package',label:'Packages'}]} />
                     <FilterSelect
                         label="Status"
                         value={statusFilter}
@@ -4001,13 +4006,14 @@ export default function Payments() {
                         Hide SMS payment links
                     </label>
 
-                    {(search || statusFilter || matchFilter || attributionFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || collectionChannelFilter || manualSubmissionFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
+                    {(search || statusFilter || pricingModeFilter || matchFilter || attributionFilter || hasDiscountFilter || hideLifecycle || platformFilter || sourceFilter || purposeFilter || collectionChannelFilter || manualSubmissionFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
                         <button
                             type="button"
                             onClick={() => {
                                 setSearch('');
                                 setSearchInput('');
                                 setStatusFilter('');
+                                setPricingModeFilter('');
                                 setMatchFilter('');
                                 setAttributionFilter('');
                                 setHasDiscountFilter('');

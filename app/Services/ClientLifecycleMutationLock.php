@@ -50,6 +50,7 @@ class ClientLifecycleMutationLock
                 $held[] = $lock;
                 $deadline = min($deadline, $started + $ttl - 10);
                 app(\App\Services\Collections\CollectionWriterGuard::class)->assertClient($clientId);
+                app(\App\Services\PayLink\WriterGuard::class)->assertClient($clientId);
             }
             $remaining();
 
@@ -79,6 +80,7 @@ class ClientLifecycleMutationLock
 
         try {
             app(\App\Services\Collections\CollectionWriterGuard::class)->assertClient($clientId);
+            app(\App\Services\PayLink\WriterGuard::class)->assertClient($clientId);
             $result = $callback();
         } catch (\Throwable $exception) {
             $this->releaseAfterOutcome($lock, $key, false);

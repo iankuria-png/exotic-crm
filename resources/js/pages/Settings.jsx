@@ -6824,6 +6824,7 @@ function TemplatesWorkspace({ canManageTemplates }) {
                                     </div>
                                 </div>
                             ) : null}
+                            {!editorForm.category.startsWith('credential_') ? <div className="rounded-md border border-slate-200 bg-slate-50 p-3"><p className="text-xs font-semibold text-slate-700">Payment link placeholders</p><p className="mt-1 text-xs text-slate-500">Permanent links require an enabled live market. A template using only the permanent link creates no pending payment.</p><div className="mt-2 flex flex-wrap gap-2">{['{{pay_link}}', '{{payment_link}}'].map(tag => <button key={tag} type="button" className="rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs text-teal-700" onClick={() => setEditorForm({ ...editorForm, body: editorForm.body + ' ' + tag })}>{tag}</button>)}</div><p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-slate-400">Example preview</p><p className="mt-1 break-words whitespace-pre-wrap text-xs text-slate-600">{editorForm.body.replace(/\{\{\s*pay_link\s*\}\}/g, 'https://market.example/pay/EXAMPLE1').replace(/\{\{\s*payment_link\s*\}\}/g, '[one-time payment link]')}</p></div> : null}
                         </div>
 
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">

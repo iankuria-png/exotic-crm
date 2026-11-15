@@ -42,6 +42,8 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
+        $schedule->command('flexible-amounts:receipts --limit=10')->cron('2-59/5 * * * *')->withoutOverlapping(10)->onOneServer()->runInBackground();
+        $schedule->command('pay-links:reconcile --limit=10')->everyMinute()->withoutOverlapping(10)->onOneServer()->runInBackground();
         if (config('collection.capture_enabled')) {
             $schedule->command('collections:work --loop --max-runtime=45 --poll=2 --limit=100')
                 ->everyMinute()->withoutOverlapping(5)->onOneServer()->runInBackground();

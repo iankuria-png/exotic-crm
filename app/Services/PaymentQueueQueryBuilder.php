@@ -22,6 +22,7 @@ class PaymentQueueQueryBuilder
             'per_page' => 'nullable|integer|min:1|max:200',
             'search' => 'nullable|string|max:120',
             'status' => 'nullable|string|max:60',
+            'pricing_mode' => 'nullable|in:flexible,package',
             'attribution_state' => 'nullable|in:current,archived,unresolved,disputed',
             'matched' => 'nullable|in:matched,unmatched',
             'platform_id' => 'nullable|integer|exists:platforms,id',
@@ -90,6 +91,8 @@ class PaymentQueueQueryBuilder
             $context['environment_filter']
         );
 
+        if (($validated['pricing_mode'] ?? '') === 'flexible') $query->where('payment_data->pricing_mode', 'flexible');
+        if (($validated['pricing_mode'] ?? '') === 'package') $query->where(fn ($q) => $q->whereNull('payment_data->pricing_mode')->orWhere('payment_data->pricing_mode', '!=', 'flexible'));
         $statusFilter = trim((string) ($validated['status'] ?? $request->input('status', '')));
         $successfulStatuses = $context['successful_statuses'];
 
@@ -229,6 +232,8 @@ class PaymentQueueQueryBuilder
 
         $query = $this->buildBaseQuery($request, $with, $includeProviderLookups);
         $this->applyPaymentWorkspaceVisibility($query, $statsVisibility, $context['environment_filter']);
+        if (($validated['pricing_mode'] ?? '') === 'flexible') $query->where('payment_data->pricing_mode', 'flexible');
+        if (($validated['pricing_mode'] ?? '') === 'package') $query->where(fn ($q) => $q->whereNull('payment_data->pricing_mode')->orWhere('payment_data->pricing_mode', '!=', 'flexible'));
 
         if ($context['from']) {
             $query->where('created_at', '>=', $context['from']);
@@ -390,7 +395,7 @@ class PaymentQueueQueryBuilder
                     })
                     ->where(function (Builder $sourceBuilder) {
                         $sourceBuilder->whereNull('source')
-                            ->orWhereNotIn('source', ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout']);
+                            ->orWhereNotIn('source', ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'self_service_pay_link']);
                     });
             });
         }
@@ -451,7 +456,7 @@ class PaymentQueueQueryBuilder
                             ->where('provider_key', '!=', '')
                             ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%']);
                     })
-                    ->orWhereIn('source', ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout']);
+                    ->orWhereIn('source', ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'self_service_pay_link']);
             });
     }
 

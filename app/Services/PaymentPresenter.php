@@ -114,7 +114,7 @@ class PaymentPresenter
 
         if (
             $hasStructuredProviderRoute
-            || in_array($source, ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout'], true)
+            || in_array($source, ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'self_service_pay_link'], true)
         ) {
             $providerName = $routingDecision?->provider_type_key ?: $payment->providerTransactions->first()?->provider_type_key ?: $payment->provider_key;
 
@@ -164,7 +164,7 @@ class PaymentPresenter
             ];
         }
 
-        if ($provider !== '' || in_array($sourceValue, ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout'], true)) {
+        if ($provider !== '' || in_array($sourceValue, ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'self_service_pay_link'], true)) {
             return [
                 'key' => 'self_service',
                 'label' => 'Self-service',

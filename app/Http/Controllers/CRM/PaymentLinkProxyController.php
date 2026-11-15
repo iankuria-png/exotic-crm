@@ -29,12 +29,9 @@ class PaymentLinkProxyController extends Controller
         if (!$payment) {
             $tokenHash = hash('sha256', trim($token));
             $payment = Payment::query()
-                ->whereNotNull('payment_data')
+                ->where('link_proxy_token_hash', $tokenHash)
                 ->orderByDesc('id')
-                ->get()
-                ->first(function (Payment $candidate) use ($tokenHash) {
-                    return data_get($candidate->payment_data, 'link_proxy.token_hash') === $tokenHash;
-                });
+                ->first();
         }
 
         if (!$payment) {

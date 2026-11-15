@@ -95,7 +95,8 @@ class LifecycleSmsService
     private function canCarryPaymentLink(?Platform $platform): bool
     {
         return $this->paymentLinkService->hasTokenizedProvider($platform)
-            || $this->paymentLinkService->hasManualPaymentMethod($platform);
+            || $this->paymentLinkService->hasManualPaymentMethod($platform)
+            || ($platform && \App\Models\PayLinkSetting::where('platform_id', $platform->id)->where('rollout_mode', 'live')->exists());
     }
 
     // ---------------------------------------------------------------
@@ -125,6 +126,8 @@ class LifecycleSmsService
         $flowConfig = $evaluation['flow_config'];
         $reference = $evaluation['reference'];
         $actorId = $this->resolveActorId($options['actor_id'] ?? null);
+
+        if ($this->permanentOnly($evaluation['template'])) return $this->sendPermanentLink($flow, $client, $evaluation, $options, $actorId);
 
         // Resolve (or mint) the payment + tokenized link.
         $payment = $options['payment'] ?? null;
@@ -167,7 +170,7 @@ class LifecycleSmsService
         }
 
         $template = $evaluation['template'];
-        $variables = $this->buildVariables($client, $deal, $payment, (string) $link['payment_url']);
+        $variables = $this->buildVariables($client, $deal, $payment, (string) $link['payment_url'], str_contains((string) $template->body, 'pay_link'));
         $rendered = $this->templateService->renderTemplate($template, $variables);
 
         if (!empty($rendered['missing'])) {
@@ -309,9 +312,12 @@ class LifecycleSmsService
         if (!$template) {
             return $this->skipResult($flow, $client, 'no_template');
         }
+        if (str_contains((string) $template->body, 'pay_link') && !\App\Models\PayLinkSetting::where('platform_id', $platform->id)->where('rollout_mode', 'live')->exists()) {
+            return $this->skipResult($flow, $client, 'pay_link_disabled');
+        }
 
         if (in_array($flow, [self::FLOW_ONBOARDING, self::FLOW_REACTIVATION], true)) {
-            if (empty($flowConfig['product_id']) || empty($flowConfig['product_price_id'])) {
+            if (!$this->permanentOnly($template) && (empty($flowConfig['product_id']) || empty($flowConfig['product_price_id']))) {
                 return $this->skipResult($flow, $client, 'no_offer_configured');
             }
         }
@@ -624,6 +630,37 @@ class LifecycleSmsService
     // Templates + variables
     // ---------------------------------------------------------------
 
+    private function permanentOnly(Template $template): bool
+    {
+        return str_contains((string) $template->body, 'pay_link') && !str_contains((string) $template->body, 'payment_link');
+    }
+
+    private function permanentUrl(Client $client): string
+    {
+        if (!\App\Models\PayLinkSetting::where('platform_id', $client->platform_id)->where('rollout_mode', 'live')->exists()) return '';
+        try {
+            app(\App\Services\PayLink\EligibilityService::class)->snapshot($client->loadMissing('platform'));
+            return app(\App\Services\PayLink\LinkService::class)->mint($client, null, 'Permanent link needed by lifecycle template')->url();
+        } catch (\Throwable) { return ''; }
+    }
+
+    private function sendPermanentLink(string $flow, Client $client, array $evaluation, array $options, int $actorId): array
+    {
+        $url = $this->permanentUrl($client);
+        if ($url === '') return $this->skip($flow, $client, 'pay_link_unavailable');
+        $template = $evaluation['template']; $reference = $evaluation['reference']; $market = $evaluation['market_config'];
+        $variables = $this->templateService->buildClientVariables($client, null, ['pay_link' => $url]);
+        $rendered = $this->templateService->renderTemplate($template, $variables);
+        if (!empty($rendered['missing'])) return $this->skip($flow, $client, 'pay_link_template_missing_variables');
+        $anchor = $this->claimAnchor($flow, $client, $reference, $actorId, ['template_id' => $template->id, 'link_mode' => 'permanent',
+            'channel' => $market['channel'], 'source' => $options['source'] ?? 'automated']);
+        $delivery = $this->dispatchMessage($client, $rendered['body'], $market['channel'], ['purpose' => 'lifecycle_'.$flow,
+            'phone_prefix' => $client->platform->phone_prefix, 'template_id' => $template->id, 'actor_id' => $actorId]);
+        if (($delivery['status'] ?? '') === 'disabled') { $anchor->delete(); return $this->skip($flow, $client, 'sms_dispatch_disabled'); }
+        return $this->finalizeAnchor($anchor, $flow, $client, !empty($delivery['success']) ? 'sent' : 'failed', ['reference' => $reference,
+            'template_id' => $template->id, 'link_mode' => 'permanent', 'channel' => $market['channel'], 'source' => $options['source'] ?? 'automated'], $actorId);
+    }
+
     public function resolveTemplate(string $flow, int $platformId, $templateId = null): ?Template
     {
         if (is_numeric($templateId) && (int) $templateId > 0) {
@@ -658,7 +695,7 @@ class LifecycleSmsService
         return Template::query()
             ->active()
             ->whereIn('category', $categories)
-            ->when($requiresLink, fn (Builder $builder) => $builder->where('body', 'like', '%payment_link%'))
+            ->when($requiresLink, fn (Builder $builder) => $builder->where(fn (Builder $q) => $q->where('body', 'like', '%payment_link%')->orWhere('body', 'like', '%pay_link%')))
             ->where(function (Builder $builder) {
                 $builder->where('channel', 'sms')->orWhereNull('channel');
             })
@@ -672,12 +709,13 @@ class LifecycleSmsService
             ->first();
     }
 
-    private function buildVariables(Client $client, ?Deal $deal, Payment $payment, string $paymentUrl): array
+    private function buildVariables(Client $client, ?Deal $deal, Payment $payment, string $paymentUrl, bool $permanent = false): array
     {
         $extra = array_merge(
             $this->profileMetricsService->templateVariables($client),
             [
                 'payment_link' => $paymentUrl,
+                'pay_link' => $permanent ? $this->permanentUrl($client) : '',
                 'amount' => number_format((float) $payment->amount),
                 'currency' => (string) ($payment->currency ?: ($client->platform?->currency_code ?: 'KES')),
                 // Defensive fallbacks so a send never hard-fails on a legacy
@@ -985,6 +1023,7 @@ class LifecycleSmsService
                     $this->profileMetricsService->templateVariables($client),
                     [
                         'payment_link' => '[payment link]',
+                        'pay_link' => '[permanent pay link]',
                         'amount' => '—',
                         'currency' => (string) ($client->platform?->currency_code ?: ''),
                     ]
@@ -1055,6 +1094,7 @@ class LifecycleSmsService
                 $this->profileMetricsService->templateVariables($client),
                 [
                     'payment_link' => '[payment link]',
+                        'pay_link' => '[permanent pay link]',
                     'amount' => '—',
                     'currency' => (string) ($client->platform?->currency_code ?: ''),
                     'profile_url' => (string) ($client->wp_profile_permalink ?: ''),
@@ -1348,6 +1388,11 @@ class LifecycleSmsService
      */
     public function prepareRenewalLink(?Deal $deal, Template $template, ?int $actorId = null): array
     {
+        if ($this->permanentOnly($template)) {
+            $client = $deal?->client;
+            $url = $client ? $this->permanentUrl($client) : '';
+            return ['variables' => ['pay_link' => $url], 'payment' => null, 'link_mode' => $url ? 'permanent' : 'unavailable'];
+        }
         $none = ['variables' => [], 'payment' => null, 'link_mode' => 'none'];
         $blank = ['variables' => ['payment_link' => ''], 'payment' => null, 'link_mode' => 'none'];
 
@@ -1424,7 +1469,7 @@ class LifecycleSmsService
             return $blank;
         }
 
-        return ['variables' => ['payment_link' => $url], 'payment' => $payment, 'link_mode' => $mode];
+        return ['variables' => ['payment_link' => $url, 'pay_link' => str_contains((string) $template->body, 'pay_link') ? $this->permanentUrl($client) : ''], 'payment' => $payment, 'link_mode' => $mode];
     }
 
     /**

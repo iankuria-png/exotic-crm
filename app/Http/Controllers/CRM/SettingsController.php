@@ -1934,6 +1934,12 @@ class SettingsController extends Controller
 
         $market = Platform::query()->findOrFail($marketId);
 
+        if ($request->has('flexible_amounts')) {
+            app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($request->user(), $marketId);
+            $rules = app(\App\Services\FlexibleAmounts\FlexibleRulesService::class)->save($market, $request->input('flexible_amounts', []), (int) $request->user()->id);
+            return response()->json(['flexible_amounts' => $rules]);
+        }
+
         $activationMethods = ['manual', 'payment_link', 'stk_push', 'wallet_balance'];
         $renewalMethods = ['wallet_balance', 'payment_link', 'manual'];
 

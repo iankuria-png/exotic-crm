@@ -678,6 +678,11 @@ class WpSyncService
         return $this->get("/clients/{$postId}/subscription-operation", $operationId ? ['operation_id'=>$operationId] : []);
     }
 
+    public function payLinkCapabilities(): array { return $this->get('/pay-link-capabilities'); }
+    public function payLinkState(int $postId): array { return $this->get("/clients/{$postId}/pay-link-state"); }
+    public function payLinkOperation(string $key): array { return $this->get('/pay-link-operations/'.$key); }
+    public function activatePayLink(int $postId, array $data): array { return $this->post("/clients/{$postId}/pay-link-activate", $data); }
+
     public function applySubscriptionOperation(int $postId, array $payload, ?float $timeout = null): array
     {
         return $this->post("/clients/{$postId}/subscription-operation", $payload, $timeout);
@@ -1314,13 +1319,14 @@ class WpSyncService
 
     private function guardCollectionMutation(string $path, array $body = []): void
     {
-        if ($this->platformId > 0 && preg_match('#^/clients/(\d+)/(activate|extend|deactivate|lifecycle|visibility|delete|subscription-operation|vvip-placement|update)$#', $path, $match)) {
+        if ($this->platformId > 0 && preg_match('#^/clients/(\d+)/(activate|extend|deactivate|lifecycle|visibility|delete|subscription-operation|pay-link-activate|vvip-placement|update)$#', $path, $match)) {
             if ($match[2] === 'update' && ! array_intersect(array_keys($body['fields'] ?? []), ['post_status', 'profile_status', 'status', 'post_author', '_current_paid_duration_key', 'package', 'package_id', 'current_package', 'current_duration', 'escort_expire', 'agency_expire', 'premium', 'premium_expire', 'featured', 'featured_expire', 'vvip', 'vvip_expire', 'needs_payment', 'notactive', 'crm_lifecycle_state', 'crm_deal_id', 'subscription_start', 'subscription_end'])) {
                 return;
             }
             $client = Client::where('platform_id', $this->platformId)->where('wp_post_id', (int) $match[1])->first();
             if ($client) {
                 app(\App\Services\Collections\CollectionWriterGuard::class)->assertClient((int) $client->id);
+                app(\App\Services\PayLink\WriterGuard::class)->assertClient((int) $client->id);
             }
         }
     }
@@ -1328,7 +1334,7 @@ class WpSyncService
     private function post(string $path, array $body = [], ?float $timeout = null): array
     {
         $this->guardCollectionMutation($path, $body);
-        if ($this->platformId > 0 && preg_match('#^/clients/(\d+)/(activate|extend|lifecycle)$#', $path, $match)) {
+        if ($this->platformId > 0 && preg_match('#^/clients/(\d+)/(activate|extend|lifecycle|pay-link-activate)$#', $path, $match)) {
             // A profile still receiving its one-time copy is not a ready target for any entitlement path.
             SubsidiaryProfileCopyService::assertTargetReady($this->platformId, (int) $match[1]);
         }

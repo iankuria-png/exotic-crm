@@ -31,6 +31,13 @@ class PaymentCompletionService
 
     public function complete(Payment $payment, array $providerPayload = [], array $options = []): array
     {
+        if ($payment->source === 'self_service_pay_link') {
+            $charge = \App\Models\PayLinkCharge::where('payment_id', $payment->id)->firstOrFail();
+            // Callback payload is a signal; authoritative GET verification owns settlement.
+            app(\App\Services\PayLink\ReconciliationService::class)->reconcile($charge->id);
+            return ['payment' => $payment->fresh(), 'client' => $payment->client, 'deal' => $payment->deal,
+                'provisioned' => $charge->fresh()->activation_state === 'applied'];
+        }
         return match ((string) $payment->purpose) {
             Payment::PURPOSE_TOUR_PASS => app(\App\Services\Tours\FulfillmentService::class)->complete($payment, $providerPayload, $options),
             Payment::PURPOSE_SEND_LOVE => app(\App\Services\SendLove\FulfillmentService::class)->complete($payment, $providerPayload, $options),
@@ -205,6 +212,26 @@ class PaymentCompletionService
 
     public function completeSubscriptionPayment(Payment $payment, array $providerPayload = [], array $options = []): array
     {
+        if (data_get($payment->payment_data, 'pricing_mode') === 'flexible' && $payment->source !== 'self_service_pay_link' && empty($options['flexible_owned'])) {
+            return app(\App\Services\FlexibleAmounts\FlexibleAttemptGuard::class)->owned($payment, function () use ($payment, $providerPayload, $options) {
+                try {
+                    $result = $this->completeSubscriptionPayment($payment, $providerPayload, $options + ['flexible_owned' => true]);
+                } catch (\App\Exceptions\FlexibleFulfilmentException $e) {
+                    $held = $this->markPaymentCompleted($payment->fresh(), $providerPayload, array_merge($options, [
+                        'provisioning_status' => 'needs_review', 'reconciliation_state' => 'manual_review',
+                        'transition' => 'flexible_activation_needs_review',
+                    ]));
+                    \App\Models\FlexibleCheckoutAttempt::where('payment_id', $payment->id)->update(['state' => 'needs_review']);
+                    return ['payment' => $held, 'client' => $held->client, 'deal' => null, 'provisioned' => false];
+                }
+                if (($result['provisioned'] ?? false) || data_get($result, 'payment.payment_data.sandbox_suppressed') || data_get($result, 'payment.payment_data.provisioning_status') === 'suppressed_sandbox') {
+                    app(\App\Services\FlexibleAmounts\FlexibleAttemptGuard::class)->finish($payment);
+                    app(\App\Services\FlexibleAmounts\FlexibleReceiptService::class)->record($payment->fresh());
+                }
+                return $result;
+            });
+        }
+        if ($payment->source === 'self_service_pay_link') return $this->complete($payment, $providerPayload, $options);
         app(\App\Services\Collections\CollectionWriterGuard::class)->assertPayment($payment);
         return DB::transaction(function () use ($payment, $providerPayload, $options) {
             $client = $options['client'] ?? $this->resolveClientForPayment($payment);
@@ -295,7 +322,9 @@ class PaymentCompletionService
                         is_array($options['metadata'] ?? null) ? $options['metadata'] : null,
                         is_array($options['raw_context'] ?? null) ? $options['raw_context'] : []
                     ),
-                    'duration_days' => $options['duration_days'] ?? null,
+                    'duration_days' => data_get($payment->payment_data, 'pricing_mode') === 'flexible'
+                        ? (int) data_get($payment->payment_data, 'flexible_quote.days')
+                        : ($options['duration_days'] ?? null),
                     'payment_reference' => $options['payment_reference']
                         ?? $payment->transaction_reference
                         ?? $payment->reference_number,

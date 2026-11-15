@@ -1,0 +1,53 @@
+{
+  "signatureConfiguration": {
+    "signedRequestsOnly": false,
+    "signedCallbacks": false
+  },
+  "countries": [
+    {
+      "country": "KEN",
+      "displayName": {
+        "fr": "Kenya",
+        "en": "Kenya"
+      },
+      "prefix": "254",
+      "flag": "https://static-content.pawapay.io/country_flags/ken.svg",
+      "providers": [
+        {
+          "provider": "MPESA_KEN",
+          "displayName": "Safaricom",
+          "logo": "https://static-content.pawapay.io/provider_logos/mpesa.png",
+          "currencies": [
+            {
+              "currency": "KES",
+              "displayName": "KSh",
+              "operationTypes": {
+                "DEPOSIT": {
+                  "minAmount": "1",
+                  "maxAmount": "250000",
+                  "authType": "PROVIDER_AUTH",
+                  "pinPrompt": "AUTOMATIC",
+                  "pinPromptRevivable": false,
+                  "decimalsInAmount": "NONE",
+                  "status": "OPERATIONAL"
+                },
+                "PAYOUT": {
+                  "minAmount": "10",
+                  "maxAmount": "250000",
+                  "decimalsInAmount": "TWO_PLACES",
+                  "status": "OPERATIONAL"
+                },
+                "REFUND": {
+                  "minAmount": "10",
+                  "maxAmount": "250000",
+                  "decimalsInAmount": "TWO_PLACES",
+                  "status": "OPERATIONAL"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

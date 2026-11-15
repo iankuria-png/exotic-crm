@@ -111,7 +111,7 @@ class NotificationService
 
         if (!$enabled) {
             Log::info('SMS dispatch skipped: SMS disabled in configuration.', [
-                'phone' => $normalizedPhone,
+                'phone' => ($context['purpose'] ?? '') === 'pay_link_receipt' ? 'masked' : $normalizedPhone,
                 'context' => $context,
             ]);
 
@@ -677,9 +677,9 @@ class NotificationService
         } catch (\Throwable $exception) {
             Log::error('SMS dispatch failed', [
                 'provider' => $providerId,
-                'phone' => $phone,
+                'phone' => ($context['purpose'] ?? '') === 'pay_link_receipt' ? 'masked' : $phone,
                 'context' => $context,
-                'error' => $exception->getMessage(),
+                'error' => ($context['purpose'] ?? '') === 'pay_link_receipt' ? 'Pay-link receipt transport outcome unknown.' : $exception->getMessage(),
             ]);
 
             return [

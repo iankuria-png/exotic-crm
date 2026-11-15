@@ -16,6 +16,7 @@ import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import CloseCaseDialog from '../components/CloseCaseDialog';
 import SupportBoardChat from '../components/SupportBoardChat';
 import ClientSubscriptionDeactivationDialog from '../components/subscriptions/ClientSubscriptionDeactivationDialog';
+import ClientPayLinkCard from '../components/subscriptions/ClientPayLinkCard';
 import SubsidiaryTrialSection from '../components/clients/SubsidiaryTrialSection';
 import { useToast } from '../components/ToastProvider';
 import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../utils/billingMethodPolicy';
@@ -1152,6 +1153,7 @@ export default function ClientDetail() {
         ? requestedTab
         : 'overview';
     const [activeTab, setActiveTab] = useState(initialTab);
+    const [flexiblePaymentsOnly, setFlexiblePaymentsOnly] = useState(false);
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
     const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
@@ -4456,6 +4458,7 @@ export default function ClientDetail() {
                         />
                         <DefinitionRow label="Last Synced" value={formatDateTime(client.last_synced_at)} />
                     </dl>
+                    {client.client_type === 'escort' ? <ClientPayLinkCard client={client} /> : null}
                 </ProfileInfoCard>
 
                 <ProfileInfoCard title="Summary">
@@ -5471,11 +5474,13 @@ export default function ClientDetail() {
             {activeTab === 'payments' ? (
                 <div className="space-y-3">
                     <CollectionWorkspace clientId={client.id} platformId={client.platform_id} />
-                    {client.payments?.length > 0 ? client.payments.map((payment) => (
+                    <label className="flex min-h-11 items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={flexiblePaymentsOnly} onChange={event => setFlexiblePaymentsOnly(event.target.checked)} />Flexible payments only</label>
+                    {client.payments?.filter(payment => !flexiblePaymentsOnly || payment.payment_data?.pricing_mode === 'flexible').length > 0 ? client.payments.filter(payment => !flexiblePaymentsOnly || payment.payment_data?.pricing_mode === 'flexible').map((payment) => (
                         <section key={payment.id} className="crm-surface flex items-start justify-between gap-3 p-4">
                             <div>
                                 <p className="text-sm font-semibold text-slate-900">
                                     {formatCurrency(payment.amount, payment.currency || 'KES')}
+                                    {payment.payment_data?.pricing_mode === 'flexible' ? <span className="ml-2 inline-flex rounded bg-violet-50 px-2 py-1 text-[10px] text-violet-800">Flexible</span> : null}
                                     {payment.product ? <span className="font-normal text-slate-500"> - {payment.product.name}</span> : null}
                                 </p>
                                 <p className="text-xs text-slate-500">

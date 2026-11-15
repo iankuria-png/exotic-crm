@@ -66,6 +66,7 @@ class BillingProxyLifecycleService
         ];
 
         $payment->forceFill([
+            'link_proxy_token_hash' => $tokenHash,
             'provider_key' => $providerConfig['wallet_provider_key'] ?? $payment->provider_key,
             'provider_environment' => $providerConfig['environment'] ?? $payment->provider_environment,
             'payment_data' => $paymentData,

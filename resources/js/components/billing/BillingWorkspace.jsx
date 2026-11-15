@@ -12,8 +12,10 @@ import SubscriptionRulesTab from './SubscriptionRulesTab';
 import ManualPaymentsTab from './ManualPaymentsTab';
 import BillingSystemTab from './BillingSystemTab';
 import BillingTabNav from './BillingTabNav';
+import PayLinkSettings from '../settings/PayLinkSettings';
 
 const billingTabs = [
+    { id: 'pay_links', label: 'Pay links' },
     { id: 'overview', label: 'Overview' },
     { id: 'providers', label: 'Providers' },
     { id: 'profiles', label: 'Profiles' },
@@ -217,6 +219,7 @@ export default function BillingWorkspace() {
             ) : null}
 
             {activeTab === 'rebates' ? <RebatesTab platforms={markets} /> : null}
+            {activeTab === 'pay_links' ? <PayLinkSettings platforms={markets} /> : null}
 
             {activeTab === 'subscription_rules' ? (
                 <SubscriptionRulesTab platforms={markets} />
