@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Find locations with the fewest available profiles — plan</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+--bg:#0a0a0b;--bg2:#101013;--card:#131317;--card2:#17171c;--line:#26262e;
+--line2:#33333d;--ink:#ededf2;--mut:#9a9aa8;--mut2:#6e6e7d;--acc:#7c5cff;
+--acc2:#a48bff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--info:#58a6ff;
+--r:10px;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+--wf-paper:#0d0d10;--wf-card:#17171c;--wf-ink:#ededf2;--wf-muted:#8b8b99;
+--wf-line:#2c2c36;--wf-accent:#7c5cff;--wf-accent-soft:#241d47;
+--wf-warn:#d29922;--wf-ok:#3fb950;--wf-radius:8px;
+}
+@media(prefers-color-scheme:light){:root{
+--bg:#fbfbfd;--bg2:#fff;--card:#fff;--card2:#f7f7fa;--line:#e3e3ea;
+--line2:#d0d0da;--ink:#16161c;--mut:#5c5c6b;--mut2:#8a8a99;--acc:#6247d6;
+--acc2:#7c5cff;--wf-paper:#fff;--wf-card:#f7f7fa;--wf-ink:#16161c;
+--wf-muted:#5c5c6b;--wf-line:#e3e3ea;--wf-accent:#6247d6;--wf-accent-soft:#efecff;
+}}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:minmax(0,1fr);max-width:1180px;margin:0 auto;padding:0 28px 120px}
+@media(min-width:1080px){.shell{grid-template-columns:232px minmax(0,1fr);gap:56px;padding-left:32px}}
+nav.toc{display:none}
+@media(min-width:1080px){nav.toc{display:block;position:sticky;top:0;align-self:start;
+max-height:100vh;overflow:auto;padding:96px 0 40px;font-size:13px}}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:5px 10px;
+border-left:2px solid transparent;border-radius:0 4px 4px 0}
+nav.toc a:hover{color:var(--ink);background:var(--card);border-left-color:var(--acc)}
+nav.toc a.l3{padding-left:22px;font-size:12.5px;color:var(--mut2)}
+header.hero{padding:72px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+color:var(--acc2);margin-bottom:18px}
+h1{font-size:clamp(30px,4.2vw,44px);line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;font-weight:660}
+.obj{font-size:18px;color:var(--mut);max-width:70ch;margin:0 0 26px;line-height:1.6}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 12px/1 var(--sans);color:var(--mut);background:var(--card);
+border:1px solid var(--line);border-radius:999px;padding:7px 13px}
+.chip b{color:var(--ink);font-weight:600}
+main h2{font-size:24px;letter-spacing:-.02em;margin:56px 0 14px;padding-top:10px;font-weight:640}
+main h3{font-size:17px;margin:34px 0 10px;font-weight:620;letter-spacing:-.01em}
+main h4{font-size:15px;margin:0 0 8px;font-weight:620}
+main p{margin:0 0 14px;max-width:76ch}
+main ul,main ol{margin:0 0 16px;padding-left:22px;max-width:76ch}
+main li{margin:5px 0}
+a{color:var(--acc2)}
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+blockquote{margin:0 0 16px;padding:2px 0 2px 18px;border-left:3px solid var(--line2);color:var(--mut)}
+code{font-family:var(--mono);font-size:.875em;background:var(--card2);
+border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre.code{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);
+padding:14px 16px;overflow-x:auto;margin:0 0 16px}
+pre.code code{background:none;border:0;padding:0;font-size:12.75px;line-height:1.6}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{text-align:left;font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+.blk{margin:30px 0;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.bh{font:600 11.5px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+color:var(--mut);padding:14px 18px;border-bottom:1px solid var(--line);background:var(--card2)}
+.bh code{background:none;border:0;padding:0;text-transform:none;letter-spacing:0;
+font-size:12.5px;color:var(--ink)}
+.bb{padding:18px}
+.bb>.tw,.bb>*:last-child{margin-bottom:0}
+.cap{color:var(--mut2);font-size:13px;margin:10px 0 0!important}
+.tag{font:500 10.5px/1 var(--mono);color:var(--mut2);border:1px solid var(--line);
+border-radius:4px;padding:3px 6px;text-transform:uppercase;letter-spacing:.07em}
+.pill{display:inline-block;font:600 10.5px/1 var(--mono);border-radius:999px;
+padding:4px 9px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.p-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.p-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.p-bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.p-mut{color:var(--mut);background:var(--card2)}
+.callout{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
+margin:22px 0;padding:15px 17px;border:1px solid var(--line);border-left-width:3px;
+border-radius:var(--r);background:var(--card)}
+.callout .ct{font:600 10.5px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.callout .cb>*:last-child{margin-bottom:0}
+.t-note{border-left-color:var(--info)} .t-note .ct{color:var(--info)}
+.t-decision{border-left-color:var(--acc)} .t-decision .ct{color:var(--acc2)}
+.t-risk{border-left-color:var(--bad)} .t-risk .ct{color:var(--bad)}
+.t-warn{border-left-color:var(--warn)} .t-warn .ct{color:var(--warn)}
+.t-ok{border-left-color:var(--ok)} .t-ok .ct{color:var(--ok)}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+li.step{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 0;
+border-bottom:1px solid var(--line)}
+li.step:first-child{padding-top:0} li.step:last-child{border-bottom:0;padding-bottom:0}
+.sn{width:28px;height:28px;border-radius:8px;background:var(--wf-accent-soft);
+color:var(--acc2);font:600 12.5px/28px var(--mono);text-align:center}
+.sc h4{margin:3px 0 8px}
+.sm{display:grid;grid-template-columns:64px 1fr;gap:10px;font-size:13px;margin-top:5px}
+.sm .k{font:600 10.5px/1.7 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut2)}
+.sm .v{color:var(--mut)}
+.ty{font:500 12px/1 var(--mono);color:var(--acc2)}
+.rels{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.rel{font:500 11.5px/1 var(--mono);color:var(--mut);background:var(--card2);
+border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+.ep-h{display:flex;align-items:center;gap:11px;margin-bottom:12px;flex-wrap:wrap}
+.verb{font:700 11px/1 var(--mono);letter-spacing:.08em;padding:6px 9px;border-radius:6px;color:#0a0a0b}
+.v-GET{background:var(--info)} .v-POST{background:var(--ok)}
+.v-PUT,.v-PATCH{background:var(--warn)} .v-DELETE{background:var(--bad)}
+.v-HEAD,.v-OPTIONS{background:var(--mut)}
+.path{font-size:13.5px;background:none;border:0;padding:0}
+.sub{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin:14px 0 7px}
+table.ac{font-family:var(--mono);font-size:12.5px}
+table.ac td{padding:2px 10px;border:0;vertical-align:top}
+.ln{color:var(--mut2);text-align:right;user-select:none;width:1%;padding-right:14px!important}
+.cd code{background:none;border:0;padding:0;white-space:pre}
+.cl.hl{background:var(--wf-accent-soft)}
+.cl.hl .ln{color:var(--acc2)}
+.nt{font-family:var(--sans);color:var(--mut);font-size:12.5px;width:34%}
+.an b{color:var(--ink)}
+.diff{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line);
+border-radius:var(--r);overflow:hidden;font-family:var(--mono);font-size:12.5px}
+@media(min-width:760px){.diff{grid-template-columns:1fr 1fr}}
+.dcol{background:var(--bg2);padding-bottom:10px}
+.dh{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:11px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.dl{padding:1px 14px;white-space:pre-wrap;word-break:break-word}
+.d-del{background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.d-add{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.dg{padding:6px 2px;overflow-x:auto}
+.dg svg{max-width:100%;height:auto}
+.wfw{display:flex;justify-content:center}
+.wf{background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:12px;
+overflow:hidden;width:100%}
+.wf.s-desktop{max-width:100%} .wf.s-tablet{max-width:720px}
+.wf.s-mobile{max-width:378px} .wf.s-panel{max-width:440px}
+.wfbar{display:flex;gap:6px;padding:10px 13px;border-bottom:1px solid var(--wf-line);
+background:var(--wf-card)}
+.wfbar i{width:9px;height:9px;border-radius:50%;background:var(--wf-line)}
+.wfb{padding:16px;color:var(--wf-ink);font-size:13.5px}
+.cmp{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.cmp{grid-template-columns:1fr 1fr}}
+.ccol{border:1px solid var(--line);border-radius:var(--r);padding:15px;background:var(--bg2)}
+.ch{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin-bottom:11px}
+.ccol>*:last-child{margin-bottom:0}
+ol.qs{list-style:none;margin:0;padding:0}
+li.q{padding:16px 0;border-bottom:1px solid var(--line)}
+li.q:first-child{padding-top:0} li.q:last-child{border-bottom:0;padding-bottom:0}
+.qh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.qn{font:700 11px/1 var(--mono);color:var(--acc2)}
+.qt{font-weight:600;flex:1;min-width:200px}
+ul.opts{list-style:none;margin:11px 0 0;padding:0}
+ul.opts li{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;
+padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin:0 0 7px;background:var(--bg2)}
+.box{width:14px;height:14px;border:1.5px solid var(--line2);border-radius:3px;margin-top:4px}
+.box.m{border-radius:3px} .ol{font-size:14px}
+.od{display:block;color:var(--mut);font-size:13px;margin-top:2px}
+.freeform{border:1px dashed var(--line2);border-radius:8px;padding:15px;
+color:var(--mut2);font-size:13px;margin-top:11px}
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+color:var(--mut2);font-size:12.5px}
+@media print{
+ nav.toc{display:none}.shell{grid-template-columns:1fr;max-width:none;padding:0}
+ .blk,.callout,.tw{break-inside:avoid}body{background:#fff;color:#000}
+}
+</style>
+</head><body>
+<div class="shell">
+<nav class="toc"><a class="l2" href="#counting-and-coverage">Counting and coverage</a><a class="l2" href="#interaction-decisions">Interaction decisions</a><a class="l2" href="#verification-and-delivery">Verification and delivery</a><a class="l2" href="#plan-audit-history">Plan audit history</a><a class="l2" href="#open-questions">Open questions</a></nav>
+<div>
+<header class="hero">
+<div class="eyebrow">Implementation plan</div>
+<h1>Find locations with the fewest available profiles</h1>
+<p class="obj">Make CRM location search, inventory ranking and metadata clear, with separate Active and Unlockable counts and a combined Available count.</p>
+<div class="meta"><span class="chip">Status <b>implemented and pushed; production pending</b></span><span class="chip">Owner <b>Ian Kuria</b></span><span class="chip">Date <b>2026-11-16</b></span><span class="chip">Scope <b>CRM locations endpoint and workspace, focused verification, matching compiled release and shipment</b></span><span class="chip">Non-goals <b>No customer profile changes, payment actions or WordPress source edits; No new location taxonomy or changes to existing city identity</b></span></div>
+</header>
+<main><p>Implementation approved by Ian with “proceed” on 16 November 2026. Source and matching compiled assets pushed as <code>c5819d5e</code>; production deployment remains pending. Verification evidence is in <code>docs/agent/tasks/location-inventory-ux-2026-11-16.md</code>.</p>
+<p>The locations workspace at <code>/clients?tab=locations</code> should answer “Where do we have the fewest profiles?” immediately. Ian confirmed that <strong>Unlockable means expired profiles visitors can unlock</strong>. Available is Active plus Unlockable; all cached clients remains a separate metric.</p>
+<p>The table becomes the first working surface. The existing teal CRM navigation and visual language stay in place. The map and city performance detail remain available below the inventory table. The figures in this wireframe are illustrative, not production measurements.</p>
+<section class="blk"><header class="bh">Locations workspace — low inventory</header><div class="bb"><div class="wfw"><div class="wf s-desktop"><div class="wfbar"><i></i><i></i><i></i></div><div class="wfb"><div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;background:var(--wf-paper);padding:16px;color:var(--wf-ink)"><aside style="border-right:1px solid var(--wf-line);padding:12px"><strong>ExoticCRM</strong><p>Dashboard</p><p>Team</p><p style="color:var(--wf-accent)">Clients</p><p>Stories</p><p>Payments</p></aside><main><div style="border-bottom:1px solid var(--wf-line);padding-bottom:12px">Customer service workspace · Kenya</div><h2>Clients</h2><p>All clients · Conversion · Churned · <strong>Locations</strong> · Optimizer</p><section style="background:var(--wf-card);border:1px solid var(--wf-line);border-radius:var(--wf-radius);padding:16px"><div style="display:flex;justify-content:space-between;gap:12px"><strong>Location inventory · Kenya</strong><span>SEO Boost · Engagement: 30d</span></div><p style="color:var(--wf-muted)">Available = Active + Unlockable. Inventory reflects the current CRM cache.</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin:14px 0"><span style="border:1px solid var(--wf-line);padding:9px">Search locations…</span><span style="border:1px solid var(--wf-line);padding:9px">Count: Available</span><span style="border:1px solid var(--wf-line);padding:9px">Maximum: 5</span><span style="border:1px solid var(--wf-line);padding:9px">Sort: Fewest first</span></div><div style="display:flex;flex-wrap:wrap;gap:8px"><strong style="background:var(--wf-accent-soft);padding:8px">Low inventory: 5 or fewer</strong><span style="padding:8px">No active profiles</span><span style="padding:8px">Unlockable only</span><span style="padding:8px">Clear filters</span></div><p style="color:var(--wf-muted)">3 matching locations · Export filtered CSV</p><table style="width:100%;border-collapse:collapse;text-align:left"><thead><tr><th>Location</th><th>Available ↑</th><th>Active</th><th>Unlockable</th><th>All clients</th><th>Details</th></tr></thead><tbody><tr><td style="padding:14px 0">Example West<br/><small>Not mapped</small></td><td>0</td><td>0</td><td>0</td><td>4</td><td>Details · View clients</td></tr><tr><td style="padding:14px 0">Example North</td><td>2</td><td>0</td><td>2</td><td>7</td><td>Details · View clients</td></tr><tr><td style="padding:14px 0">Example Central</td><td>5</td><td>3</td><td>2</td><td>11</td><td>Details · View clients</td></tr></tbody></table><p>1–3 of 3 · 25 per page</p></section><details style="padding:16px;border:1px solid var(--wf-line);margin-top:12px"><summary>Map and engagement · follows your filters</summary><p>Client map and city details</p></details></main></div></div></div></div><p class="cap">The table leads. Inventory counts are always visible; engagement is secondary. Rows and numbers here are illustrative.</p></div></section>
+<h2 id="counting-and-coverage">Counting and coverage</h2>
+<p>Reuse <code>Client::notClosed()</code>, market authorization and <code>CityNormalizer</code> city keys. Add <code>lifecycle_state</code> to the endpoint’s selected fields: it is currently absent although <code>isActiveProfile()</code> depends on it. Active follows that existing canonical method. Unlockable requires published status, a positive WordPress post ID and lifecycle <code>expired</code>, matching the public archive unlockable bucket. Archived, removed, private and draft profiles cannot enter Unlockable. Available is the sum of these disjoint buckets. This is CRM cached inventory, not proof of a successful visitor purchase or current advertiser availability.</p>
+<p>Keep all cached-client totals independent of availability. Locations with cached profiles and zero Available remain visible and sort first. Cities with no cached clients are outside this first release; do not imply a complete WordPress taxonomy census. No new WordPress request or migration is necessary for this feature. Any unrelated pending migration discovered during deployment is outside this release and must not be run incidentally.</p>
+<section class="blk"><header class="bh">Data model · Location aggregate (additive response)</header><div class="bb"><div class="tw"><table><thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead><tbody><tr><td><code>canonical_key</code></td><td><span class="ty">string</span></td><td>Existing city identity; retain routing.</td></tr><tr><td><code>client_count</code></td><td><span class="ty">integer</span></td><td>All non-closed cached clients in this city.</td></tr><tr><td><code>active_count</code></td><td><span class="ty">integer</span></td><td>Existing isActiveProfile() with lifecycle field actually loaded.</td></tr><tr><td><code>unlockable_count</code></td><td><span class="ty">integer</span></td><td>Published, positive wp_post_id, lifecycle expired.</td></tr><tr><td><code>available_count</code></td><td><span class="ty">integer</span></td><td>active_count + unlockable_count.</td></tr><tr><td><code>engagement</code></td><td><span class="ty">object | null</span></td><td>Existing period-specific views/contact data; preserve null availability.</td></tr><tr><td><code>performance</code></td><td><span class="ty">object</span></td><td>Existing score/band; do not recalculate it against a filtered subset.</td></tr></tbody></table></div></div></section>
+<section class="blk"><header class="bh">Endpoint</header><div class="bb"><div class="ep"><div class="ep-h"><span class="verb v-GET">GET</span><code class="path">/api/crm/clients/locations</code></div><div class="sm"><span class="k">Auth</span><span class="v">Existing authenticated CRM route and admin/sub_admin/sales/field_sales/marketing role middleware; MarketAuthorizationService enforces platform access, including the single-market fallback.</span></div><div class="sm"><span class="k">Request</span><span class="v">Existing platform_id, from and to only. Search, count filters, sorting, pagination and CSV act locally on the complete returned market array.</span></div><div class="sm"><span class="k">Response</span><span class="v">Existing response plus per-city unlockable_count and available_count, and matching inventory totals.</span></div><div class="sm"><span class="k">Errors</span><span class="v">Preserve existing 422 date/market validation, 403 market access and analytics unavailable/partial behavior.</span></div></div></div></section>
+<h2 id="interaction-decisions">Interaction decisions</h2>
+<p>Default sort is Available, fewest first, with a city-name tie-break. Search is case-insensitive and trimmed. Count basis supports Available, Active, Unlockable and All clients. Minimum and maximum thresholds are inclusive nonnegative integers; invalid or reversed thresholds show an inline prompt and suppress export. Low inventory applies maximum 5 and ascending count order; staff can edit the threshold. No active profiles applies Active = 0; Unlockable only applies Active = 0 and Unlockable &gt; 0. Off-map and performance filters remain independent and resettable.</p>
+<p>The table shows current inventory separately from engagement during the selected 7/30/90-day period. Metadata disclosure exposes verified counts, map state, views, profile-unique visits, contact rate, channel mix and performance explanations. Unavailable stays “Unavailable”; a numeric zero remains zero. Null analytics/index values sort last in both ascending and descending order, and numeric zero is a valid score. Apply this to the table, map tooltips and CitySpotlight metadata. Retain the existing methodology for the index rather than representing Weak as low inventory. Every numeric count and city name is sortable, with accessible sort state and explicit buttons.</p>
+<p>Search/filter/sort changes reset pagination. Export includes every filtered row in current sort order, across pages, with the selected period, inventory definitions and availability-preserving engagement values. Escape CSV correctly and neutralize spreadsheet formula cells. Selection follows the filtered array; clear a selected city that no longer matches. A changed market must never display the previous market’s placeholder counts, selection or export. Loading, error/retry, no market, no cached locations and no matching rows each have distinct messages. Keep the current market, date and city drill-through routes.</p>
+<p>Use a compact, horizontally scrollable table on phones, labeled controls with at least 16px editable text, 44px touch targets, visible keyboard focus and semantic tables/disclosures. No page-wide overflow at 320/390px. The map uses the same filtered rows; its bubble-size description must name the count actually used.</p>
+<section class="blk"><header class="bh">Implementation steps</header><div class="bb"><ol class="steps"><li class="step"><div class="sn">1</div><div class="sc"><h4>Correct and extend location inventory aggregation</h4><div class="sm"><span class="k">Reuses</span><span class="v">ClientLocationController::index/groupClients, Client::isActiveProfile, existing market authorization and tests.</span></div><div class="sm"><span class="k">Adds</span><span class="v">Loaded lifecycle_state, disjoint unlockable_count/available_count and additive totals, without profile writes.</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Http/Controllers/CRM/ClientLocationController.php; tests/Feature/CRM/ClientLocationsEndpointTest.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">PHP 8.2 focused endpoint/geocode suites on disposable SQLite; expired, private, archived, missing-post, canonical merging and market-denial fixtures.</span></div></div></li><li class="step"><div class="sn">2</div><div class="sc"><h4>Put search and inventory ranking first</h4><div class="sm"><span class="k">Reuses</span><span class="v">LocationsView, LocationTable, existing map, CitySpotlight, BandBadge and ChannelMixBar.</span></div><div class="sm"><span class="k">Adds</span><span class="v">A shared pure inventory helper and toolbar; inclusive thresholds, shortcuts, map/band filters, stable sorting, pagination, filtered CSV and metadata disclosures.</span></div><div class="sm"><span class="k">Files</span><span class="v">resources/js/components/clients/LocationsView.jsx; resources/js/components/clients/locations/LocationTable.jsx; new locationInventory.js and LocationFilters.jsx; resources/js/components/clients/locations/ClientMap.jsx and CitySpotlight.jsx for null-preserving metadata and accurate map count labels.</span></div><div class="sm"><span class="k">Verify</span><span class="v">Browser fixtures cover exact ranking, zero inventory, combined filters, numeric bounds, all-page CSV, selection, market switching, missing analytics, retry and client drill-through.</span></div></div></li><li class="step"><div class="sn">3</div><div class="sc"><h4>Verify responsive behavior and produce a scoped release</h4><div class="sm"><span class="k">Reuses</span><span class="v">Existing Vite build, fixture patterns, CRM ship process and fleet ops deployment safeguards.</span></div><div class="sm"><span class="k">Adds</span><span class="v">Release archive built from HEAD plus only owned source changes, matching public/build assets, screenshots, source hashes and exact deployment handoff.</span></div><div class="sm"><span class="k">Files</span><span class="v">plans/location-inventory-ux-2026-11-16; output/location-inventory-ux-2026-11-16; public/build; docs/agent/tasks/location-inventory-ux-2026-11-16.md</span></div><div class="sm"><span class="k">Verify</span><span class="v">Build and inspect exact release at 320/390/768/1440px. Preserve already landed flexible-payment/pay-link and profile-lock integrations. Check diff/staging before scoped commit and origin/main push; changelog pending/build/check afterward.</span></div></div></li></ol></div></section>
+<section class="blk"><header class="bh">Risks</header><div class="bb"><div class="tw"><table><thead><tr><th>Risk</th><th>Impact</th><th>Likelihood</th><th>Mitigation</th></tr></thead><tbody><tr><td>CRM cache can lag WordPress and is not a full taxonomy inventory.</td><td><span class="pill p-warn">medium</span></td><td>—</td><td>Label current cached inventory explicitly; preserve existing sync behavior. Zero-available cities require at least one cached client.</td></tr><tr><td>A release built from the dirty workspace could accidentally ship unrelated wallet/billing changes.</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Build an isolated source archive from current HEAD plus owned paths; retain the existing tracked flexible-payment overlay and inspect release source/assets. Preserve unrelated staging and local manifest.</td></tr><tr><td>Historical production overlays can be lost by a scoped release; deployed HEAD must be checked again before apply.</td><td><span class="pill p-bad">high</span></td><td>—</td><td>Use real bin/mkt only, pin exact preview/backup/recovery and inspect crm-preflight before any approved apply. Never blindly reset/pull. Ian may use the manual deployment handoff; no migration is needed.</td></tr></tbody></table></div></div></section>
+<h2 id="verification-and-delivery">Verification and delivery</h2>
+<p>Run <code>/usr/local/opt/php@8.2/bin/php artisan test --filter=ClientLocations</code> with explicit disposable SQLite settings, syntax lint on changed PHP and a scoped Vite build. Verify the actual component with synthetic API responses: search a city, choose Active count with maximum 0, switch to Unlockable only, reverse sort, export all filtered pages and open the city’s client list. Verify keyboard sort/disclosure, no-match reset, API error/retry, period changes and a delayed market switch with no cross-market data leak. Inspect screenshots at phone and desktop sizes.</p>
+<p>Shipment includes scoped source, matching built assets, a task record and separate WP-workspace CRM changelog entry. Production deployment remains separately evidenced. Before a live apply, show the exact release/target/backup and commands for authorization according to the Ops contract; user permission to use fleet ops tools is not itself permission to reset production or run migrations. Recovery restores only owned source and the previous manifest/assets, with no database rollback.</p>
+<h2 id="plan-audit-history">Plan audit history</h2>
+<p>Round 1: NOT READY — make missing analytics sort last in both directions, explicitly include ClientMap/CitySpotlight metadata fixes and exclude unrelated pending migrations. All three addressed.</p>
+<p>Round 2, fresh auditor: READY — no blockers or should-fix findings. Corrected the production-risk wording to reflect the current clean tracked tree rather than historical overlays.</p>
+<p>Read-only live preflight <code>20261116T093339Z-d4792-d9410-read-crm-preflight-539d</code>: production main/origin-main <code>5bce002cddf4886c7febecde3c1bccf579601909</code>; tracked tree clean, 36 untracked, no missing manifest assets, flexible-overlay PASS (<code>assets/app-B8JbCHgH.js</code>). Recheck before any later live apply.</p>
+<section class="blk" id="open-questions"><header class="bh">Open questions</header><div class="bb"><ol class="qs"></ol></div></section></main>
+<footer>Rendered from <code>plan.mdx</code> · review surface only — no code was written to produce this.</footer>
+</div></div></body></html>
