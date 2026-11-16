@@ -301,6 +301,47 @@ class ClientLocationsEndpointTest extends TestCase
         $this->assertIsArray($response->json('locations'));
     }
 
+    public function test_inventory_counts_separate_active_and_published_unlockable_profiles(): void
+    {
+        $platform = $this->makePlatform();
+        $defaults = ['platform_id' => $platform->id, 'city' => 'Nairobi'];
+        foreach ([
+            [],
+            ['lifecycle_state' => 'active'],
+            ['lifecycle_state' => 'expired'],
+            ['lifecycle_state' => 'expired', 'profile_locked_at' => now()],
+            ['lifecycle_state' => 'archived'],
+            ['lifecycle_state' => 'removed'],
+            ['lifecycle_state' => 'expired', 'profile_status' => 'private'],
+            ['lifecycle_state' => 'expired', 'profile_status' => 'draft'],
+            ['lifecycle_state' => 'expired', 'wp_post_id' => 0],
+            ['lifecycle_state' => 'active', 'needs_payment' => true],
+            ['lifecycle_state' => 'active', 'notactive' => true],
+        ] as $attributes) {
+            Client::factory()->create(array_merge($defaults, $attributes));
+        }
+        Client::factory()->create(array_merge($defaults, ['city' => ' MOMBASA ', 'profile_status' => 'private']));
+        Client::factory()->create(array_merge($defaults, ['city' => 'nairobi', 'lifecycle_state' => 'active', 'closed_at' => now()]));
+        $otherPlatform = $this->makePlatform('Uganda');
+        Client::factory()->create(['platform_id' => $otherPlatform->id, 'city' => 'Nairobi']);
+        Http::fake([$this->bulkPattern($platform) => Http::response([], 500)]);
+        Sanctum::actingAs($this->makeUser('marketing', [$platform->id]));
+
+        $response = $this->getJson("/api/crm/clients/locations?platform_id={$platform->id}&from=2026-11-01&to=2026-11-16");
+        $response->assertOk()
+            ->assertJsonPath('locations.0.client_count', 11)
+            ->assertJsonPath('locations.0.active_count', 2)
+            ->assertJsonPath('locations.0.unlockable_count', 2)
+            ->assertJsonPath('locations.0.available_count', 4)
+            ->assertJsonPath('locations.1.active_count', 0)
+            ->assertJsonPath('locations.1.unlockable_count', 0)
+            ->assertJsonPath('locations.1.available_count', 0)
+            ->assertJsonPath('totals.located_client_count', 12)
+            ->assertJsonPath('totals.active_count', 2)
+            ->assertJsonPath('totals.unlockable_count', 2)
+            ->assertJsonPath('totals.available_count', 4);
+    }
+
     private function makePlatform(string $country = 'Kenya'): Platform
     {
         return Platform::factory()->create([

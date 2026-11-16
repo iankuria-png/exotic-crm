@@ -10,6 +10,7 @@ use App\Services\CityPerformanceService;
 use App\Services\MarketAuthorizationService;
 use App\Services\WpSyncService;
 use App\Support\CityNormalizer;
+use App\Support\ClientLifecycleState;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -60,6 +61,7 @@ class ClientLocationController extends Controller
                 'platform_id',
                 'city',
                 'profile_status',
+                'lifecycle_state',
                 'needs_payment',
                 'notactive',
                 'verified',
@@ -131,6 +133,8 @@ class ClientLocationController extends Controller
                 'mapped' => $mapped,
                 'client_count' => $city['client_count'],
                 'active_count' => $city['active_count'],
+                'unlockable_count' => $city['unlockable_count'],
+                'available_count' => $city['active_count'] + $city['unlockable_count'],
                 'verified_count' => $city['verified_count'],
                 'published_count' => $aggregate['published_count'],
                 'engagement' => $aggregate['engagement'],
@@ -192,6 +196,9 @@ class ClientLocationController extends Controller
             'totals' => [
                 'located_client_count' => (int) $grouped->sum('client_count'),
                 'mapped_client_count' => $mappedClientCount,
+                'active_count' => (int) $grouped->sum('active_count'),
+                'unlockable_count' => (int) $grouped->sum('unlockable_count'),
+                'available_count' => (int) ($grouped->sum('active_count') + $grouped->sum('unlockable_count')),
                 'views' => $totalViews,
                 'contact_actions' => $totalContactActions,
             ],
@@ -258,6 +265,7 @@ class ClientLocationController extends Controller
                     'display_counts' => [],
                     'client_count' => 0,
                     'active_count' => 0,
+                    'unlockable_count' => 0,
                     'verified_count' => 0,
                     'wp_post_ids' => [],
                 ];
@@ -268,6 +276,12 @@ class ClientLocationController extends Controller
 
             if ($client->isActiveProfile()) {
                 $grouped[$canonicalKey]['active_count']++;
+            }
+
+            if ((string) $client->profile_status === 'publish'
+                && (int) $client->wp_post_id > 0
+                && $client->lifecycle_state === ClientLifecycleState::EXPIRED) {
+                $grouped[$canonicalKey]['unlockable_count']++;
             }
 
             if ((bool) $client->verified) {
@@ -287,6 +301,7 @@ class ClientLocationController extends Controller
                 'display_city' => (string) array_key_first($city['display_counts']),
                 'client_count' => $city['client_count'],
                 'active_count' => $city['active_count'],
+                'unlockable_count' => $city['unlockable_count'],
                 'verified_count' => $city['verified_count'],
                 'wp_post_ids' => array_values($city['wp_post_ids']),
             ];

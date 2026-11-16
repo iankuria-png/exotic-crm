@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { BANDS } from './locationMeta';
+import { formatMetric } from './locationInventory';
 
 function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -18,12 +19,12 @@ function buildTooltipNode(location) {
 
     const clients = document.createElement('p');
     clients.className = 'text-xs text-slate-600';
-    clients.textContent = `${Number(location.client_count || 0).toLocaleString()} clients`;
+    clients.textContent = `${formatMetric(location.client_count)} all clients · ${formatMetric(location.available_count)} available`;
     wrapper.appendChild(clients);
 
     const views = document.createElement('p');
     views.className = 'text-xs text-slate-600';
-    views.textContent = `${Number(location.engagement?.views || 0).toLocaleString()} views`;
+    views.textContent = location.engagement?.views == null ? 'Views unavailable' : `${formatMetric(location.engagement.views)} views`;
     wrapper.appendChild(views);
 
     return wrapper;
@@ -155,7 +156,7 @@ export default function ClientMap({ locations, selectedCity, onSelectCity }) {
         }
 
         mapRef.current.flyTo([selectedLocation.latitude, selectedLocation.longitude], Math.max(mapRef.current.getZoom(), 8), {
-            duration: 0.6,
+            duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.6,
         });
     }, [mappableLocations, selectedCity]);
 
@@ -164,7 +165,7 @@ export default function ClientMap({ locations, selectedCity, onSelectCity }) {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
                 <div>
                     <h2 className="text-sm font-semibold text-slate-800">Client map</h2>
-                    <p className="mt-1 text-sm text-slate-500">Bubble size reflects client count. Color reflects relative city performance.</p>
+                    <p className="mt-1 text-sm text-slate-500">Bubble size reflects all cached clients. Color reflects relative city performance.</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
@@ -174,7 +175,7 @@ export default function ClientMap({ locations, selectedCity, onSelectCity }) {
                             <span>{meta.label}</span>
                         </span>
                     ))}
-                    <span className="text-slate-400">Size = clients</span>
+                    <span className="text-slate-400">Size = all clients</span>
                 </div>
             </div>
 

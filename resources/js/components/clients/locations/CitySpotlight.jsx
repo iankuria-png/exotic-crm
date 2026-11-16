@@ -2,20 +2,8 @@ import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import BandBadge from './BandBadge';
 import ChannelMixBar from './ChannelMixBar';
-import { CHANNEL_META, CHANNEL_ORDER } from './locationMeta';
-
-function formatPercent(value) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-        return '0.0%';
-    }
-
-    return `${parsed.toFixed(1)}%`;
-}
-
-function formatCount(value) {
-    return Number(value || 0).toLocaleString();
-}
+import { CHANNEL_META } from './locationMeta';
+import { formatMetric } from './locationInventory';
 
 function SummaryRow({ label, value }) {
     return (
@@ -66,12 +54,12 @@ export default function CitySpotlight({
             <aside className="rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-200 px-5 py-4">
                     <h2 className="text-sm font-semibold text-slate-800">Top and watch cities</h2>
-                    <p className="mt-1 text-sm text-slate-500">Pick a city from the map or table, or start from the strongest and weakest signals.</p>
+                    <p className="mt-1 text-sm text-slate-500">Select a location for details. Performance compares engagement; inventory is shown in the table above.</p>
                 </div>
 
                 <div className="space-y-5 px-5 py-5">
                     <div>
-                        <h3 className="text-sm font-semibold text-slate-800">Top performers</h3>
+                        <h3 className="text-sm font-semibold text-slate-800">Highest performance index</h3>
                         <div className="mt-3 space-y-2">
                             {ranked.top.length > 0 ? ranked.top.map((location) => (
                                 <button
@@ -82,7 +70,7 @@ export default function CitySpotlight({
                                 >
                                     <div>
                                         <p className="font-semibold text-slate-800">{location.display_city}</p>
-                                        <p className="text-xs text-slate-500">{formatCount(location.client_count)} clients</p>
+                                        <p className="text-xs text-slate-500">{formatMetric(location.client_count)} clients</p>
                                     </div>
                                     <BandBadge band={location.performance?.band} />
                                 </button>
@@ -91,7 +79,7 @@ export default function CitySpotlight({
                     </div>
 
                     <div>
-                        <h3 className="text-sm font-semibold text-slate-800">Cities to watch</h3>
+                        <h3 className="text-sm font-semibold text-slate-800">Lowest performance index</h3>
                         <div className="mt-3 space-y-2">
                             {ranked.watch.length > 0 ? ranked.watch.map((location) => (
                                 <button
@@ -102,7 +90,7 @@ export default function CitySpotlight({
                                 >
                                     <div>
                                         <p className="font-semibold text-slate-800">{location.display_city}</p>
-                                        <p className="text-xs text-slate-500">{formatPercent(location.engagement?.contact_rate || 0)} contact rate</p>
+                                        <p className="text-xs text-slate-500">{formatMetric(location.engagement?.contact_rate, true)} contact rate</p>
                                     </div>
                                     <BandBadge band={location.performance?.band} />
                                 </button>
@@ -135,20 +123,22 @@ export default function CitySpotlight({
 
             <div className="space-y-5 px-5 py-5">
                 <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                    <SummaryRow label="Total clients" value={formatCount(selectedLocation.client_count)} />
-                    <SummaryRow label="Active" value={formatCount(selectedLocation.active_count)} />
-                    <SummaryRow label="Verified" value={formatCount(selectedLocation.verified_count)} />
+                    <SummaryRow label="Available" value={formatMetric(selectedLocation.available_count)} />
+                    <SummaryRow label="Unlockable" value={formatMetric(selectedLocation.unlockable_count)} />
+                    <SummaryRow label="All clients" value={formatMetric(selectedLocation.client_count)} />
+                    <SummaryRow label="Active" value={formatMetric(selectedLocation.active_count)} />
+                    <SummaryRow label="Verified" value={formatMetric(selectedLocation.verified_count)} />
                 </div>
 
                 <div>
                     <h3 className="text-sm font-semibold text-slate-800">Engagement</h3>
                     <div className="mt-3 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                        <SummaryRow label="Views" value={formatCount(engagement.views)} />
+                        <SummaryRow label="Views" value={formatMetric(engagement.views)} />
                         <SummaryRow
                             label="Profile-unique visits"
-                            value={engagement.profile_unique_visits == null ? 'Unavailable' : formatCount(engagement.profile_unique_visits)}
+                            value={engagement.profile_unique_visits == null ? 'Unavailable' : formatMetric(engagement.profile_unique_visits)}
                         />
-                        <SummaryRow label="Contact rate" value={formatPercent(engagement.contact_rate || 0)} />
+                        <SummaryRow label="Contact rate" value={formatMetric(engagement.contact_rate, true)} />
                     </div>
                 </div>
 

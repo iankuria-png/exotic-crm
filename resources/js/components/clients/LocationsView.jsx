@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import { InsightEmptyState } from '../shared/InsightStates';
@@ -8,7 +8,11 @@ import CitySpotlight from './locations/CitySpotlight';
 import KpiCard from './locations/KpiCard';
 import LocationTable from './locations/LocationTable';
 import SeoBoostWizard from './SeoBoostWizard';
-import { BANDS, CHANNEL_META, PERIOD_OPTIONS } from './locations/locationMeta';
+import { PERIOD_OPTIONS } from './locations/locationMeta';
+import LocationFilters from './locations/LocationFilters';
+import { DEFAULT_FILTERS, buildLocationCsv, filterAndSortLocations, validateBounds } from './locations/locationInventory';
+
+const EMPTY_LOCATIONS = [];
 
 function formatDate(date) {
     const year = date.getFullYear();
@@ -30,27 +34,13 @@ function buildRange(periodKey) {
     };
 }
 
-function compareValues(left, right, direction) {
-    if (left === right) {
-        return 0;
-    }
-
-    return direction === 'asc'
-        ? (left > right ? 1 : -1)
-        : (left < right ? 1 : -1);
-}
-
 function LocationsSkeleton() {
     return (
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {Array.from({ length: 4 }).map((_, index) => (
                     <div key={index} className="h-28 animate-pulse rounded-xl border border-slate-200 bg-white shadow-sm" />
                 ))}
-            </div>
-            <div className="grid gap-4 xl:grid-cols-12">
-                <div className="h-[520px] animate-pulse rounded-xl border border-slate-200 bg-white shadow-sm xl:col-span-8" />
-                <div className="h-[520px] animate-pulse rounded-xl border border-slate-200 bg-white shadow-sm xl:col-span-4" />
             </div>
             <div className="h-80 animate-pulse rounded-xl border border-slate-200 bg-white shadow-sm" />
         </div>
@@ -64,25 +54,22 @@ export default function LocationsView({ platformId, marketName }) {
     const [period, setPeriod] = useState('30d');
     const [selectedCity, setSelectedCity] = useState(null);
     const [seoBoostOpen, setSeoBoostOpen] = useState(false);
-    const [sort, setSort] = useState({ key: 'client_count', direction: 'desc' });
-    const [mobileView, setMobileView] = useState(() => (
-        typeof window !== 'undefined' && window.innerWidth < 1280 ? 'list' : 'map'
-    ));
-
+    const [sort, setSort] = useState({ key: 'available_count', direction: 'asc' });
+    const [filters, setFilters] = useState(DEFAULT_FILTERS);
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(25);
+    const [showMap, setShowMap] = useState(false);
     useEffect(() => {
-        const onResize = () => {
-            if (window.innerWidth >= 1280) {
-                setMobileView('map');
-            }
-        };
-
-        window.addEventListener('resize', onResize);
-        return () => window.removeEventListener('resize', onResize);
-    }, []);
+        setSelectedCity(null);
+        setSeoBoostOpen(false);
+        setFilters(DEFAULT_FILTERS);
+        setSort({ key: 'available_count', direction: 'asc' });
+        setPage(1);
+    }, [normalizedPlatformId]);
 
     const range = useMemo(() => buildRange(period), [period]);
 
-    const { data, isFetching, error } = useQuery({
+    const { data, isFetching, error, refetch } = useQuery({
         queryKey: ['client-locations', normalizedPlatformId, period],
         queryFn: () => api.get('/crm/clients/locations', {
             params: {
@@ -92,7 +79,6 @@ export default function LocationsView({ platformId, marketName }) {
             },
         }).then((response) => response.data),
         enabled: Boolean(normalizedPlatformId),
-        placeholderData: keepPreviousData,
     });
 
     const geocodeMutation = useMutation({
@@ -111,110 +97,47 @@ export default function LocationsView({ platformId, marketName }) {
         },
     });
 
-    const locations = data?.locations || [];
-    const geocodeSummary = data?.geocode || null;
+    // Never render/export one market's response beneath another market's heading.
+    const currentData = Number(data?.platform_id) === normalizedPlatformId ? data : null;
+    const locations = currentData?.locations || EMPTY_LOCATIONS;
+    const geocodeSummary = currentData?.geocode || null;
 
+    const countError = validateBounds(filters);
+    const sortedLocations = useMemo(() => filterAndSortLocations(locations, filters, sort), [locations, filters, sort]);
+    const selectedLocation = sortedLocations.find((location) => location.canonical_key === selectedCity) || null;
+    const pageCount = Math.max(1, Math.ceil(sortedLocations.length / pageSize));
+    const currentPage = Math.min(page, pageCount);
+    const pageRows = sortedLocations.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+    const periodLabel = `last ${PERIOD_OPTIONS.find((option) => option.key === period)?.days || 30} days`;
+
+    useEffect(() => { setPage(1); }, [filters, sort, pageSize, normalizedPlatformId]);
     useEffect(() => {
-        if (!selectedCity || locations.some((location) => location.canonical_key === selectedCity)) {
-            return;
-        }
+        if (selectedCity && !sortedLocations.some((location) => location.canonical_key === selectedCity)) setSelectedCity(null);
+    }, [sortedLocations, selectedCity]);
 
-        setSelectedCity(null);
-    }, [locations, selectedCity]);
-
-    const sortedLocations = useMemo(() => {
-        const rows = [...locations];
-
-        rows.sort((left, right) => {
-            if (sort.key === 'display_city') {
-                return compareValues(left.display_city, right.display_city, sort.direction);
-            }
-
-            if (sort.key === 'views') {
-                return compareValues(left.engagement?.views || 0, right.engagement?.views || 0, sort.direction);
-            }
-
-            if (sort.key === 'contact_rate') {
-                return compareValues(left.engagement?.contact_rate || 0, right.engagement?.contact_rate || 0, sort.direction);
-            }
-
-            if (sort.key === 'performance') {
-                return compareValues(left.performance?.index || -1, right.performance?.index || -1, sort.direction);
-            }
-
-            return compareValues(left[sort.key] || 0, right[sort.key] || 0, sort.direction);
-        });
-
-        return rows;
-    }, [locations, sort]);
-
-    const selectedLocation = useMemo(
-        () => locations.find((location) => location.canonical_key === selectedCity) || null,
-        [locations, selectedCity]
-    );
-
-    const scoredLocations = useMemo(
-        () => locations.filter((location) => !['insufficient', 'unavailable'].includes(location.performance?.band)),
-        [locations]
-    );
-
-    const topLocation = useMemo(() => (
-        [...scoredLocations].sort((left, right) => (right.performance?.index || 0) - (left.performance?.index || 0))[0] || null
-    ), [scoredLocations]);
-
-    const weakLocations = useMemo(
-        () => locations.filter((location) => location.performance?.band === 'weak'),
-        [locations]
-    );
-
-    const bestChannelInsight = useMemo(() => {
-        const byChannel = {};
-
-        scoredLocations.forEach((location) => {
-            if (!location.top_channel) {
-                return;
-            }
-
-            if (!byChannel[location.top_channel]) {
-                byChannel[location.top_channel] = [];
-            }
-
-            byChannel[location.top_channel].push(location);
-        });
-
-        const leaders = Object.entries(byChannel)
-            .map(([channel, rows]) => ({
-                channel,
-                rows: rows.sort((left, right) => (right.performance?.index || 0) - (left.performance?.index || 0)),
-            }))
-            .sort((left, right) => right.rows.length - left.rows.length);
-
-        if (leaders.length === 0) {
-            return null;
-        }
-
-        const primary = leaders[0];
-        const secondary = leaders[1] || null;
-        const firstCities = primary.rows.slice(0, 2).map((location) => location.display_city).join(' and ');
-        const secondCities = secondary
-            ? `${CHANNEL_META[secondary.channel]?.label || secondary.channel} is also strong in ${secondary.rows.slice(0, 2).map((location) => location.display_city).join(' and ')}.`
-            : '';
-
-        return {
-            title: `${CHANNEL_META[primary.channel]?.label || primary.channel} leads the strongest city intent.`,
-            body: `${CHANNEL_META[primary.channel]?.label || primary.channel} wins most often in ${firstCities}.${secondCities ? ` ${secondCities}` : ''}`,
-        };
-    }, [scoredLocations]);
+    const resetFilters = () => {
+        setFilters(DEFAULT_FILTERS);
+        setSort({ key: 'available_count', direction: 'asc' });
+    };
+    const exportCsv = () => {
+        if (countError || !sortedLocations.length || !currentData) return;
+        const url = URL.createObjectURL(new Blob([buildLocationCsv(sortedLocations, range, marketName || String(normalizedPlatformId))], { type: 'text/csv;charset=utf-8;' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `location-inventory-${normalizedPlatformId}-${range.from}-${range.to}.csv`;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
 
     const analyticsBanner = useMemo(() => {
-        if (data?.analytics_status === 'unavailable') {
+        if (currentData?.analytics_status === 'unavailable') {
             return {
                 className: 'rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900',
                 message: "Engagement data couldn't load from WordPress. Showing client counts only.",
             };
         }
 
-        if (data?.analytics_status === 'partial') {
+        if (currentData?.analytics_status === 'partial') {
             return {
                 className: 'rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700',
                 message: "Channel breakdown isn't available from this market yet. Showing views, contact rate, and performance.",
@@ -222,58 +145,57 @@ export default function LocationsView({ platformId, marketName }) {
         }
 
         return null;
-    }, [data?.analytics_status]);
+    }, [currentData?.analytics_status]);
 
     if (!normalizedPlatformId) {
         return (
             <InsightEmptyState
-                title="Pick a market to map"
+                title="Pick a market"
                 message="Engagement is tracked per market. Choose a market above."
             />
         );
     }
 
-    if (isFetching && !data) {
+    if (isFetching && !currentData) {
         return <LocationsSkeleton />;
     }
 
-    if (error) {
-        return (
-            <InsightEmptyState
-                title="Locations couldn't load"
-                message="The client locations workspace hit a problem while loading this market."
-            />
-        );
+    if (error || !currentData) {
+        return <div className="rounded-xl border border-rose-200 bg-white p-5">
+            <h2 className="font-semibold text-slate-900">Locations couldn't load</h2>
+            <p className="mt-1 text-sm text-slate-600">Try loading this market again.</p>
+            <button type="button" onClick={() => refetch()} className="mt-3 min-h-11 rounded-lg bg-teal-700 px-4 font-semibold text-white focus-visible:ring-2 focus-visible:ring-teal-600">Retry locations</button>
+        </div>;
     }
 
     if (!locations.length) {
         return (
             <InsightEmptyState
                 title="No located clients yet"
-                message="Clients need a city before they can appear on the map or in the ranked table."
+                message="No cached client records with a city were found in this market."
             />
         );
     }
 
-    const totals = data?.totals || {};
-    const mappedCities = locations.filter((location) => location.mapped).length;
+    const totals = currentData?.totals || {};
+    const lowCount = locations.filter((location) => location.available_count <= 5).length;
 
     return (
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div>
                         <div className="flex flex-wrap items-center gap-3">
-                            <h2 className="text-sm font-semibold text-slate-800">Client locations {marketName ? `- ${marketName}` : ''}</h2>
+                            <h2 className="text-sm font-semibold text-slate-800">Location inventory {marketName ? `- ${marketName}` : ''}</h2>
                         </div>
-                        <p className="mt-1 text-sm text-slate-500">Where your clients are and how each city performs.</p>
+                        <p className="mt-1 text-sm text-slate-500">Find areas with the fewest available profiles. Available = Active + Unlockable.</p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3">
                         <button
                             type="button"
                             onClick={() => setSeoBoostOpen(true)}
-                            className="inline-flex items-center gap-2 rounded-full border border-teal-700 bg-teal-700 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                            className="inline-flex min-h-11 items-center gap-2 rounded-full border border-teal-700 bg-teal-700 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                         >
                             <span aria-hidden="true">+</span>
                             SEO Boost
@@ -297,7 +219,7 @@ export default function LocationsView({ platformId, marketName }) {
                                 onClick={() => geocodeMutation.mutate()}
                                 disabled={geocodeMutation.isPending}
                                 title="Resolve this market's city names to map coordinates so they appear as pins"
-                                className="inline-flex items-center gap-2 rounded-full border border-teal-700 bg-teal-700 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                className="inline-flex min-h-11 items-center gap-2 rounded-full border border-teal-700 bg-teal-700 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                                     <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0Z" />
@@ -309,13 +231,14 @@ export default function LocationsView({ platformId, marketName }) {
                             </button>
                         ) : null}
 
-                        <div className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 p-1">
+                        <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" aria-label="Engagement period"><span className="px-2 text-xs text-slate-500">Engagement</span>
                             {PERIOD_OPTIONS.map((option) => (
                                 <button
                                     key={option.key}
                                     type="button"
                                     onClick={() => setPeriod(option.key)}
-                                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                    aria-pressed={period === option.key}
+                                    className={`min-h-11 rounded-lg px-3 py-1 text-xs font-semibold transition ${
                                         period === option.key
                                             ? 'bg-teal-700 text-white'
                                             : 'border border-slate-300 bg-white text-slate-500'
@@ -326,92 +249,59 @@ export default function LocationsView({ platformId, marketName }) {
                             ))}
                         </div>
 
-                        <div className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 p-1 xl:hidden">
-                            {['map', 'list'].map((view) => (
-                                <button
-                                    key={view}
-                                    type="button"
-                                    onClick={() => setMobileView(view)}
-                                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                                        mobileView === view
-                                            ? 'bg-teal-700 text-white'
-                                            : 'border border-slate-300 bg-white text-slate-500'
-                                    }`}
-                                >
-                                    {view === 'map' ? 'Map' : 'List'}
-                                </button>
-                            ))}
-                        </div>
                     </div>
                 </div>
             </section>
 
             {analyticsBanner ? <div className={analyticsBanner.className}>{analyticsBanner.message}</div> : null}
 
-            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <KpiCard
-                    label="Clients mapped"
-                    value={Number(totals.mapped_client_count || 0).toLocaleString()}
-                    hint={`of ${Number(totals.located_client_count || 0).toLocaleString()} located`}
-                    dotClass="bg-teal-500"
-                />
-                <KpiCard
-                    label="Cities tracked"
-                    value={locations.length.toLocaleString()}
-                    hint={`${mappedCities.toLocaleString()} on map`}
-                    dotClass="bg-slate-400"
-                />
-                <KpiCard
-                    label="Top city"
-                    value={topLocation ? topLocation.display_city : 'None'}
-                    hint={topLocation ? `${topLocation.performance?.index || 0} index` : 'No scored cities yet'}
-                    dotClass={BANDS.strong.dot}
-                    onClick={topLocation ? () => setSelectedCity(topLocation.canonical_key) : undefined}
-                />
-                <KpiCard
-                    label="Cities to watch"
-                    value={weakLocations.length.toLocaleString()}
-                    hint="Weak performance band"
-                    dotClass={BANDS.weak.dot}
-                />
+            <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Current market inventory">
+                <KpiCard label="Available profiles" value={Number(totals.available_count || 0).toLocaleString()} hint="Active + Unlockable · current cache" dotClass="bg-teal-500" />
+                <KpiCard label="Active" value={Number(totals.active_count || 0).toLocaleString()} hint="Published active profiles" dotClass="bg-emerald-500" />
+                <KpiCard label="Unlockable" value={Number(totals.unlockable_count || 0).toLocaleString()} hint="Expired profiles visitors can unlock" dotClass="bg-amber-500" />
+                <KpiCard label="Low inventory locations" value={lowCount.toLocaleString()} hint="5 or fewer available · includes zero" dotClass="bg-slate-400"
+                    onClick={() => { setFilters({ ...DEFAULT_FILTERS, max: '5' }); setSort({ key: 'available_count', direction: 'asc' }); }} />
             </section>
 
-            {bestChannelInsight ? (
-                <div className="rounded-lg border border-teal-100 bg-teal-50/70 px-4 py-3 text-sm text-teal-900">
-                    <p className="font-semibold">{bestChannelInsight.title}</p>
-                    <p className="mt-1">{bestChannelInsight.body}</p>
+            <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm" aria-label="Location inventory">
+                <div className="px-4 py-4 sm:px-5">
+                    <h2 className="text-base font-semibold text-slate-900">Find a location</h2>
+                    <p className="mt-1 text-sm leading-relaxed text-slate-500">Current CRM cache · {locations.length.toLocaleString()} locations with client records. Cities with no cached clients are not included.</p>
+                    <details className="mt-2 text-xs leading-relaxed text-slate-600">
+                        <summary className="inline-flex min-h-11 cursor-pointer items-center rounded px-1 font-semibold text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-600">How counts work</summary>
+                        <p className="mt-1 max-w-3xl pb-2">Available is Active + Unlockable. Active follows the CRM's published active-profile rules. Unlockable means published expired profiles with a WordPress profile that visitors can unlock. Archived, private and draft profiles do not count as Unlockable. All clients includes every non-closed cached client in a location. Inventory is current; the period only changes engagement. Counts can lag WordPress sync and do not confirm advertiser availability.</p>
+                    </details>
                 </div>
-            ) : null}
+                <LocationFilters filters={filters} onChange={setFilters} sort={sort} onSortChange={setSort} error={countError} onReset={resetFilters} />
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5">
+                    <p role="status" className="text-sm text-slate-600">{countError ? 'Check your count range' : `${sortedLocations.length.toLocaleString()} of ${locations.length.toLocaleString()} locations`}{isFetching ? ' · Refreshing engagement…' : ''}</p>
+                    <button type="button" onClick={exportCsv} disabled={Boolean(countError) || !sortedLocations.length || isFetching}
+                        className="min-h-11 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-teal-700 hover:bg-teal-50 focus-visible:ring-2 focus-visible:ring-teal-600 disabled:cursor-not-allowed disabled:opacity-50">Export filtered CSV</button>
+                </div>
+                {sortedLocations.length ? <>
+                    <LocationTable locations={pageRows} selectedCity={selectedCity} onSelectCity={setSelectedCity} sort={sort} onSortChange={setSort} platformId={normalizedPlatformId} periodLabel={periodLabel} />
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 sm:px-5">
+                        <p className="text-xs text-slate-500">{((currentPage - 1) * pageSize + 1).toLocaleString()}–{Math.min(currentPage * pageSize, sortedLocations.length).toLocaleString()} of {sortedLocations.length.toLocaleString()}</p>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <label className="flex items-center gap-2 text-xs text-slate-600">Per page<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} className="min-h-11 rounded-lg border border-slate-300 bg-white px-2 text-base">{[25, 50, 100].map((size) => <option key={size}>{size}</option>)}</select></label>
+                            <button type="button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)} className="min-h-11 rounded-lg border border-slate-300 px-3 text-sm disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-teal-600">Previous</button>
+                            <span className="text-xs text-slate-500">{currentPage} / {pageCount}</span>
+                            <button type="button" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)} className="min-h-11 rounded-lg border border-slate-300 px-3 text-sm disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-teal-600">Next</button>
+                        </div>
+                    </div>
+                </> : <div className="px-5 py-10 text-center"><h3 className="font-semibold text-slate-800">{countError ? 'Adjust the count range' : 'No locations match'}</h3><p className="mt-2 text-sm text-slate-500">{countError || 'Try another search or clear the filters to see all cached locations.'}</p><button type="button" onClick={resetFilters} className="mt-3 min-h-11 rounded-lg px-3 font-semibold text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-600">Reset location filters</button></div>}
+            </section>
 
-            <div className="grid gap-4 xl:grid-cols-12">
-                <div className={`${mobileView === 'list' ? 'hidden xl:block' : ''} xl:col-span-8`}>
-                    <ClientMap
-                        locations={locations}
-                        selectedCity={selectedCity}
-                        onSelectCity={setSelectedCity}
-                    />
-                </div>
-                <div className="xl:col-span-4">
-                    <CitySpotlight
-                        selectedLocation={selectedLocation}
-                        locations={locations}
-                        onSelectCity={setSelectedCity}
-                        platformId={normalizedPlatformId}
-                        bestChannelInsight={bestChannelInsight}
-                    />
-                </div>
-            </div>
-
-            <div className={mobileView === 'map' ? 'hidden xl:block' : ''}>
-                <LocationTable
-                    locations={sortedLocations}
-                    selectedCity={selectedCity}
-                    onSelectCity={setSelectedCity}
-                    sort={sort}
-                    onSortChange={setSort}
-                    platformId={normalizedPlatformId}
-                />
-            </div>
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <button type="button" aria-expanded={showMap} aria-controls={showMap ? "location-map-panel" : undefined} onClick={() => setShowMap(!showMap)} className="flex min-h-11 w-full items-center justify-between gap-3 rounded text-left font-semibold text-slate-800 focus-visible:ring-2 focus-visible:ring-teal-600">
+                    Map and engagement<span aria-hidden="true">{showMap ? '−' : '+'}</span>
+                </button>
+                <p className="mt-1 text-xs text-slate-500">Follows your filters · Engagement during {periodLabel} · Map size shows all clients</p>
+                {showMap ? <div id="location-map-panel" className="mt-4 grid min-w-0 gap-4 xl:grid-cols-12">
+                    <div className="min-w-0 xl:col-span-8"><ClientMap locations={sortedLocations} selectedCity={selectedCity} onSelectCity={setSelectedCity} /></div>
+                    <div className="min-w-0 xl:col-span-4"><CitySpotlight selectedLocation={selectedLocation} locations={sortedLocations} onSelectCity={setSelectedCity} platformId={normalizedPlatformId} bestChannelInsight={null} /></div>
+                </div> : null}
+            </section>
 
             <SeoBoostWizard
                 open={seoBoostOpen}
