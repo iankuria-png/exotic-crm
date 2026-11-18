@@ -6,14 +6,14 @@ use Tests\TestCase;
 
 class CollectionDefaultGatesTest extends TestCase
 {
-    public function test_capture_workspace_default_off_and_entitlement_gates_release_only_tz(): void
+    public function test_capture_workspace_default_off_and_entitlement_gates_release_only_tz_and_ghana(): void
     {
         $this->assertFalse(config('collection.capture_enabled'));
         $this->assertFalse(config('collection.workspace_enabled'));
         foreach (['entitlement_platforms', 'verified_writer_platforms', 'verified_correction_platforms'] as $gate) {
-            $this->assertSame([6, 2], config('collection.'.$gate), $gate);
+            $this->assertSame([6, 2, 3], config('collection.'.$gate), $gate);
         }
-        $this->assertSame(['c12d64b4-d300-4927-bea1-94301e28c1ef'], config('collection.automatic_accounts'));
+        $this->assertSame(['c12d64b4-d300-4927-bea1-94301e28c1ef', '5c1b4a9f-b95e-4e64-bbf9-76ccc5c713d6'], config('collection.automatic_accounts'));
         $this->assertSame([6 => 2], config('collection.subsidiary_platforms'));
         $this->assertSame('full_purchased', config('collection.correction_duration_policy'));
     }
