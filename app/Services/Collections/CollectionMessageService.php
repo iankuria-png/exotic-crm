@@ -18,7 +18,7 @@ class CollectionMessageService
             $data = $event->normalized ?? [];
             $sender = (string) ($data['sender'] ?? '');
             $body = (string) ($data['message'] ?? '');
-            $credit = app(TzMpesaParser::class)->parse($sender, $body);
+            $credit = app(CollectionParserRegistry::class)->parse($sender, $body);
             if (($credit['kind'] ?? '') !== 'credit' || $credit['reference'] !== $receipt->reference_norm
                 || $credit['currency'] !== $receipt->currency || $credit['principal_minor'] !== $receipt->principal_minor) {
                 $complete = false;

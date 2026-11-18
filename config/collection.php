@@ -19,6 +19,8 @@ return [
     // Ian approved the full purchased period from correction on 6 November.
     'correction_duration_policy' => 'full_purchased',
     'rule_version' => 'tz-reviewed-v1',
-    'parser_versions' => ['vodacom_mpesa_tz' => 'tz-mpesa-v1'],
+    'parser_versions' => ['vodacom_mpesa_tz' => 'tz-mpesa-v1', 'mtn_momo_gh' => 'gh-mtn-momo-v1'],
+    // Ghana MoMo: customer-submitted transaction IDs are checked against phone receipts (flag only, 18 Nov 2026).
+    'claim_check_grace_minutes' => 30,
     'subsidiary_platforms' => [6 => 2],
 ];

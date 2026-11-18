@@ -18,18 +18,21 @@ class CollectionEnrollmentService
         foreach ($input['platform_bindings'] as $binding) {
             app(MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, (int) $binding['platform_id']);
         }
+        $registry = app(CollectionParserRegistry::class);
         $identityMode = $input['sim_identity_mode'] ?? 'iccid_v1';
         $subscriptionId = filter_var($input['android_subscription_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 2147483647]]);
         if (empty($input['ownership_evidence_reference']) || empty($input['inbox_cursor']) || ! preg_match('/^[a-f0-9]{64}$/Di', $input['apk_sha256'] ?? '')
             || empty($input['apk_version']) || strlen($input['signing_secret'] ?? '') < 32
             || ! in_array($identityMode, ['iccid_v1', 'android_subscription_v1'], true)
             || $identityMode === 'iccid_v1' && empty($input['iccid'])
-            || $identityMode === 'android_subscription_v1' && (! $subscriptionId || ($input['country'] ?? '') !== 'TZ'
-                || ($input['filter_version'] ?? '') !== 'exotic-tz-v1' || ! app(CollectionPrivacy::class)->tzPhone($input['recipient'] ?? null))) {
+            || $identityMode === 'android_subscription_v1' && (! $subscriptionId || ! $registry->filterVersion((string) ($input['country'] ?? ''))
+                || ($input['filter_version'] ?? '') !== $registry->filterVersion((string) $input['country'])
+                || ! $registry->phone((string) $input['country'], $input['recipient'] ?? null))
+            || ! $registry->forAccount(new \App\Models\Collections\CollectionAccount(['provider_key' => $input['provider_key'] ?? '', 'country' => $input['country'] ?? '']))) {
             throw new CollectionException('verified_enrollment_evidence_required', 422);
         }
 
-        return DB::transaction(function () use ($input, $actor, $identityMode, $subscriptionId) {
+        return DB::transaction(function () use ($input, $actor, $identityMode, $subscriptionId, $registry) {
             $privacy = app(CollectionPrivacy::class);
             $account = CollectionAccount::create(['id' => (string) Str::uuid(), 'label' => $input['account_label'], 'country' => $input['country'], 'provider_key' => $input['provider_key'],
                 'account_kind' => $input['account_kind'], 'account_identifier' => $input['account_identifier'], 'account_fingerprint' => $privacy->fingerprint($input['account_identifier']),
@@ -42,9 +45,9 @@ class CollectionEnrollmentService
             $device = CollectionDevice::create(['id' => (string) Str::uuid(), 'label' => $input['device_label'], 'external_device_id' => $input['external_device_id'],
                 'key_id' => (string) Str::uuid(), 'signing_secret' => $input['signing_secret'], 'cutover_at' => now(), 'inbox_cursor' => $input['inbox_cursor'],
                 'acceptance' => ['apk_sha256' => $input['apk_sha256'], 'apk_version' => $input['apk_version'], 'enrolled_by' => $actor->id,
-                    'filter_version' => $input['filter_version'] ?? null, 'sim_identity_mode' => $identityMode,
+                    'filter_version' => $input['filter_version'] ?? null, 'sim_identity_mode' => $identityMode, 'country' => $input['country'],
                     'android_subscription_ids' => $identityMode === 'android_subscription_v1' ? [(string) $input['sim_number'] => (int) $subscriptionId] : []]]);
-            $recipient = $identityMode === 'android_subscription_v1' ? $privacy->tzPhone($input['recipient']) : preg_replace('/\D/', '', $input['recipient']);
+            $recipient = $identityMode === 'android_subscription_v1' ? $registry->phone((string) $input['country'], $input['recipient']) : preg_replace('/\D/', '', $input['recipient']);
             DB::table('collection_sim_bindings')->insert(['device_id' => $device->id, 'account_id' => $account->id, 'sim_number' => $input['sim_number'],
                 'recipient_fingerprint' => $privacy->fingerprint($recipient), 'iccid_fingerprint' => $identityMode === 'iccid_v1' ? $privacy->fingerprint($input['iccid']) : null,
                 'carrier_name' => $input['carrier_name'], 'valid_from' => now()]);

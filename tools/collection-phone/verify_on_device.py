@@ -47,7 +47,10 @@ def main():
 <application android:label="Exotic synthetic capture tests" android:testOnly="true" android:allowBackup="false" />
 <instrumentation android:name="com.exotic.paymentcapture.tests.OnDevicePolicyTest" android:targetPackage="com.exotic.paymentcapture" android:functionalTest="true" />
 </manifest>''')
-        source = Path(__file__).parent / "tests/OnDevicePolicyTest.java"
+        # The prepared source records its country; a Ghana build runs the Ghana synthetic cases.
+        country = metadata.get("country", "TZ")
+        cases = {"TZ": 42, "GH": 37}[country]
+        source = Path(__file__).parent / ("tests/gh/OnDevicePolicyTest.java" if country == "GH" else "tests/OnDevicePolicyTest.java")
         run([args.java / "bin/javac", "--release", "8", "-cp", jar, "-d", classes, source])
         run([tools / "d8", "--lib", jar, "--min-api", "21", "--output", dex, *classes.rglob("*.class")], env=env)
         unsigned, signed = folder / "unsigned.apk", folder / "signed.apk"
@@ -61,8 +64,8 @@ def main():
         run([*adb, "install", "-t", "-r", signed], timeout=90)
         try:
             result = run([*adb, "shell", "am", "instrument", "-w", "com.exotic.paymentcapture.tests/.OnDevicePolicyTest"], timeout=60).stdout
-            passed = "42 installed release filter cases passed" in result and "INSTRUMENTATION_CODE: -1" in result
-            output = {"passed": passed, "apk_sha256": metadata["sha256"], "synthetic_filter_cases": 42,
+            passed = f"{cases} installed release filter cases passed" in result and "INSTRUMENTATION_CODE: -1" in result
+            output = {"passed": passed, "apk_sha256": metadata["sha256"], "synthetic_filter_cases": cases, "country": country,
                       "sms_read_or_injected": False, "result": result.strip()}
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(output, indent=2) + "\n")

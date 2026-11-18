@@ -25,9 +25,9 @@ class CollectionReceiptService
             if ((int) $first !== (int) $event->id) {
                 throw new CollectionException('earlier_intake_parse_pending');
             }
-            $parser = $account->provider_key === 'vodacom_mpesa_tz' && $account->country === 'TZ' ? app(TzMpesaParser::class) : null;
+            $parser = app(CollectionParserRegistry::class)->forAccount($account);
             $observation = $parser?->parse($event->normalized['sender'], $event->normalized['message']) ?? ['kind' => 'unsupported', 'reason' => 'parser_not_available'];
-            $event->parse_version = $parser ? TzMpesaParser::VERSION : null;
+            $event->parse_version = $parser ? $parser::VERSION : null;
             if (! in_array($observation['kind'], ['credit', 'hold']) || empty($observation['reference'])) {
                 $event->fill(['state' => 'quarantined', 'quarantine_reason' => $observation['reason'] ?? 'reference_missing'])->save();
                 if (($observation['kind'] ?? '') === 'hold') {
@@ -35,14 +35,22 @@ class CollectionReceiptService
                     DB::table('collection_audit')->insertOrIgnore(['receipt_id' => null, 'account_id' => $account->id, 'actor_id' => null,
                         'action' => 'unmatched_reversal_flagged', 'context' => json_encode(['event_id' => $event->id, 'reason' => $observation['reason'] ?? null]),
                         'dedupe_key' => 'unmatched-reversal:'.$event->id, 'created_at' => now()]);
-                } elseif (preg_match('/^\S+\s+(?:confirmed|imethibitishwa).*?(?:received|Umepokea|Receive)/is', $event->normalized['message'] ?? '')) {
+                } elseif (($observation['reason'] ?? '') === 'reversal_revoked') {
+                    // Provider restored a reversed credit; staff reconcile it, nothing is re-granted automatically.
+                    DB::table('collection_audit')->insertOrIgnore(['receipt_id' => null, 'account_id' => $account->id, 'actor_id' => null,
+                        'action' => 'reversal_revoked_flagged', 'context' => json_encode(['event_id' => $event->id, 'reference' => $observation['reference'] ?? null]),
+                        'dedupe_key' => 'reversal-revoked:'.$event->id, 'created_at' => now()]);
+                } elseif ($parser instanceof GhMtnMomoParser ? $parser->looksLikeCredit($event->normalized['message'] ?? '')
+                    : preg_match('/^\S+\s+(?:confirmed|imethibitishwa).*?(?:received|Umepokea|Receive)/is', $event->normalized['message'] ?? '')) {
                     $account->update(['suspended_at' => now(), 'suspension_reason' => 'receiving_parser_drift']);
                 }
 
                 return null;
             }
             $device = CollectionDevice::findOrFail($event->device_id);
-            $providerAt = isset($observation['provider_at']) ? Carbon::parse($observation['provider_at'], 'UTC') : null;
+            $providerAt = isset($observation['provider_at']) ? Carbon::parse($observation['provider_at'], 'UTC')
+                // Layouts without a provider clock (Ghana MoMo) use the signed device receive time.
+                : (($observation['time_source'] ?? null) === 'device_received' && $event->sms_received_at ? $event->sms_received_at->copy() : null);
             $historical = $event->source_kind !== 'live' || ! $device->cutover_at || ! $providerAt
                 || $providerAt->lt($device->cutover_at) || ! $event->sms_received_at || $event->sms_received_at->lt($device->cutover_at);
             $receipt = CollectionReceipt::where('account_id', $account->id)->where('reference_norm', $observation['reference'])->lockForUpdate()->first();

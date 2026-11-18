@@ -56,7 +56,7 @@ def main():
     manifest = {"package": metadata["upstream"]["package"], "version": metadata["upstream"]["version_name"],
                 "sha256": hashlib.sha256(apk.read_bytes()).hexdigest(), "signer_certificate_sha256": cert,
                 "source_manifest_sha256": hashlib.sha256((root.parent / "prepared-manifest.json").read_bytes()).hexdigest(),
-                "apk": str(apk), "live_accepted": False}
+                "apk": str(apk), "country": metadata["upstream"].get("country", "TZ"), "live_accepted": False}
     (root.parent / "apk-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest, indent=2))
 

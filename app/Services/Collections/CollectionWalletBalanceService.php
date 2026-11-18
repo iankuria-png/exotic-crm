@@ -18,7 +18,7 @@ class CollectionWalletBalanceService
         if ($receipts->isEmpty()) {
             return [];
         }
-        $parser = app(TzMpesaParser::class);
+        $parser = app(CollectionParserRegistry::class);
         $byId = $receipts->keyBy('id');
         $events = CollectionEvent::whereIn('receipt_id', $byId->keys())->where('state', 'parsed')->where('event_kind', 'sms:received')
             ->orderBy('sms_received_at')->orderBy('id')->limit(400)->get();
@@ -41,7 +41,7 @@ class CollectionWalletBalanceService
     /** Latest balance each account's receiving phone reported, newest credit SMS first. */
     public function latest(array $accountIds): array
     {
-        $parser = app(TzMpesaParser::class);
+        $parser = app(CollectionParserRegistry::class);
         $out = [];
         foreach (CollectionAccount::whereIn('id', $accountIds)->orderBy('label')->get() as $account) {
             $events = CollectionEvent::where('account_id', $account->id)->where('state', 'parsed')->where('event_kind', 'sms:received')
@@ -52,7 +52,7 @@ class CollectionWalletBalanceService
                 if (($credit['kind'] ?? '') !== 'credit' || ($credit['currency'] ?? null) !== $account->currency) {
                     continue;
                 }
-                $balance = $parser->balanceMinor((string) ($data['message'] ?? ''));
+                $balance = $parser->balanceMinor((string) ($data['sender'] ?? ''), (string) ($data['message'] ?? ''));
                 if ($balance !== null) {
                     $out[] = ['account_id' => $account->id, 'label' => $account->label, 'minor' => $balance, 'currency' => $account->currency,
                         'at' => $event->sms_received_at?->toIso8601String(), 'receipt_id' => (int) $event->receipt_id];
@@ -64,7 +64,7 @@ class CollectionWalletBalanceService
         return $out;
     }
 
-    private function verified(TzMpesaParser $parser, CollectionEvent $event, string $reference, string $currency, int $principal): ?int
+    private function verified(CollectionParserRegistry $parser, CollectionEvent $event, string $reference, string $currency, int $principal): ?int
     {
         $data = $event->normalized ?? [];
         $body = (string) ($data['message'] ?? '');
@@ -74,6 +74,6 @@ class CollectionWalletBalanceService
             return null;
         }
 
-        return $parser->balanceMinor($body);
+        return $parser->balanceMinor((string) ($data['sender'] ?? ''), $body);
     }
 }

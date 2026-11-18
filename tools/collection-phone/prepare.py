@@ -22,6 +22,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("destination", type=Path)
     parser.add_argument("--archive", type=Path)
+    # GH builds the Ghana MTN MoMo filter (exotic-gh-v1) and Ghana receiving-number checks.
+    parser.add_argument("--country", choices=("TZ", "GH"), default="TZ")
     args = parser.parse_args()
     if args.destination.exists():
         raise SystemExit("Use a new empty build destination; existing directories are preserved.")
@@ -43,6 +45,17 @@ def main():
     java = root / "app/src/main/java/me/capcom/smsgateway"
     for name in ("PaymentOnlyPolicy.java", "PaymentCaptureState.kt", "CollectionCaptureSettings.kt"):
         shutil.copy2(HERE / "src" / name, java / "modules/receiver" / name)
+    if args.country == "GH":
+        receiver = java / "modules/receiver"
+        shutil.copy2(HERE / "src/gh/PaymentOnlyPolicy.java", receiver / "PaymentOnlyPolicy.java")
+        replace(receiver / "PaymentCaptureState.kt", 'if (digits.startsWith("0") && digits.length == 10) digits = "255" + digits.drop(1)',
+                'if (digits.startsWith("0") && digits.length == 10) digits = "233" + digits.drop(1)')
+        replace(receiver / "PaymentCaptureState.kt", 'return digits.takeIf { it.matches(Regex("255[67][0-9]{8}")) }',
+                'return digits.takeIf { it.matches(Regex("233[25][0-9]{8}")) }')
+        replace(receiver / "CollectionCaptureSettings.kt", 'recipient.matches(Regex("255[67][0-9]{8}"))', 'recipient.matches(Regex("233[25][0-9]{8}"))')
+        replace(receiver / "CollectionCaptureSettings.kt", '"Verified Tanzania SIM values and cursor required"', '"Verified Ghana SIM values and cursor required"')
+        manifest["version_name"] = manifest["version_name"] + "-gh"
+        manifest["country"] = "GH"
     build = root / "app/build.gradle"
     replace(build, "    id 'com.google.gms.google-services'\n", "")
     replace(build, 'applicationId "me.capcom.smsgateway"', 'applicationId "com.exotic.paymentcapture"')
@@ -181,7 +194,7 @@ def main():
     dao = java / "modules/webhooks/db/WebhookQueueDao.kt"
     replace(dao, "status IN ('completed', 'permanently_failed') AND created_at", "status = 'completed' AND created_at")
     # Upstream source and all task input hashes make the candidate traceable.
-    inputs = [HERE / "prepare.py", HERE / "upstream.json", *sorted((HERE / "src").glob("*"))]
+    inputs = [HERE / "prepare.py", HERE / "upstream.json", *sorted(p for p in (HERE / "src").rglob("*") if p.is_file())]
     (args.destination / "prepared-manifest.json").write_text(json.dumps({"upstream": manifest,
         "inputs": {str(path.relative_to(HERE)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs},
         "prepared_source": str(root), "live_accepted": False}, indent=2) + "\n")

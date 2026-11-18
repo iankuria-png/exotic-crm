@@ -94,7 +94,7 @@ class CollectionPaymentController extends Controller
             });
         }
         if (! empty($v['search'])) {
-            $phone = app(CollectionPrivacy::class)->tzPhone($v['search']);
+            $phone = app(\App\Services\Collections\CollectionParserRegistry::class)->anyPhone($v['search']);
             $q->where(fn ($search) => $search->where('reference_norm', 'like', '%'.strtoupper($v['search']).'%')
                 ->when($phone, fn ($search) => $search->orWhere('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone))));
         }
@@ -261,7 +261,7 @@ class CollectionPaymentController extends Controller
             $secondary = (int) config('collection.subsidiary_platforms.'.$primary->platform_id);
             abort_unless($secondary > 0, 422);
             app(MarketAuthorizationService::class)->ensureUserCanAccessPlatform($request->user(), $secondary);
-            $phone = app(CollectionPrivacy::class)->tzPhone($v['search']);
+            $phone = app(\App\Services\Collections\CollectionParserRegistry::class)->anyPhone($v['search']);
             $clients = $context->selectable()->where('platform_id', $secondary)->where(fn ($q) => $q->where('name', 'like', '%'.$v['search'].'%')
                 ->orWhere('wp_post_id', $v['search'])->orWhere('phone_normalized', $phone ?? $v['search']))->orderBy('name')->limit(20)->get();
 
@@ -269,7 +269,7 @@ class CollectionPaymentController extends Controller
         }
         $term = $v['search'];
         $platforms = DB::table('collection_account_platforms')->where('account_id', $r->account_id)->whereNull('valid_until')->pluck('platform_id');
-        $phone = app(CollectionPrivacy::class)->tzPhone($term);
+        $phone = app(\App\Services\Collections\CollectionParserRegistry::class)->anyPhone($term);
         $payerClients = $phone ? CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone))->whereNull('revoked_at')->where('valid_until', '>', now())->pluck('client_id')->all() : [];
         $clients = $context->selectable()->whereIn('platform_id', $platforms)->where(function ($q) use ($term, $payerClients, $phone) {
             $q->where('name', 'like', '%'.$term.'%')->orWhere('wp_profile_permalink', $term)->orWhere('wp_profile_permalink', rtrim($term, '/').'/')->orWhere('phone_normalized', 'like', '%'.($phone ?? $term).'%')->orWhere('wp_post_id', $term)->orWhereIn('id', $payerClients);

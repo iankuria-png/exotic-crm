@@ -34,7 +34,7 @@ class CollectionPayerEvidenceService
                     continue;
                 }
                 $data = $event->normalized;
-                $payer = app(TzMpesaParser::class)->payerDetails($data['sender'] ?? '', $data['message'] ?? '');
+                $payer = app(CollectionParserRegistry::class)->payerDetails($data['sender'] ?? '', $data['message'] ?? '');
                 if ($payer['reference'] !== $receipt->reference_norm
                     || ($payer['phone'] && $payer['phone'] !== $receipt->payer_phone)) {
                     $complete = false;

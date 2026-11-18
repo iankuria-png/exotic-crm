@@ -19,7 +19,8 @@ class CollectionSimIdentityService
             return null;
         }
         if ($this->mode($device) === 'android_subscription_v1') {
-            return app(CollectionPrivacy::class)->tzPhone($value);
+            // Devices enrolled before Ghana carry no country and are Tanzania wallets.
+            return app(CollectionParserRegistry::class)->phone((string) data_get($device->acceptance, 'country', 'TZ'), $value);
         }
 
         return preg_replace('/\D/', '', $value) ?: null;

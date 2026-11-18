@@ -36,7 +36,7 @@ class EnrollCollectionDevice extends Command
             'iccid' => 'required_unless:sim_identity_mode,android_subscription_v1|nullable|string|max:128',
             'sim_identity_mode' => 'nullable|in:iccid_v1,android_subscription_v1',
             'android_subscription_id' => 'required_if:sim_identity_mode,android_subscription_v1|nullable|integer|min:1|max:2147483647',
-            'filter_version' => 'required_if:sim_identity_mode,android_subscription_v1|nullable|in:exotic-tz-v1',
+            'filter_version' => 'required_if:sim_identity_mode,android_subscription_v1|nullable|in:exotic-tz-v1,exotic-gh-v1',
             'carrier_name' => 'required|string|max:128', 'apk_sha256' => 'required|string|regex:/^[a-f0-9]{64}$/', 'apk_version' => 'required|string|max:64',
             'platform_bindings' => 'required|array|min:1|max:10', 'platform_bindings.*.platform_id' => 'required|integer|exists:platforms,id',
             'platform_bindings.*.destination_snapshot' => 'required|array', 'platform_bindings.*.manual_method_id' => 'nullable|integer',

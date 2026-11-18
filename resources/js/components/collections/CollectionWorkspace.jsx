@@ -9,6 +9,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
 import CollectionDeviceHealthPanel from './CollectionDeviceHealthPanel';
+import CollectionClaimChecks from './CollectionClaimChecks';
 import CollectionPolicyPanel, { CollectionAutomationSummary } from './CollectionPolicyPanel';
 import CollectionPurchaseReview, { CollectionPayerSummary, CollectionMatchEvidence } from './CollectionPurchaseReview';
 import CollectionMessageCopy from './CollectionMessageCopy';
@@ -105,6 +106,7 @@ export default function CollectionWorkspace({ platformId, clientId }) {
     const needsAction = rows.data?.counts?.needs_action;
     return <section aria-label="Incoming office payments" className="crm-surface p-4 sm:p-5">
         <CollectionDeviceHealthPanel platformId={platformId} compact />
+        {!clientId && <CollectionClaimChecks />}
         {!clientId && <CollectionAutomationSummary onConfigure={() => setSettingsOpen(true)} />}
         <div className="flex flex-wrap items-start justify-between gap-4"><div><h2 className="text-base font-semibold text-slate-900">Incoming office payments</h2><p className="mt-1 max-w-2xl text-sm text-slate-500">SMS received → client matched → package matched → subscription activated.</p><p className="mt-1 text-xs text-slate-500">Eligible new payments follow the automatic policy. Review exceptions here.</p></div><button type="button" className={button} onClick={exportReceipts}><Icon name="download" />Export receipts</button></div>
         <div className="my-5 space-y-3">
