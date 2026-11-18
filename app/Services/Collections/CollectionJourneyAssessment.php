@@ -13,7 +13,7 @@ class CollectionJourneyAssessment
         $selected = $matching['selected_client_id'];
         $profile = $selected && in_array($selected, $visibleClientIds, true)
             ? collect($matching['suggestions'])->firstWhere('id', $selected) : null;
-        $result = ['advisory' => true, 'threshold' => $matching['threshold'], 'profile' => $profile,
+        $result = ['advisory' => true, 'threshold' => $matching['threshold'], 'profile' => $profile, 'guards' => $matching['guards'] ?? [],
             'package' => ['state' => 'waiting_for_profile'], 'activation' => ['state' => 'checks_pending', 'reason' => null]];
         if ($profile) {
             try {
@@ -42,6 +42,9 @@ class CollectionJourneyAssessment
                 throw new CollectionException('automatic_activation_paused');
             }
             app(CollectionAutomationEpoch::class)->assertReceipt($receipt);
+            if (! $profile && ! empty($matching['guards'])) {
+                throw new CollectionException($matching['guards'][0]);
+            }
             if (! $profile || $result['package']['state'] !== 'matched') {
                 throw new CollectionException('profile_or_package_requires_review');
             }

@@ -3,6 +3,8 @@ import CollectionActivationCorrection, { CorrectionProgress } from './Collection
 import CollectionStandingAgreement from './CollectionStandingAgreement';
 import CollectionSubscriptionLink from './CollectionSubscriptionLink';
 import CollectionReceiptTimeline from './CollectionReceiptTimeline';
+import { CollectionMatchFeedbackCard } from './CollectionMatchFeedback';
+import CollectionMatchQuality from './CollectionMatchQuality';
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -33,6 +35,9 @@ const reasons = {
     primary_paid: 'Paid subscription', verification_only: 'Existing paid subscription', target_paid: 'Corrected subscription',
     prepared: 'Waiting to sync', dispatching: 'Syncing with the site', effect_unknown: 'Waiting for site confirmation', wp_verified: 'Site confirmed · Updating records',
     receiving_device_offline_or_unbound: 'The receiving phone is offline or its SIM binding needs review.', account_has_uncertain_operation: 'Another activation on this account needs site confirmation.',
+    payer_funds_several_profiles: 'This payer has paid for more than one profile. Confirm which profile this payment is for.',
+    learned_payer_conflicts_with_other_evidence: 'The payer’s confirmed profile and other evidence point to different profiles. Choose the intended profile.',
+    suggested_profile_dormant: 'The suggested profile has no paid subscription in the last 60 days. Confirm the profile before activating.',
     reviewed_payer_and_purchase_authority: 'Reviewed payer and authorized purchase match',
     reviewed_standing_renewal: 'Matches the reviewed renewal agreement', reviewed_current_quote: 'Matches the current reviewed quote',
     multiple_purchase_candidates: 'More than one purchase could match. Choose the intended profile and package.',
@@ -95,6 +100,9 @@ export default function CollectionWorkspace({ platformId, clientId, platformOpti
     const rows = useQuery({ queryKey: ['collection-receipts', user?.id, params], enabled: !!capabilities.data?.enabled,
         queryFn: async () => (await api.get('/crm/collections/receipts', { params })).data, refetchInterval: poll, refetchOnWindowFocus: true });
     if (!capabilities.data?.enabled) return null;
+    const manager = ['admin', 'sub_admin'].includes(user?.role) && !clientId;
+    const quality = manager && searchParams.get('view') === 'quality';
+    function setView(view) { const next = new URLSearchParams(searchParams); if (view === 'quality') next.set('view', 'quality'); else next.delete('view'); setSearchParams(next, { replace: true }); }
     async function exportReceipts() {
         try {
             const { data } = await api.get('/crm/collections/receipts', { params: { ...params, export: 1 }, responseType: 'blob' });
@@ -112,6 +120,8 @@ export default function CollectionWorkspace({ platformId, clientId, platformOpti
             <label className="block w-full text-sm font-medium text-slate-700 sm:w-64">Receiving market<select className="crm-input mt-1 w-full" value={platformId || ''} onChange={event => onPlatformChange(event.target.value)}>{platformOptionsWithFlags(platformOptions).map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
             <p className="text-xs text-slate-500">Phone, reversals, balances and receipts follow this market.</p>
         </div>}
+        {manager && <div className="mb-5 inline-flex max-w-full gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Office payments views">{[['payments', 'Incoming payments'], ['quality', 'Matching quality']].map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={(value === 'quality') === quality} className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 ${(value === 'quality') === quality ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200' : 'text-slate-600 hover:text-slate-900'}`} onClick={() => setView(value)}>{label}</button>)}</div>}
+        {quality ? <CollectionMatchQuality platformId={platformId} onOpenReceipt={selectReceipt} /> : <>
         <CollectionDeviceHealthPanel platformId={platformId} compact />
         {!clientId && <CollectionClaimChecks platformId={platformId} />}
         {!clientId && <CollectionAutomationSummary platformId={platformId} onConfigure={() => setSettingsOpen(true)} />}
@@ -130,6 +140,7 @@ export default function CollectionWorkspace({ platformId, clientId, platformOpti
                 <tbody className="divide-y divide-slate-100 max-md:block max-md:space-y-3 max-md:divide-y-0">{rows.data.data.map(row => <ReceiptRow key={row.id} row={row} onOpen={() => selectReceipt(row.id)} />)}</tbody></table></div></>}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500"><span className="inline-flex items-center gap-2 tabular-nums">{rows.isFetching && !rows.isPending ? <span aria-hidden="true" className="h-2 w-2 rounded-full bg-sky-500 motion-safe:animate-pulse" /> : <span aria-hidden="true" className="h-2 w-2 rounded-full bg-teal-500" />}{total && from ? `${from}–${to} of ${total} receipts` : `${total} ${total === 1 ? 'receipt' : 'receipts'}`} · {rows.dataUpdatedAt ? `Updated ${new Date(rows.dataUpdatedAt).toLocaleTimeString()}` : 'Waiting for updates'}</span>
             <div className="flex items-center gap-2"><button type="button" className={button} disabled={page === 1} onClick={() => setPage(p => p - 1)}>Previous</button><span className="px-1 tabular-nums">Page {page}{rows.data?.last_page ? ` of ${rows.data.last_page}` : ''}</span><button type="button" className={button} disabled={!rows.data?.next_page_url} onClick={() => setPage(p => p + 1)}>Next</button></div></div>
+        </>}
         {selected && <CollectionReceiptDrawer receiptId={selected} onClose={() => selectReceipt(null)} />}
         {!clientId && <CollectionPolicyPanel platformId={platformId} open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
     </section>;
@@ -162,7 +173,7 @@ function ReceiptRow({ row, onOpen }) {
         <td className="px-4 py-4 max-md:p-0"><p className="text-base font-semibold tabular-nums text-slate-900">{money(row)}</p><p className="mt-1 text-xs tabular-nums text-slate-700">{row.provider_at ? `Paid ${receiptTime(row.provider_at)}` : row.received_at ? `Phone arrival ${receiptTime(row.received_at)}` : `Recorded ${receiptTime(row.created_at)}`}</p><p className="mt-0.5 text-xs text-slate-500">{relative(when)}</p><p className="mt-2 inline-block select-all rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">{row.reference}</p><p className="mt-1.5 text-xs text-slate-500">{row.account_label} · {row.evidence_level === 'statement' ? 'Verified on statement' : 'Observed on receiving phone'}</p><WalletAfter balance={row.wallet_balance} className="mt-2" /></td>
         <td className="px-4 py-4 max-md:p-0"><p className="break-words font-medium text-slate-900">{row.payer?.name || (row.payer?.name_state === 'conflicting' ? 'Payer names need review' : 'Name not supplied in SMS')}</p><p className="mt-0.5 select-all text-xs tabular-nums text-slate-600">{row.payer?.phone || 'Phone not supplied in SMS'}</p>{row.captured_payer_receipts !== null && row.captured_payer_receipts !== undefined && <p className="mt-0.5 text-xs text-slate-500">{row.captured_payer_receipts} captured {row.captured_payer_receipts === 1 ? 'receipt' : 'receipts'} using this number</p>}
             <div className="mt-3 border-t border-slate-100 pt-2">{row.clients?.length > 1 ? <p className="text-sm font-medium text-slate-800">{row.clients.length} profiles · Shared payment</p> : row.clients?.[0] ? <Link to={`/clients/${row.clients[0].id}`} className="font-medium text-teal-800 underline decoration-teal-800/30 underline-offset-2 hover:decoration-teal-800">{row.clients[0].name}</Link> : <p className="text-sm text-slate-600">Profile needs confirmation</p>}
-                {!row.clients?.length && row.match_suggestions?.map(candidate => <p key={candidate.id} className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-slate-600"><Link to={`/clients/${candidate.id}`} className="font-medium text-teal-800 underline">{candidate.name}</Link><span className={`rounded-full px-1.5 py-0.5 font-semibold tabular-nums ${candidate.score > 80 ? 'bg-teal-50 text-teal-900' : 'bg-amber-50 text-amber-900'}`}>Saved match score {candidate.score} / 100</span><span>{row.match_needs_choice ? 'Staff choice required' : 'Suggested profile'}</span></p>)}
+                {!row.clients?.length && row.match_suggestions?.map(candidate => <p key={candidate.id} className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-slate-600"><Link to={`/clients/${candidate.id}`} className="font-medium text-teal-800 underline">{candidate.name}</Link>{candidate.score > 0 ? <><span className={`rounded-full px-1.5 py-0.5 font-semibold tabular-nums ${candidate.score > 80 ? 'bg-teal-50 text-teal-900' : 'bg-amber-50 text-amber-900'}`}>Saved match score {candidate.score} / 100</span><span>{row.match_needs_choice ? 'Staff choice required' : 'Suggested profile'}</span></> : <span className="text-slate-500">Other possibility · weaker evidence</span>}</p>)}
                 {row.purchase && <p className="mt-1 text-xs text-slate-500">{row.purchase.tier.toUpperCase()} · {row.purchase.duration_days} days</p>}</div></td>
         <td className="px-4 py-4 max-md:p-0"><StatusPill tone={status.tone} pulse={status.pulse}>{status.label}</StatusPill>
             {row.subsidiary_obligation && !['succeeded', 'already_active', 'canceled'].includes(row.subsidiary_obligation.state) && <p className="mt-2 text-xs font-medium text-amber-900">TZ active · {subsidiaryProgressLabel(row.subsidiary_obligation.state, row.subsidiary_obligation.last_error_code)}</p>}
@@ -262,6 +273,7 @@ export function CollectionReceiptDrawer({ receiptId, onClose }) {
                 {showSubscriptionLink && <CollectionSubscriptionLink key={row.id} receipt={row} onUpdated={async () => { await detail.refetch(); refresh(); }} />}
                 {row.allocation && !showSubscriptionLink && <CollectionReceiptEvidence usage={row.usage} related={row.related_payments} />}
                 {row.subsidiary_obligation && !row.receipt_link && !pendingCorrection && <CollectionSubsidiaryProgress row={row} onChanged={refresh} />}
+                {!row.historical_only && <CollectionMatchFeedbackCard key={`match-feedback-${row.id}`} row={row} />}
                 <section aria-label="Details and history" className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white px-4">
                 <details className="group py-1"><summary className={accordion}>Payer, receiving message &amp; payment details<Icon name="chevron" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" /></summary><div className="space-y-4 pb-4 pt-1"><CollectionPayerSummary payer={row.payer} /><CollectionMessageCopy key={`messages-${row.id}`} receiptId={row.id} /><dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-xs text-slate-500">Payment code</dt><dd className="mt-0.5 select-all font-mono font-medium">{row.reference}</dd></div><div><dt className="text-xs text-slate-500">Paid at</dt><dd className="mt-0.5">{receiptTime(row.provider_at)}</dd></div><div><dt className="text-xs text-slate-500">First received on phone</dt><dd className="mt-0.5">{receiptTime(row.received_at)}</dd></div></dl><p className="text-xs text-slate-500">{row.evidence_level === 'statement' ? 'Funds verified on a statement.' : 'Funds observed on the receiving phone; statement verification is separate.'}</p></div></details>
                 {row.allocation && <details className="py-1"><summary className={accordion}>Matching evidence<Icon name="chevron" className="h-4 w-4 text-slate-400" /></summary><div className="pb-4"><CollectionMatchEvidence row={row} /></div></details>}

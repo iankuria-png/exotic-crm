@@ -94,7 +94,7 @@ class CollectionReviewContextService
 
         return ['match_exclusions' => $exclusions, 'payer' => $payer, 'history' => $history, 'suggestions' => $suggestions, 'recommended_client_id' => $recommended,
             'automatic_assessment' => app(CollectionJourneyAssessment::class)->forReceipt($receipt, $clients->keys()->map(fn ($id) => (int) $id)->all()),
-            'needs_choice' => $conflict, 'rule_version' => $matching['rule_version'], 'receipt_version' => $receipt->version,
+            'needs_choice' => $conflict, 'match_guards' => $matching['guards'] ?? [], 'rule_version' => $matching['rule_version'], 'receipt_version' => $receipt->version,
             'selected_client' => $selected ? $this->clientData($selected) : null, 'saved_choice' => $savedData,
             'recommended_intent' => count($valid) === 1 && $recommended === (int) $valid[0]->client_id ? ['id' => $valid[0]->id, 'deal_id' => $valid[0]->deal_id, 'purchase' => $valid[0]->purchase_snapshot] : null,
             'can_activate' => $intent !== null && ! $blocked && ! $receipt->allocation()->exists(), 'blocked_reasons' => $blocked,

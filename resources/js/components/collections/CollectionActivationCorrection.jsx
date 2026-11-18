@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { primaryButton, secondaryButton } from './collectionUi';
+import { MatchReasonPicker } from './CollectionMatchFeedback';
 
 const explanations = {
     purchase_authority_stale_or_incompatible: 'The selected package or profile is no longer eligible for this payment. Check the package price and profile details.',
@@ -59,6 +60,7 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
     const [searchTerm, setSearchTerm] = useState('');
     const [price, setPrice] = useState('');
     const [note, setNote] = useState('');
+    const [why, setWhy] = useState({ reason: '', note: '' });
     const [saved, setSaved] = useState(initialCorrection);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
@@ -77,6 +79,10 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
         const name = correction.preview?.target_client?.name || target?.name || 'the selected profile';
         const message = removing ? relatedHold ? 'Activation removed. Review the other payment record before assigning again.' : 'Activation removed. The payment is ready to assign.' : 'Payment assigned to ' + name + '.';
         setStatus(message);
+        // Teach matching why the payment belonged to another profile; never blocks the confirmed correction.
+        if (!removing && !item && why.reason && target && Number(target.id) !== Number(source.client_id)) {
+            api.post(base + '/match-feedback', { client_id: Number(target.id), reason: why.reason, note: why.reason === 'other' ? why.note.trim() : undefined, source: 'correction' }).catch(() => {});
+        }
         if (onComplete) onComplete(message);
         else onCancel?.();
     }
@@ -145,6 +151,8 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
     }
 
     const unchanged = !removing && !removed && !locked && target && Number(target.id) === Number(source.client_id) && Number(price) === Number(source.product_price_id);
+    const moving = !removing && !locked && !item && target && Number(target.id) !== Number(source.client_id) && source.client_id;
+    const whyReady = !moving || (why.reason && (why.reason !== 'other' || why.note.trim().length >= 3));
     const label = locked ? 'Check saved correction' : removing ? 'Remove activation' : removed ? 'Assign payment' : target && Number(target.id) !== Number(source.client_id) ? 'Move activation' : 'Update package';
     return <form onSubmit={submit} aria-label={removing ? 'Remove payment activation' : 'Change profile or package'} className="space-y-4 border-t border-slate-200 pt-4">
         <div><h4 className="text-sm font-semibold text-slate-900">{removing ? 'Remove this activation' : removed ? 'Assign this payment' : 'Change profile or package'}</h4>
@@ -169,6 +177,8 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
             </label>}
             {options.isError && <p role="alert" className="text-sm text-rose-800">Packages could not be loaded. <button type="button" className="min-h-11 underline" onClick={() => options.refetch()}>Retry packages</button></p>}
         </>}
+        {moving && <MatchReasonPicker id={`correction-${receipt.id}`} suggestion={{ name: sourceName }} chosenName={target.name} value={why.reason}
+            prompt={<><span className="font-semibold text-amber-950">Moving from {sourceName}.</span> Why is <strong>{target.name}</strong> the right profile?</>} note={why.note} onChange={setWhy} required disabled={busy} />}
         {!locked && <details className="text-sm text-slate-600"><summary className="min-h-11 cursor-pointer py-3">Add a note (optional)</summary><label className="block">Correction note<textarea rows={2} maxLength={1000} className="crm-input mt-1 w-full" value={note} disabled={busy} onChange={e => { setNote(e.target.value); setSaved(null); }} /></label></details>}
         {!removing && target && <div className="rounded-lg bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-700">
             <p>{removed ? 'Assign to ' : 'Apply to '}<strong className="text-slate-900">{target.name}</strong>{chosenPrice ? ' · ' + chosenPrice.duration_days + ' days' : ''}</p>
@@ -178,7 +188,7 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
         {status && <p role="status" className="text-sm text-teal-900">{status}</p>}
         {error && <p role="alert" className="text-sm text-rose-800">{error}</p>}
         {unchanged && <p className="text-xs text-slate-500">Choose a different profile or package to apply a change.</p>}
-        <div className="flex flex-wrap gap-3"><button type="submit" className={primaryButton} disabled={busy || unchanged || (!locked && !removing && (relatedHold || !target || !price || options.isError))}>{busy ? (locked ? 'Checking saved correction…' : 'Applying correction…') : label}</button>
+        <div className="flex flex-wrap gap-3"><button type="submit" className={primaryButton} disabled={busy || unchanged || !whyReady || (!locked && !removing && (relatedHold || !target || !price || options.isError))}>{busy ? (locked ? 'Checking saved correction…' : 'Applying correction…') : label}</button>
             <button type="button" className={secondaryButton} disabled={busy} onClick={onCancel}>{locked ? 'Close' : 'Cancel'}</button></div>
     </form>;
 }

@@ -33,6 +33,9 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('corrections/{correction}/execute', [CollectionPaymentController::class, 'executeCorrection']);
         Route::post('receipts/{receipt}/subscription-link-preview', [\App\Http\Controllers\CRM\CollectionSubscriptionLinkController::class, 'preview'])->whereNumber('receipt');
         Route::post('subscription-links/{link}/execute', [\App\Http\Controllers\CRM\CollectionSubscriptionLinkController::class, 'execute'])->whereUuid('link');
+        Route::get('receipts/{receipt}/match-feedback', [\App\Http\Controllers\CRM\CollectionMatchQualityController::class, 'show'])->whereNumber('receipt');
+        Route::post('receipts/{receipt}/match-feedback', [\App\Http\Controllers\CRM\CollectionMatchQualityController::class, 'store'])->whereNumber('receipt');
+        Route::get('match-accuracy', [\App\Http\Controllers\CRM\CollectionMatchQualityController::class, 'accuracy']);
         Route::get('claim-checks', [\App\Http\Controllers\CRM\CollectionClaimCheckController::class, 'index']);
         Route::get('arrivals', [CollectionPaymentController::class, 'arrivals']);
         Route::get('device-health', [CollectionPaymentController::class, 'deviceHealth']);

@@ -6,6 +6,7 @@ import { useAuth } from '../../hooks/useAuth';
 import CollectionSalesFlow from './CollectionSalesFlow';
 import { receiptTime } from './CollectionReceiptEvidence';
 import CollectionPaymentJourney from './CollectionPaymentJourney';
+import { GUARD_TEXT, SubscriptionBadge } from './CollectionMatchFeedback';
 
 function useReviewContext(row) {
     const { user } = useAuth();
@@ -24,14 +25,18 @@ export function CollectionMatchEvidence({ row }) {
         {context.isPending && <p role="status" className="text-sm text-slate-500">Checking match confidence and evidence…</p>}
         {context.isError && <p role="alert" className="text-sm text-rose-800">Match confidence could not be loaded. <button type="button" className="font-medium underline" onClick={() => context.refetch()}>Retry matching</button></p>}
         {context.isSuccess && <>
-            {context.data.needs_choice && <p className="text-sm text-amber-900">The evidence needs a staff choice. Review the suggested profiles before selecting one.</p>}
+            {!!context.data.match_guards?.length && <div className="rounded-lg bg-amber-50/70 p-3 text-sm text-amber-950 ring-1 ring-inset ring-amber-200"><p className="font-semibold">Held for a person to confirm</p><ul className="mt-1 space-y-1">{context.data.match_guards.map(guard => <li key={guard}>{GUARD_TEXT[guard] || 'The evidence needs a staff choice.'}</li>)}</ul></div>}
+            {context.data.needs_choice && !context.data.match_guards?.length && <p className="text-sm text-amber-900">The evidence needs a staff choice. Review the suggested profiles before selecting one.</p>}
             {!suggestions.length && <p className="text-sm text-slate-600">No supported profile match found. Choose the intended advertiser in the activation form.</p>}
-            {suggestions.map(client => <div key={client.id} className="space-y-2">
-                <div className="flex flex-wrap items-baseline justify-between gap-2"><p className="text-sm"><span className="text-slate-500">Suggested profile · </span><Link to={`/clients/${client.id}`} target="_blank" rel="noopener noreferrer" title="Open CRM profile in a new tab" className="font-semibold text-teal-800 underline">{client.name}</Link></p>
-                    <span className="text-sm font-semibold tabular-nums text-slate-800">{Number.isFinite(client.score) ? `Match confidence ${client.score} / 100` : 'Match confidence unavailable'}</span></div>
-                {Number.isFinite(client.score) && <ConfidenceMeter score={client.score} threshold={context.data?.automatic_assessment?.threshold ?? 80} />}
+            {suggestions.map(client => {
+                const alternative = client.role === 'alternative' || client.score === 0;
+                return <div key={client.id} className={`space-y-2 ${alternative ? 'border-t border-slate-100 pt-3' : ''}`}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2"><p className="text-sm"><span className="text-slate-500">{alternative ? 'Other possibility · ' : 'Suggested profile · '}</span><Link to={`/clients/${client.id}`} target="_blank" rel="noopener noreferrer" title="Open CRM profile in a new tab" className="font-semibold text-teal-800 underline">{client.name}</Link></p>
+                    <span className="text-sm font-semibold tabular-nums text-slate-800">{alternative ? <span className="font-medium text-slate-500">Weaker evidence</span> : Number.isFinite(client.score) ? `Match confidence ${client.score} / 100` : 'Match confidence unavailable'}</span></div>
+                {client.subscription && <SubscriptionBadge subscription={client.subscription} />}
+                {!alternative && Number.isFinite(client.score) && <ConfidenceMeter score={client.score} threshold={context.data?.automatic_assessment?.threshold ?? 80} />}
                 {!!client.reasons?.length && <ul className="space-y-1 text-sm text-slate-600">{client.reasons.map(reason => <li key={reason} className="flex gap-2"><span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" />{reason}</li>)}</ul>}
-            </div>)}
+            </div>; })}
             <p className="text-xs text-slate-500">Rule score, not a measured probability. A profile match does not select or approve the purchased service.</p>
         </>}
     </section></>;

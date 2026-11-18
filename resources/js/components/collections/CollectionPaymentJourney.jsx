@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { GUARD_TEXT } from './CollectionMatchFeedback';
 
 const explanations = {
     multiple_exact_package_matches: 'More than one package matches. Staff must choose the purchased service.',
@@ -20,6 +21,7 @@ const explanations = {
     receiving_account_not_ready: 'The receiving account needs verification.',
     account_has_uncertain_operation: 'Another activation needs site confirmation before this account can continue.',
     profile_or_package_requires_review: 'Confirm the profile and package before activation.',
+    ...GUARD_TEXT,
 };
 const explain = reason => explanations[reason] || 'A required check needs staff review. See the matching evidence below.';
 const progressStates = ['ready_auto', 'dispatching', 'sales_prepared', 'sales_activating'];

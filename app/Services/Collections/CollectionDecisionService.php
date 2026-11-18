@@ -42,7 +42,7 @@ class CollectionDecisionService
                 if (! $candidates && data_get($r->account->policy, 'purchase_matching') === 'exact_catalogue_or_reviewed') {
                     $matching = $match;
                     if (! $matching['selected_client_id']) {
-                        throw new CollectionException('client_match_below_threshold_or_conflicting');
+                        throw new CollectionException($matching['guards'][0] ?? 'client_match_below_threshold_or_conflicting');
                     }
                     app(CollectionAutomationEpoch::class)->assertReceipt($r);
                     $platforms = [(int) \App\Models\Client::findOrFail($matching['selected_client_id'])->platform_id];
@@ -59,7 +59,7 @@ class CollectionDecisionService
                     throw new CollectionException(count($candidates) > 1 ? 'multiple_purchase_candidates' : 'reviewed_purchase_authority_required');
                 }
                 if ($match['selected_client_id'] !== (int) $eligible[0]['client_id']) {
-                    throw new CollectionException('client_match_below_threshold_or_conflicting');
+                    throw new CollectionException($match['guards'][0] ?? 'client_match_below_threshold_or_conflicting');
                 }
                 $snapshot['reasons'][] = 'reviewed_payer_and_purchase_authority';
                 $r->update(['candidate_snapshot' => $snapshot, 'decision_state' => 'ready_auto']);
