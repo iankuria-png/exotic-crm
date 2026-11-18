@@ -37,50 +37,141 @@ class CollectionReceiptStatusService
             'reference_bundles_count' => $this->referenceQuery('manual_payment_bundles', 'bundle')->selectRaw('COUNT(*)')]);
     }
 
-    private function compatibleQuery()
-    {
-        return $this->referenceQuery('payments', 'cash')->whereIn('cash.status', Payment::SUCCESSFUL_STATUSES)
-            ->where(fn ($q) => $q->whereNull('cash.record_classification')->orWhere('cash.record_classification', 'live'))
-            ->where(fn ($q) => $q->whereNull('cash.provider_environment')->orWhere('cash.provider_environment', '!=', 'sandbox'))
-            ->where(fn ($q) => $q->whereNull('cash.payment_data->test_mode')->orWhere('cash.payment_data->test_mode', false))
-            ->whereColumn('cash.currency', 'collection_receipts.currency')->whereRaw('ROUND(cash.amount * 100) = collection_receipts.principal_minor')
-            ->where(fn ($q) => $q->whereNull('cash.payment_data->collection->account_id')->orWhereColumn('cash.payment_data->collection->account_id', 'collection_receipts.account_id'))
-            ->whereExists(fn ($q) => $q->selectRaw('1')->from('clients as paid_client')->whereColumn('paid_client.id', 'cash.client_id')->whereColumn('paid_client.platform_id', 'cash.platform_id'))
-            ->whereExists(fn ($q) => $q->selectRaw('1')->from('deals as paid_deal')->whereColumn('paid_deal.id', 'cash.deal_id')
-                ->whereColumn('paid_deal.client_id', 'cash.client_id')->whereColumn('paid_deal.platform_id', 'cash.platform_id'));
-    }
-
+    /**
+     * Restrict a receipt query to one status tab. Reference collisions are resolved once for the candidate set with
+     * index-friendly IN lookups, then applied as an id list: per-receipt correlated scans of `payments` (OR across
+     * three reference columns plus aliases) cost a full table scan per receipt and timed out the workspace.
+     */
     public function filter(Builder $query, string $state): void
     {
+        $candidates = (clone $query)->setEagerLoads([])->whereDoesntHave('sale')->whereDoesntHave('allocation');
         if ($state === 'needs_action') {
-            $query->where(function ($q) {
-                $q->where(function ($unrecorded) {
-                    $unrecorded->whereDoesntHave('sale')->whereDoesntHave('allocation')
-                        ->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
-                        ->where(fn ($c) => $c->whereNull('conflicts')->orWhereJsonLength('conflicts', 0))
-                        ->whereNotExists($this->referenceQuery('payments', 'cash')->selectRaw('1'))
-                        ->whereNotExists($this->referenceQuery('manual_payment_bundles', 'bundle')->selectRaw('1'));
-                })->orWhereHas('allocation.subsidiaryObligation', fn ($o) => $o->whereIn('state', ['needs_approval', 'needs_profile', 'uncertain']));
-            });
+            $candidates->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
+                ->where(fn ($c) => $c->whereNull('conflicts')->orWhereJsonLength('conflicts', 0));
+            $receipts = $this->candidateRows($candidates);
+            $matches = $this->referenceMatches($receipts, false);
+            $unrecorded = $receipts->keys()->reject(fn ($id) => isset($matches['payments'][$id]) || isset($matches['bundles'][$id]))->values()->all();
+            $query->where(fn ($q) => $q->whereIn('collection_receipts.id', $unrecorded)
+                ->orWhereHas('allocation.subsidiaryObligation', fn ($o) => $o->whereIn('state', ['needs_approval', 'needs_profile', 'uncertain'])));
 
             return;
         }
-        $query->whereDoesntHave('sale')->whereDoesntHave('allocation');
-        if ($state === 'needs_action') {
-            $query->where('historical_only', false)->whereIn('funds_state', ['observed', 'statement_verified'])
-                ->where(fn ($q) => $q->whereNull('conflicts')->orWhereJsonLength('conflicts', 0))
-                ->whereNotExists($this->referenceQuery('payments', 'cash')->selectRaw('1'))
-                ->whereNotExists($this->referenceQuery('manual_payment_bundles', 'bundle')->selectRaw('1'));
-        } else {
-            $query->whereExists($this->compatibleQuery()->selectRaw('1'))
-                ->whereRaw('('.$this->referenceQuery('payments', 'cash')->selectRaw('COUNT(*)')->toSql().') = 1', $this->referenceQuery('payments', 'cash')->getBindings());
-            // An unrelated or incomplete bundle is a review, even if one cash row matches.
-            $query->whereNotExists($this->referenceQuery('manual_payment_bundles', 'bundle')->where(function ($q) {
-                $q->where('bundle.status', '!=', 'committed')->orWhereColumn('bundle.currency', '!=', 'collection_receipts.currency')
-                    ->orWhereRaw('ROUND(bundle.total_amount * 100) != collection_receipts.principal_minor')
-                    ->orWhereNotExists($this->referenceQuery('payments', 'cash')->selectRaw('1')->whereColumn('cash.manual_payment_bundle_id', 'bundle.id'));
-            })->selectRaw('1'));
+        $receipts = $this->candidateRows($candidates);
+        $matches = $this->referenceMatches($receipts, true);
+        $recorded = $receipts->filter(fn ($r) => $this->recordedElsewhere($r, $matches['payments'][$r->id] ?? [], $matches['bundles'][$r->id] ?? [], $matches))->keys()->all();
+        $query->whereIn('collection_receipts.id', $recorded);
+    }
+
+    private function candidateRows(Builder $candidates): Collection
+    {
+        return $candidates->toBase()->reorder()->select(['collection_receipts.id', 'collection_receipts.account_id', 'collection_receipts.reference_norm',
+            'collection_receipts.currency', 'collection_receipts.principal_minor'])->get()->keyBy('id');
+    }
+
+    /** Collation-equivalent key: codes compare case-insensitively and ignore trailing spaces in MySQL/MariaDB. */
+    private function referenceKey(?string $reference): ?string
+    {
+        $key = $reference === null ? '' : strtoupper(rtrim($reference, ' '));
+
+        return $key === '' ? null : $key;
+    }
+
+    /**
+     * Payments and bundles sharing a candidate's code or reviewed alias on one of its account's bound platforms.
+     *
+     * @return array{payments: array<int, array<int, object>>, bundles: array<int, array<int, object>>, clients: array, deals: array}
+     */
+    private function referenceMatches(Collection $receipts, bool $detail): array
+    {
+        $out = ['payments' => [], 'bundles' => [], 'clients' => [], 'deals' => []];
+        if ($receipts->isEmpty()) {
+            return $out;
         }
+        $owners = $lookup = [];
+        foreach ($receipts as $r) {
+            if ($key = $this->referenceKey($r->reference_norm)) {
+                $owners[$key][$r->id] = $r->id;
+                $lookup[$r->reference_norm] = true;
+            }
+        }
+        foreach ($receipts->keys()->chunk(1000) as $ids) {
+            foreach (DB::table('collection_receipt_aliases')->whereIn('receipt_id', $ids->values())->get(['receipt_id', 'account_id', 'reference']) as $alias) {
+                $key = $this->referenceKey($alias->reference);
+                if ($key && (string) $receipts[$alias->receipt_id]->account_id === (string) $alias->account_id) {
+                    $owners[$key][$alias->receipt_id] = $alias->receipt_id;
+                    $lookup[$alias->reference] = true;
+                }
+            }
+        }
+        if (! $owners) {
+            return $out;
+        }
+        $bound = DB::table('collection_account_platforms')->whereIn('account_id', $receipts->pluck('account_id')->unique()->values())->get(['account_id', 'platform_id'])
+            ->groupBy('account_id')->map(fn ($rows) => $rows->pluck('platform_id')->map(fn ($id) => (int) $id)->all());
+        $platforms = $bound->flatten()->unique()->values()->all();
+        if (! $platforms) {
+            return $out;
+        }
+        // Keys are cast back to strings: PHP turns numeric array keys into ints, which would compare numerically in SQL.
+        $references = array_map('strval', array_keys($lookup));
+        $columns = ['id', 'platform_id', 'reference_root', 'transaction_reference', 'reference_number'];
+        $pair = function (string $type, object $row, array $refs) use (&$out, $owners, $receipts, $bound) {
+            foreach (array_unique(array_filter(array_map(fn ($ref) => $this->referenceKey($ref), $refs))) as $key) {
+                foreach ($owners[$key] ?? [] as $receiptId) {
+                    if (in_array((int) $row->platform_id, $bound[$receipts[$receiptId]->account_id] ?? [], true)) {
+                        $out[$type][$receiptId][$row->id] = $row;
+                    }
+                }
+            }
+        };
+        foreach (array_chunk($references, 500) as $chunk) {
+            DB::table('payments')->whereIn('platform_id', $platforms)
+                ->where(fn ($q) => $q->whereNull('resolution_code')->orWhere('resolution_code', '!=', Payment::RESOLUTION_RECEIPT_DUPLICATE))
+                ->where(fn ($q) => $q->whereIn('reference_root', $chunk)->orWhereIn('transaction_reference', $chunk)->orWhereIn('reference_number', $chunk))
+                ->get($detail ? [...$columns, 'status', 'record_classification', 'provider_environment', 'payment_data', 'currency', 'amount', 'client_id', 'deal_id', 'manual_payment_bundle_id'] : $columns)
+                ->each(fn ($p) => $pair('payments', $p, [$p->reference_root, $p->transaction_reference, $p->reference_number]));
+            DB::table('manual_payment_bundles')->whereIn('platform_id', $platforms)->whereIn('reference_root', $chunk)
+                ->get($detail ? ['id', 'platform_id', 'reference_root', 'status', 'currency', 'total_amount'] : ['id', 'platform_id', 'reference_root'])
+                ->each(fn ($b) => $pair('bundles', $b, [$b->reference_root]));
+        }
+        if ($detail) {
+            // Only a receipt with exactly one matching payment can be "already recorded"; check just those owners.
+            $single = collect($out['payments'])->filter(fn ($m) => count($m) === 1)->map(fn ($m) => reset($m));
+            $out['clients'] = DB::table('clients')->whereIn('id', $single->pluck('client_id')->filter()->unique()->values())->pluck('platform_id', 'id')->all();
+            $out['deals'] = DB::table('deals')->whereIn('id', $single->pluck('deal_id')->filter()->unique()->values())->get(['id', 'client_id', 'platform_id'])->keyBy('id')->all();
+        }
+
+        return $out;
+    }
+
+    /** Exactly one live, successful, same-amount payment with a consistent client/deal, and only bundles it settles. */
+    private function recordedElsewhere(object $r, array $payments, array $bundles, array $matches): bool
+    {
+        if (count($payments) !== 1) {
+            return false;
+        }
+        $p = reset($payments);
+        $data = is_string($p->payment_data) ? (json_decode($p->payment_data, true) ?: []) : (array) ($p->payment_data ?? []);
+        $client = $matches['clients'][$p->client_id] ?? null;
+        $deal = $matches['deals'][$p->deal_id] ?? null;
+        if (! in_array($p->status, Payment::SUCCESSFUL_STATUSES, true) || ! in_array($p->record_classification, [null, Payment::RECORD_CLASSIFICATION_LIVE], true)
+            || $p->provider_environment === 'sandbox' || data_get($data, 'test_mode')
+            || $p->currency !== $r->currency || (int) round((float) $p->amount * 100) !== (int) $r->principal_minor
+            || (data_get($data, 'collection.account_id') && data_get($data, 'collection.account_id') !== $r->account_id)
+            || $client === null || (int) $client !== (int) $p->platform_id
+            || ! $deal || (int) $deal->client_id !== (int) $p->client_id || (int) $deal->platform_id !== (int) $p->platform_id) {
+            return false;
+        }
+
+        // An unrelated or incomplete bundle is a review, even if one cash row matches.
+        foreach ($bundles as $b) {
+            if ($b->status !== 'committed' || $b->currency !== $r->currency || (int) round((float) $b->total_amount * 100) !== (int) $r->principal_minor
+                || (int) $p->manual_payment_bundle_id !== (int) $b->id) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** Fixed batched queries for a page; actor audit is fetched only for an opened receipt. */

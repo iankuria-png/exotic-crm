@@ -129,6 +129,45 @@ class CollectionReceiptStatusTest extends CollectionWorkflowTestCase
         $this->getJson('/api/crm/collections/receipts?state=already_recorded')->assertOk()->assertJsonPath('total', 0);
     }
 
+    public function test_status_tabs_resolve_codes_once_instead_of_scanning_payments_per_receipt(): void
+    {
+        [$a, $device, $c, $intent, $actor, $price, $r] = $this->fixture();
+        for ($i = 1; $i <= 30; $i++) {
+            $next = $r->replicate();
+            $next->reference_norm = 'BULK'.str_pad($i, 8, '0', STR_PAD_LEFT);
+            $next->save();
+        }
+        $p = $this->cash($c, ['reference_root' => 'BULK00000001']);
+        $d = Deal::withoutEvents(fn () => Deal::factory()->create(['client_id' => $c->id, 'platform_id' => $c->platform_id, 'payment_id' => $p->id]));
+        DB::table('payments')->where('id', $p->id)->update(['deal_id' => $d->id]);
+        foreach (['needs_action' => 30, 'already_recorded' => 1] as $state => $total) {
+            DB::enableQueryLog();
+            DB::flushQueryLog();
+            $query = CollectionReceipt::query();
+            app(CollectionReceiptStatusService::class)->filter($query, $state);
+            $this->assertSame($total, $query->count(), $state);
+            $queries = array_column(DB::getQueryLog(), 'query');
+            DB::disableQueryLog();
+            $this->assertLessThanOrEqual(8, count($queries), $state);
+            // The final receipt count must not embed a correlated scan of payments or bundles.
+            $this->assertDoesNotMatchRegularExpression('/payments|manual_payment_bundles/', end($queries), $state);
+        }
+    }
+
+    public function test_numeric_codes_match_as_text_and_other_market_payments_do_not_block(): void
+    {
+        [$a, $device, $c, $intent, $actor, $price, $r] = $this->fixture();
+        $r->update(['reference_norm' => '0012345678']);
+        // Numeric comparison would equate 12345678 with 0012345678; reference codes are text.
+        $p = $this->cash($c, ['reference_root' => '12345678']);
+        $other = \App\Models\Platform::factory()->create(['id' => 102]);
+        $copy = fn (array $values) => Payment::withoutEvents(fn () => tap($p->replicate()->fill($values))->save());
+        $copy(['reference_root' => '0012345678', 'platform_id' => $other->id]);
+        $this->getJson('/api/crm/collections/receipts?state=needs_action')->assertOk()->assertJsonPath('total', 1);
+        $copy(['reference_number' => '0012345678', 'reference_root' => 'UNRELATED1']);
+        $this->getJson('/api/crm/collections/receipts?state=needs_action')->assertOk()->assertJsonPath('total', 0);
+    }
+
     public function test_page_status_queries_are_batched_for_twenty_five_receipts(): void
     {
         [$a, $device, $c, $intent, $actor, $price, $r] = $this->fixture();
