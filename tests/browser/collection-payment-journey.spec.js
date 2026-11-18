@@ -138,15 +138,17 @@ test('wallet balance from the payment SMS shows in the drawer, on the row and as
 test('a reversed payment is flagged in red and staff can keep the service with a reason', async ({ page }) => {
     const state = await setup(page, { reversed: true, automaticState: 'active_review_pending', savedMatch: true });
     const notice = page.getByRole('dialog').getByRole('region', { name: 'Payment reversed' });
-    await expect(notice).toContainText('M-PESA reversed this payment');
+    await expect(notice).toContainText('The provider reversed this payment');
     await notice.getByRole('button', { name: 'Keep service active' }).click();
     await expect(notice.getByRole('alert')).toContainText('Say why the service stays active');
     await notice.getByLabel('Reason to keep the service').fill('Customer paid again in cash');
     await notice.getByRole('button', { name: 'Keep service active' }).click();
     expect(state.mutations.find(m => m.path.endsWith('/reversal-review')).body).toEqual({ decision: 'keep_service', note: 'Customer paid again in cash' });
     await page.getByRole('button', { name: 'Close', exact: true }).click();
-    const alerts = page.getByRole('region', { name: 'Reversed payments' });
+    const summary = page.locator('summary').filter({ hasText: 'Reversed & held payments' });
+    await summary.click();
+    const alerts = summary.locator('..');
     await expect(alerts).toContainText('FIXTURE0001');
-    await expect(page.getByRole('row').filter({ hasText: 'FIXTURE0001' })).toContainText('Reversed by M-PESA');
+    await expect(page.getByRole('row').filter({ hasText: 'FIXTURE0001' })).toContainText('Reversed payment');
     await page.screenshot({ path: 'output/collection-golive-2026-11-09/reversal-flag.png', fullPage: true });
 });

@@ -3505,7 +3505,7 @@ export default function Payments() {
             </section>
 
             {workspaceTab === 'collections' ? (
-                <CollectionWorkspace platformId={platformFilter} />
+                <CollectionWorkspace platformId={platformFilter} platformOptions={platformOptions} onPlatformChange={setPlatformFilter} />
             ) : workspaceTab === 'service' ? (
                 <PaymentRecoveryCases platformId={platformFilter} canManage={canManageBundleFinanceReview} staffId={user?.id} />
             ) : workspaceTab === 'recovery' ? (

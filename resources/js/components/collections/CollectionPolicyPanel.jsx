@@ -15,14 +15,14 @@ function minor(value) {
     return result;
 }
 
-export function useCollectionPolicies() {
+export function useCollectionPolicies(platformId) {
     const { user } = useAuth();
-    return useQuery({ queryKey: ['collection-policies', user?.id], queryFn: async () => (await api.get('/crm/collections/account-policies')).data,
+    return useQuery({ queryKey: ['collection-policies', user?.id, platformId || null], queryFn: async () => (await api.get('/crm/collections/account-policies', { params: { platform_id: platformId || undefined } })).data,
         refetchInterval: () => document.visibilityState === 'visible' ? 10000 : false, refetchOnWindowFocus: true });
 }
 
-export function CollectionAutomationSummary({ onConfigure }) {
-    const query = useCollectionPolicies();
+export function CollectionAutomationSummary({ onConfigure, platformId }) {
+    const query = useCollectionPolicies(platformId);
     const accounts = query.data?.accounts || [];
     const account = accounts.find(a => a.automation?.enabled) || accounts[0];
     const policy = account?.automation;
@@ -48,10 +48,10 @@ export function CollectionAutomationSummary({ onConfigure }) {
     </section>;
 }
 
-export default function CollectionPolicyPanel({ open, onClose }) {
+export default function CollectionPolicyPanel({ open, onClose, platformId }) {
     const { user } = useAuth();
     const manager = ['admin', 'sub_admin'].includes(user?.role);
-    const query = useCollectionPolicies();
+    const query = useCollectionPolicies(platformId);
     const dialog = useRef(null);
     useEffect(() => {
         const modal = dialog.current;

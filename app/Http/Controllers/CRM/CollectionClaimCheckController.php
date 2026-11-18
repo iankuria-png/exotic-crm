@@ -15,8 +15,8 @@ class CollectionClaimCheckController extends Controller
     public function index(Request $request, CollectionAccessService $access, CollectionClaimCheckService $checks)
     {
         abort_unless(config('collection.workspace_enabled') && Schema::hasTable('collection_accounts'), 404);
-        $v = $request->validate(['days' => 'nullable|integer|min:1|max:90', 'all' => 'nullable|boolean']);
-        $accounts = CollectionAccount::whereIn('id', $access->accountIds($request->user()))->orderBy('label')->get()->filter(fn ($a) => $checks->supports($a));
+        $v = $request->validate(['days' => 'nullable|integer|min:1|max:90', 'all' => 'nullable|boolean', 'platform_id' => 'nullable|integer|min:1']);
+        $accounts = CollectionAccount::whereIn('id', $access->accountIdsForView($request->user(), isset($v['platform_id']) ? (int) $v['platform_id'] : null))->orderBy('label')->get()->filter(fn ($a) => $checks->supports($a));
 
         return response()->json(['accounts' => $accounts->values()->map(fn ($a) => ['label' => $a->label, 'currency' => $a->currency]
             + $checks->forAccount($a, (int) ($v['days'] ?? 14), ! ($v['all'] ?? false)))])->header('Cache-Control', 'private, no-store');

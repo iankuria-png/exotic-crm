@@ -42,6 +42,18 @@ class CollectionAccessService
         return $ids;
     }
 
+    public function accountIdsForView(User $actor, ?int $platformId = null, ?string $accountId = null): array
+    {
+        $ids = $this->accountIds($actor);
+        if ($platformId !== null) {
+            app(MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, $platformId);
+            $ids = array_values(array_intersect($ids, \Illuminate\Support\Facades\DB::table('collection_account_platforms')
+                ->where('platform_id', $platformId)->pluck('account_id')->all()));
+        }
+
+        return $accountId === null ? $ids : array_values(array_intersect($ids, [$accountId]));
+    }
+
     public function receipt(User $actor, int $id): CollectionReceipt
     {
         return CollectionReceipt::whereIn('account_id', $this->accountIds($actor))->findOrFail($id);

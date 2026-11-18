@@ -41,14 +41,14 @@ function ClaimRow({ claim, currency, onLink, linking }) {
     </li>;
 }
 
-export default function CollectionClaimChecks() {
+export default function CollectionClaimChecks({ platformId }) {
     const { user } = useAuth();
     const qc = useQueryClient();
     const [open, setOpen] = useState(false);
     const [days, setDays] = useState(14);
     const [status, setStatus] = useState('');
     const [message, setMessage] = useState(null);
-    const query = useQuery({ queryKey: ['collection-claim-checks', user?.id, days], queryFn: async () => (await api.get('/crm/collections/claim-checks', { params: { days } })).data,
+    const query = useQuery({ queryKey: ['collection-claim-checks', user?.id, platformId || null, days], queryFn: async () => (await api.get('/crm/collections/claim-checks', { params: { days, platform_id: platformId || undefined } })).data,
         refetchInterval: () => document.visibilityState === 'visible' ? 60000 : false, retry: 1 });
     const link = useMutation({
         mutationFn: ({ claim, receipt }) => api.post(`/crm/collections/receipts/${receipt.id}/aliases`, { reference: claim.typed_reference, evidence_reference: `Claim check: payment #${claim.payment_id}` }),

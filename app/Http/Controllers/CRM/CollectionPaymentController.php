@@ -54,7 +54,8 @@ class CollectionPaymentController extends Controller
             'platform_id' => 'nullable|integer|min:1', 'search' => 'nullable|string|max:128', 'page' => 'nullable|integer|min:1', 'export' => 'nullable|boolean',
             'sort' => 'nullable|in:newest,oldest,amount_high,amount_low', 'date_from' => 'nullable|date_format:Y-m-d',
             'date_to' => 'nullable|date_format:Y-m-d'.($request->filled('date_from') ? '|after_or_equal:date_from' : '')]);
-        $q = CollectionReceipt::select('collection_receipts.*')->with(['account', 'allocation.effects', 'sale.items'])->whereIn('account_id', $this->access->accountIds($request->user()));
+        $accountIds = $this->access->accountIdsForView($request->user(), isset($v['platform_id']) ? (int) $v['platform_id'] : null, $v['account_id'] ?? null);
+        $q = CollectionReceipt::select('collection_receipts.*')->with(['account', 'allocation.effects', 'sale.items'])->whereIn('account_id', $accountIds);
         if (! empty($v['state'])) {
             if (in_array($v['state'], ['needs_action', 'already_recorded'], true)) {
                 app(CollectionReceiptStatusService::class)->filter($q, $v['state']);
@@ -143,15 +144,15 @@ class CollectionPaymentController extends Controller
         $needsAction = null;
         $wallet = [];
         if (empty($v['client_id'])) {
-            $wallet = app(\App\Services\Collections\CollectionWalletBalanceService::class)->latest($this->access->accountIds($request->user()));
-            $pending = CollectionReceipt::whereIn('account_id', $this->access->accountIds($request->user()))
+            $wallet = app(\App\Services\Collections\CollectionWalletBalanceService::class)->latest($accountIds);
+            $pending = CollectionReceipt::whereIn('account_id', $accountIds)
                 ->when(! empty($v['account_id']), fn ($q) => $q->where('account_id', $v['account_id']))
                 ->when(! empty($v['platform_id']), fn ($q) => $q->whereIn('account_id', DB::table('collection_account_platforms')->where('platform_id', $v['platform_id'])->select('account_id')));
             app(CollectionReceiptStatusService::class)->filter($pending, 'needs_action');
             $needsAction = $pending->count();
         }
 
-        $reversals = empty($v['client_id']) ? $this->reversalAlerts($this->access->accountIds($request->user())) : [];
+        $reversals = empty($v['client_id']) ? $this->reversalAlerts($accountIds) : [];
 
         return response()->json($rows->toArray() + ['counts' => ['needs_action' => $needsAction], 'wallet_balances' => $wallet, 'reversals' => $reversals]);
     }
@@ -386,7 +387,9 @@ class CollectionPaymentController extends Controller
     {
         $this->enabled();
 
-        return response()->json(['accounts' => CollectionAccount::whereIn('id', $this->access->accountIds($request->user()))
+        $v = $request->validate(['platform_id' => 'nullable|integer|min:1']);
+
+        return response()->json(['accounts' => CollectionAccount::whereIn('id', $this->access->accountIdsForView($request->user(), isset($v['platform_id']) ? (int) $v['platform_id'] : null))
             ->orderBy('label')->get()->map(fn ($account) => $policies->present($account))]);
     }
 
@@ -407,7 +410,7 @@ class CollectionPaymentController extends Controller
     /** Payments the provider reversed or put on hold in the last 30 days, with whether service is still running and whether staff reviewed it. */
     private function reversalAlerts(array $accountIds): array
     {
-        $rows = CollectionReceipt::with(['allocation.effects', 'sale.items'])->whereIn('account_id', $accountIds)->whereIn('funds_state', ['reversed', 'disputed'])
+        $rows = CollectionReceipt::with(['account', 'allocation.effects', 'sale.items'])->whereIn('account_id', $accountIds)->whereIn('funds_state', ['reversed', 'disputed'])
             ->where('updated_at', '>=', now()->subDays(30))->orderByDesc('updated_at')->limit(20)->get();
         $reviewed = DB::table('collection_audit')->whereIn('receipt_id', $rows->pluck('id'))->where('action', 'like', 'reversal_reviewed%')
             ->orderBy('id')->get(['receipt_id', 'action', 'context', 'created_at'])->keyBy('receipt_id');
@@ -417,7 +420,7 @@ class CollectionPaymentController extends Controller
                 || in_array($r->sale?->state, ['confirmed', 'partial'], true);
             $review = $reviewed[$r->id] ?? null;
 
-            return ['id' => $r->id, 'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
+            return ['id' => $r->id, 'account_label' => $r->account?->label, 'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
                 'funds_state' => $r->funds_state, 'flagged_at' => $r->updated_at?->toIso8601String(), 'service_active' => $active,
                 'reviewed' => $review ? ['decision' => json_decode((string) $review->context, true)['decision'] ?? null, 'at' => \Illuminate\Support\Carbon::parse($review->created_at)->toIso8601String()] : null];
         })->values()->all();
