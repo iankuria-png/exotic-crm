@@ -84,6 +84,20 @@ class CollectionReviewContextTest extends CollectionWorkflowTestCase
         $nameOnly = 'ABCDEF12345 Confirmed. On 30/10/26, 2:59 PM Receive Tsh35,000 from FULL EXAMPLE PAYER NAME and balance Tsh900,000.';
         $this->assertSame('FULL EXAMPLE PAYER NAME', $parser->payerDetails('M-PESA', $nameOnly)['name']);
         $this->assertNull($parser->payerDetails('PERSONAL', $detail)['name']);
+        $account = 'ABCDEF12346 imethibitishwa. Umepokea Tshs 31,500.00 kutoka CRDB Bank, Akaunti ****3367 - FULL EXAMPLE PAYER tarehe 18/11/2026 saa 21:02:32.';
+        $this->assertSame('FULL EXAMPLE PAYER', $parser->payerDetails('M-PESA', $account)['name']);
+        $this->assertSame('CRDB Bank, Akaunti ****3367 - FULL EXAMPLE PAYER', $parser->payerDetails('M-PESA', $account)['party']);
+        $accountEn = 'ABCDEF12347 confirmed. You have received Tsh20,000.00 from NMB Bank, Account ****1234 - FULL EXAMPLE PAYER on 18/11/26 at 9:15 PM. New M-Pesa balance is Tsh100.00';
+        $this->assertSame('FULL EXAMPLE PAYER', $parser->payerDetails('M-PESA', $accountEn)['name']);
+        $bankHolder = 'ABCDEF12348 imethibitishwa. Umepokea Tshs 5,000.00 kutoka CRDB Bank, Akaunti ****3367 - EXAMPLE BANK LTD tarehe 18/11/2026 saa 21:02:32.';
+        $this->assertNull($parser->payerDetails('M-PESA', $bankHolder)['name']);
+        // Interoperability header: the short code names the switch, never the payer.
+        foreach (['TIPS-AIRTEL', 'TIPS-MIXX BY YAS', 'TIPS-CRDB', 'EXAMPLE-SWITCH'] as $switch) {
+            $header = "ABCDEF12349 imethibitishwa. Umepokea Tshs 5,000.00 kutoka 123456 - {$switch} tarehe 18/11/2026 saa 21:02:32.";
+            $this->assertNull($parser->payerDetails('M-PESA', $header)['name'], $switch);
+        }
+        $wallet = 'ABCDEF12350 imethibitishwa. Umepokea Tshs 5,000.00 kutoka MIXX BY YAS : 25571000000 - EXAMPLE tarehe 18/11/2026 saa 21:02:32.';
+        $this->assertSame('EXAMPLE', $parser->payerDetails('M-PESA', $wallet)['name']);
         [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
         $event = app(CollectionIngestService::class)->accept($device, $this->envelope($detail, 'bank-detail'));
         app(CollectionReceiptService::class)->process($event['event_id']);

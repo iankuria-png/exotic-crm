@@ -77,10 +77,17 @@ class TzMpesaParser
         // A bank-prefixed detail message supplies the person AFTER the full phone.
         if ($credit['payer_phone']) {
             $name = preg_replace('/^.*?(?:\+?255[67]\d{8}|0[67]\d{8})\s*[-:]?\s*/u', '', $party);
+        } elseif (preg_match('/^(.*)\s+-\s+(.+)$/u', $party, $split)
+            && (preg_match('/\b(?:bank|benki|akaunti|account)\b/iu', $split[1])
+                || preg_match('/^\p{L}[\p{L}\s]*:\s*\+?\d{9,12}$/u', $split[1]))) {
+            // Account/wallet detail without a usable TZ phone: "CRDB Bank, Akaunti ****3367 - FULL NAME" or
+            // "MIXX BY YAS : <wallet> - NAME". A bare short-code header ("<6 digits> - TIPS-AIRTEL") names the
+            // switch, not the payer, so it never qualifies; bank/business holders are still rejected below.
+            $name = $split[2];
         }
         $name = trim($name, " \t\n\r\0\x0B.-:");
         if (! preg_match('/^\p{L}[\p{L}\p{M}\s\x{2019}\x{0027}.\-]{1,179}$/uD', $name)
-            || preg_match('/\b(?:bank|benki|mpesa|m-pesa|wallet|crdb|nmb|nbc|equity|tigo|airtel)\b/iu', $name)) {
+            || preg_match('/\b(?:bank|benki|mpesa|m-pesa|wallet|crdb|nmb|nbc|equity|tigo|airtel|tips|selcom|halopesa|mixx)\b/iu', $name)) {
             $name = null;
         }
 
