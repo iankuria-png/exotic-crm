@@ -65,7 +65,7 @@ class CollectionGate
     private function observationWaived(CollectionAccount $account, array $platformIds): bool
     {
         $exception = data_get($account->policy, 'observation_exception', []);
-        if ($account->country !== 'TZ' || $account->provider_key !== 'vodacom_mpesa_tz'
+        if (app(CollectionParserRegistry::class)->forAccount($account) === null
             || ($exception['account_id'] ?? null) !== $account->id || empty($exception['approved_by']) || empty($exception['approved_at'])
             || empty($exception['reason']) || ($exception['waived_keys'] ?? []) !== ['clean_observation_days', 'positive_receiving_credits']
             || ($exception['parser_version'] ?? null) !== config('collection.parser_versions.'.$account->provider_key)

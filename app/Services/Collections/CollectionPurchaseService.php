@@ -21,14 +21,14 @@ class CollectionPurchaseService
     public function reviewPayer(CollectionReceipt $receipt, Client $client, User $actor, bool $allowAuto, $validUntil): CollectionPayerLink
     {
         $this->assertScope($receipt->account, $client, $actor);
-        if (! $receipt->payer_phone || $receipt->conflicts || in_array($receipt->funds_state, ['disputed', 'reversed'])) {
+        if (! ($receipt->payer_phone || $receipt->payer_fingerprint) || $receipt->conflicts || in_array($receipt->funds_state, ['disputed', 'reversed'])) {
             throw new CollectionException('complete_unconflicted_payer_required', 422);
         }
 
         return DB::transaction(function () use ($receipt, $client, $actor, $allowAuto, $validUntil) {
             CollectionAccount::whereKey($receipt->account_id)->lockForUpdate()->firstOrFail();
             $link = CollectionPayerLink::create(['id' => (string) Str::uuid(), 'account_id' => $receipt->account_id,
-                'payer_phone' => $receipt->payer_phone, 'payer_fingerprint' => $receipt->payer_fingerprint,
+                'payer_phone' => (string) $receipt->payer_phone, 'payer_fingerprint' => $receipt->payer_fingerprint,
                 'client_id' => $client->id, 'wp_post_id' => $client->wp_post_id, 'wp_user_id' => $client->wp_user_id,
                 'auto_allowed' => $allowAuto, 'evidence_receipt_ids' => [$receipt->id], 'reviewed_by' => $actor->id,
                 'reviewed_at' => now(), 'valid_until' => $validUntil]);

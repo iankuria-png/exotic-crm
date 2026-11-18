@@ -11,7 +11,7 @@ class EnrollCollectionDevice extends Command
 {
     protected $signature = 'collections:enroll {private_config} {--actor=} {--apply}';
 
-    protected $description = 'Preview a private verified device/SIM/account mapping; explicit apply creates shadow capture only';
+    protected $description = 'Preview a private verified device/SIM/account mapping; explicit apply enrolls it with automatic activation off';
 
     public function handle(CollectionEnrollmentService $enrollment): int
     {
@@ -40,13 +40,14 @@ class EnrollCollectionDevice extends Command
             'carrier_name' => 'required|string|max:128', 'apk_sha256' => 'required|string|regex:/^[a-f0-9]{64}$/', 'apk_version' => 'required|string|max:64',
             'platform_bindings' => 'required|array|min:1|max:10', 'platform_bindings.*.platform_id' => 'required|integer|exists:platforms,id',
             'platform_bindings.*.destination_snapshot' => 'required|array', 'platform_bindings.*.manual_method_id' => 'nullable|integer',
+            'account_id' => 'nullable|uuid', 'initial_mode' => 'nullable|in:shadow,assisted,auto', 'receipt_learning' => 'nullable|boolean',
         ])->validate();
         $actor = User::findOrFail((int) $this->option('actor'));
         app(\App\Services\MarketAuthorizationService::class)->ensureManager($actor);
         foreach ($input['platform_bindings'] as $binding) {
             app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($actor, (int) $binding['platform_id']);
         }
-        $this->line('One device; '.count($input['platform_bindings']).' market binding(s); mode shadow; no payments or entitlements.');
+        $this->line('One device; '.count($input['platform_bindings']).' market binding(s); mode '.($input['initial_mode'] ?? 'shadow').'; automatic activation off; no payments or entitlements.');
         if (! $this->option('apply')) {
             $this->info('Preview only. No records changed.');
 

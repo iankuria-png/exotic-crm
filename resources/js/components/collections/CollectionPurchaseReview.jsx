@@ -54,6 +54,7 @@ export function CollectionPayerSummary({ payer }) {
             {payer?.phone && <button type="button" className="text-xs font-medium text-teal-700 underline" onClick={async () => { try { await navigator.clipboard.writeText(payer.phone); setCopied('Number copied'); } catch { setCopied('Select the number to copy it.'); } }}>Copy number</button>}
             {copied && <span role="status" className="text-xs text-slate-500">{copied}</span>}</div>
         {!payer?.name && payer?.party && <p className="break-words text-xs text-slate-500">SMS sender details: {payer.party}</p>}
+        {payer?.payer_reference && <p className="break-words text-sm text-slate-700">Payer’s reference: <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-900">{payer.payer_reference}</span></p>}
         <p className="text-xs text-slate-500">The person paying may have a different name or number from the advertiser.</p>
     </section>;
 }

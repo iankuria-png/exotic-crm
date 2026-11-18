@@ -100,7 +100,16 @@ class CollectionReceiptService
                 if ($receipt->currency !== $account->currency) {
                     $conflicts[] = 'account_currency_conflict';
                 }
-                if ($receipt->payer_phone) {
+                if (! empty($observation['payer_identity'])) {
+                    // Provider-stated payer identity (Ghana MoMo wallet name) keys learning and reviewed payer links.
+                    $identity = app(CollectionPrivacy::class)->fingerprint($observation['payer_identity']);
+                    if ($receipt->payer_fingerprint && ! hash_equals($receipt->payer_fingerprint, $identity)) {
+                        $conflicts[] = 'payer_identity_conflict';
+                    } else {
+                        $receipt->payer_fingerprint = $identity;
+                    }
+                    $provenance['payer_fingerprint'][] = $event->id;
+                } elseif ($receipt->payer_phone) {
                     $receipt->payer_fingerprint = app(CollectionPrivacy::class)->fingerprint($receipt->payer_phone);
                 }
             }

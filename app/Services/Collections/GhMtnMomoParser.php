@@ -54,8 +54,24 @@ class GhMtnMomoParser
         }
 
         return ['kind' => 'credit', 'reference' => $ref[1], 'reference_raw' => $ref[1], 'principal_minor' => $minor, 'currency' => 'GHS',
-            'payer_phone' => $phones[0] ?? null, 'provider_at' => null, 'time_source' => 'device_received',
+            'payer_phone' => $phones[0] ?? null, 'payer_identity' => $cashIn ? null : $this->identity($credit[3]), 'provider_at' => null, 'time_source' => 'device_received',
             'family' => $cashIn ? 'cash_in' : 'payment_received', 'version' => self::VERSION];
+    }
+
+    /**
+     * MoMo states the paying wallet holder's registered name on every person-to-person credit, but a phone
+     * only for other networks. The normalized name is the stable payer identity across both; a shared name
+     * across different profiles surfaces as conflicting history, never as an automatic match.
+     */
+    public function identity(string $party): ?string
+    {
+        $name = trim(preg_replace('/\s+/u', ' ', preg_replace('/[^\p{L}\p{M}\s]/u', ' ', mb_strtoupper($party))));
+        if (mb_strlen($name) < 5 || count(explode(' ', $name)) < 2
+            || preg_match('/\b(?:ENTERPRISE|VENTURES|BANK|MOMO|MOBILE MONEY|INTEREST|LIMITED|LTD|COMPANY|PAYMENTS?)\b/u', $name)) {
+            return null;
+        }
+
+        return 'gh-momo-name:'.$name;
     }
 
     /** Display evidence only: never changes the financial parser or grants identity authority. */

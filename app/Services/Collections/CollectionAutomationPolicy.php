@@ -139,7 +139,7 @@ class CollectionAutomationPolicy
     private function pilot(CollectionAccount $account): array
     {
         $exception = data_get($account->policy, 'observation_exception');
-        $eligible = $account->country === 'TZ' && $account->provider_key === 'vodacom_mpesa_tz';
+        $eligible = app(CollectionParserRegistry::class)->forAccount($account) !== null;
         if (! is_array($exception) || empty($exception['starts_at']) || empty($exception['expires_at'])) {
             return ['state' => 'none', 'available' => $eligible, 'starts_at' => null, 'expires_at' => null, 'hours' => 24];
         }
@@ -289,7 +289,7 @@ class CollectionAutomationPolicy
                 $p['enabled_from'] = $enabled ? now()->toIso8601String() : null;
             }
             if (isset($v['observation_pilot_hours'])) {
-                if (isset($p['observation_exception']) || ! $enabled || $before['enabled'] || $account->country !== 'TZ' || $account->provider_key !== 'vodacom_mpesa_tz') {
+                if (isset($p['observation_exception']) || ! $enabled || $before['enabled'] || app(CollectionParserRegistry::class)->forAccount($account) === null) {
                     throw new CollectionException('observation_exception_requires_new_tz_enablement', 422);
                 }
                 $p['observation_exception'] = ['account_id' => $accountId, 'platform_ids' => $this->platforms($account),

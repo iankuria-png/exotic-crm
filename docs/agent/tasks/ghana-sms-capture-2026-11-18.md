@@ -1,6 +1,6 @@
 # Ghana MoMo SMS capture and matching — 18 November 2026
 
-Status: LOCAL IMPLEMENTATION TESTED (18 Nov) — not committed/pushed/deployed; no APK built/installed, no enrollment or production change. Private evidence:
+Status: PUSHED 6fe56479 to origin/main (18 Nov, remote SHA verified) — NOT DEPLOYED; no APK built/installed, no enrollment or production change. Private evidence:
 `/Users/ian/Projects/exotic-ops/var/ghana-sms-2026-11-18/` (gitignored; customer names/phones).
 
 ## Access
@@ -78,3 +78,38 @@ Ian, 18 Nov: failed claim verification = **flag only, keep active**. Nothing hol
    read-only binding + cursor, `collections:enroll` (country GH, mtn_momo_gh, GHS, Africa/Accra, platform 3,
    manual method 1, filter exotic-gh-v1, recipient 233541442622 if confirmed as this SIM) → shadow; webhooks;
    live receipt acceptance; reliability checks as TZ.
+
+## Shipping — 18 Nov
+Ian: "Yes, ship it". Commit 6fe56479 built from an isolated index (HEAD + task content only); 29 paths incl. build
+`app-DTTHhqh8.js`/`app-5kHwLNGj.css` + manifest built in a clean HEAD copy (pristine HEAD rebuild was byte-identical
+to the committed bundle). Mixed files (controller, routes, workspace, state.md, manifest) keep other sessions'
+uncommitted edits unstaged; nothing else staged. Pushed origin main 852c2992..6fe56479. WP changelog afb1876f9
+(local, Changelog OK). No migration/seeder; config default added `collection.claim_check_grace_minutes`=30.
+
+cPanel: pull main (preserve deployed overlays per verification.md), `php artisan config:cache` + `route:cache`
+(new route/config), refresh PHP-FPM/opcache, confirm `/api/crm/collections/claim-checks` returns 200 (empty accounts
+until Ghana enrollment). Then phone steps under Next item 2.
+
+## TZ parity — 18 Nov (Ian: install app, Unrestricted battery, NOT shadow — same as TZ: assisted/auto with automation switchable; SIM = 233541442622; world-class matching and CS UX)
+Discovery that reshapes the work: Ghana paid activations since 1 Aug are 1,410 CS-recorded deal payments with a typed
+transaction ID (Lavender 1,068, Zeddy 142, Daniel 85, Amos 58, Victor 56) and only 59 self-service submissions. Receipt-first
+"Match & activate" removes the typing that causes typos/reuse.
+
+Ghana WP site (exoticghana public_html) runs exotic-crm-sync 1.3.21 WITHOUT the receipt contract: live GET
+subscription-operation → rest_no_route (`crm-ghana-writer-capability-read` run …114838Z-5a5c). Needs plugin receipt files
+(writers/operation/lock/owner + main-file registration) AND child-theme `escortwp_child_receipt_expiry_bridge_version`
+(functions.php, 5bf3d9d66) — a WP rollout like TZ's. Until then platform 3 stays OUT of entitlement/writer/correction config;
+Ghana account id 5c1b4a9f-b95e-4e64-bbf9-76ccc5c713d6 is pre-listed in automatic_accounts (inert without writer sites).
+
+Local code (uncommitted at this checkpoint): Ghana payer identity = normalized MoMo wallet name (agents excluded) keying
+payer links/learning; payer reference shown + below-threshold profile-name hint; `collections:import-history` (preview default,
+historical_only receipts, idempotent) to seed 90-day learning; enrollment `account_id`/`initial_mode`/`receipt_learning`/
+history recipient; pilot/observation waiver generalized to any registered provider; staff deal-payment guard
+`CollectionReferenceGuard` refuses only PROVEN conflicts (reversed, already activated from Payments, already fully used,
+short of the subscription) on markets with a receiving phone — covers create/renew/extend paths; full payer-name search.
+History check: 469/619 payer names map to one profile; payer reference names the profile on 5.4% of matched receipts.
+
+Phone: Ghana APK 1.78.1-exotic.3-gh sha256 1c0141bf…742fe (same signer 9dedbaf2…) built from pinned source with
+`prepare.py --country GH`; installed on SM_A165F; on-device 37/37, no SEND_SMS, non-debuggable. Unrestricted: deviceidle
+whitelist, RUN_ANY_IN_BACKGROUND allow, standby bucket 5; SMS/phone/notification permissions granted. SIM slot1/subId1,
+MTN (620/01) roaming on Safaricom, carrier reported "Safaricom | MTN". Not yet bound/enrolled/webhooked (needs deploy).

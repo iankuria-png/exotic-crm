@@ -95,8 +95,10 @@ class CollectionPaymentController extends Controller
         }
         if (! empty($v['search'])) {
             $phone = app(\App\Services\Collections\CollectionParserRegistry::class)->anyPhone($v['search']);
+            $identity = app(\App\Services\Collections\GhMtnMomoParser::class)->identity($v['search']);
             $q->where(fn ($search) => $search->where('reference_norm', 'like', '%'.strtoupper($v['search']).'%')
-                ->when($phone, fn ($search) => $search->orWhere('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone))));
+                ->when($phone, fn ($search) => $search->orWhere('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone)))
+                ->when($identity, fn ($search) => $search->orWhere('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($identity))));
         }
         $effective = 'COALESCE(provider_at, first_received_at, collection_receipts.created_at)';
         if (! empty($v['date_from'])) {

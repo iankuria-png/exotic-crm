@@ -297,6 +297,11 @@ class DealPaymentService
             throw new \InvalidArgumentException('Manual payment reference is required.');
         }
 
+        if (! isset($overrides['raw_payload']) && ! isset($overrides['manual_payment_bundle_id'])) {
+            // Staff-typed ID: refuse only a receipt the receiving phone proves is already used or reversed.
+            app(\App\Services\Collections\CollectionReferenceGuard::class)->assertStaffClaim($deal, $reference, (float) ($overrides['amount'] ?? ($deal->amount ?? 0)));
+        }
+
         $referenceRoot = $overrides['reference_root'] ?? $this->normalizeReferenceRoot($reference);
         $transactionUuid = trim((string) ($overrides['transaction_uuid'] ?? ''));
         if ($transactionUuid === '') {

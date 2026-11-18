@@ -18,7 +18,8 @@ class CollectionMatchService
             ->whereNull('revoked_at')->where('valid_until', '>', now())->get() : collect();
         $phoneClients = $receipt->payer_phone ? $this->selectable()->whereIn('platform_id', $platforms)->where('phone_normalized', $receipt->payer_phone)->get() : collect();
         $counts = $history['client_counts'];
-        $ids = array_unique(array_merge(array_keys($counts), $links->pluck('client_id')->all(), $phoneClients->pluck('id')->all(), array_map(fn ($i) => $i->client_id, $valid)));
+        $referenceClients = $this->referenceClients($payer['payer_reference'] ?? null, $platforms);
+        $ids = array_unique(array_merge(array_keys($counts), $links->pluck('client_id')->all(), $phoneClients->pluck('id')->all(), array_map(fn ($i) => $i->client_id, $valid), $referenceClients->pluck('id')->all()));
         $clients = $this->selectable()->whereIn('platform_id', $platforms)->whereIn('id', $ids)->get()->keyBy('id');
         $excluded = app(CollectionMatchExclusionService::class)->clientIds($receipt);
         $evidenceIds = [];
@@ -40,6 +41,11 @@ class CollectionMatchService
             if ($phoneClients->contains('id', $client->id)) {
                 $score = max($score, 80);
                 $reasons[] = 'The full SMS payer phone matches this profile’s advert phone.';
+            }
+            if ($referenceClients->contains('id', $client->id)) {
+                // Below every automatic threshold: a typed name helps staff choose, never decides alone.
+                $score = max($score, 60);
+                $reasons[] = 'The payer’s payment reference names this profile.';
             }
             if (count($valid) === 1 && (int) $valid[0]->client_id === $client->id) {
                 $score = max($score, 95);
@@ -136,6 +142,20 @@ class CollectionMatchService
         $candidate = $suggestions[0];
 
         return is_int($candidate['score'] ?? null) && $candidate['score'] > $threshold ? (int) $candidate['id'] : null;
+    }
+
+    /** Profiles whose name the payer typed as the MoMo reference; ambiguous names give no hint. */
+    private function referenceClients(?string $reference, array $platforms)
+    {
+        $text = mb_strtolower(trim(explode(',', (string) $reference)[0]));
+        $letters = preg_replace('/[^\p{L}]/u', '', $text);
+        if (mb_strlen($letters) < 3 || ! $platforms || preg_match('/^(?:payment|exotic|site|subscription|subscribe|gift|ads?|advert)$/u', $letters)) {
+            return collect();
+        }
+        $matches = $this->selectable()->whereIn('platform_id', $platforms)->where('name', 'like', '%'.mb_substr(preg_split('/[^\p{L}]+/u', $text, -1, PREG_SPLIT_NO_EMPTY)[0], 0, 40).'%')->limit(25)->get()
+            ->filter(fn ($c) => preg_replace('/[^\p{L}]/u', '', mb_strtolower((string) $c->name)) === $letters);
+
+        return $matches->count() >= 1 && $matches->count() <= 2 ? $matches->values() : collect();
     }
 
     private function selectable()

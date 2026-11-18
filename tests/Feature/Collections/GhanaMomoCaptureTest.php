@@ -212,4 +212,81 @@ class GhanaMomoCaptureTest extends CollectionTestCase
         $this->assertSame('233541000001', app(\App\Services\Collections\CollectionSimIdentityService::class)->recipient($device, '+233 54 100 0001'));
         $this->assertSame('shadow', $result['mode']);
     }
+
+    public function test_payer_name_is_the_ghana_identity_and_agents_are_not(): void
+    {
+        [, $device] = $this->ghana();
+        $a = $this->receive($device, $this->momo('94000000201', '380.00', 'Ama  Serwaa'), 'n1');
+        $b = $this->receive($device, $this->momo('94000000202', '230.00', 'AMA SERWAA', 'AMA SERWAA ,233209000001,1 from VODAFONE'), 'n2');
+        $this->assertNotNull($a->payer_fingerprint);
+        $this->assertSame($a->payer_fingerprint, $b->payer_fingerprint);
+        $this->assertSame('233209000001', $b->payer_phone);
+        $cash = $this->receive($device, 'Cash In received for GHS 380.00 from FIXTURE VENTURES. Current Balance GHS 1.00 Available Balance GHS 1.00. Transaction ID: 94000000203. Fee charged: GHS 0.', 'n3');
+        $this->assertNull($cash->payer_fingerprint);
+        $evidence = app(\App\Services\Collections\CollectionPayerEvidenceService::class)->forReceipt($b);
+        $this->assertSame(['AMA SERWAA', 'AMA SERWAA ,233209000001,1 from VODAFONE'], [$evidence['name'], $evidence['payer_reference']]);
+    }
+
+    public function test_history_import_previews_then_seeds_historical_receipts_that_teach_the_matcher(): void
+    {
+        [$account, $device, $market] = $this->ghana();
+        $device->update(['acceptance' => ['country' => 'GH', 'history_recipient' => '233540000099']]);
+        $staff = User::factory()->create(['role' => 'admin']);
+        $account->update(['mode' => 'auto', 'policy' => ['receipt_learning' => ['enabled' => true, 'approved_by' => $staff->id, 'approved_at' => now()->subDays(40)->toIso8601String()]]]);
+        $client = Client::factory()->create(['platform_id' => $market->id, 'name' => 'Example Profile Gh']);
+        $this->product ??= \App\Models\Product::factory()->create(['platform_id' => $market->id, 'currency' => 'GHS']);
+        $paidAt = now()->subDays(10);
+        $deal = Deal::factory()->create(['platform_id' => $market->id, 'client_id' => $client->id, 'product_id' => $this->product->id, 'status' => 'active', 'amount' => '380.00',
+            'currency' => 'GHS', 'activated_at' => $paidAt->copy()->addMinutes(10), 'is_free_trial' => false]);
+        $payment = Payment::factory()->create(['platform_id' => $market->id, 'product_id' => $this->product->id, 'client_id' => $client->id, 'deal_id' => $deal->id,
+            'amount' => '380.00', 'currency' => 'GHS', 'status' => 'completed', 'purpose' => 'subscription', 'transaction_reference' => '93000000301', 'reference_number' => '93000000301']);
+        $deal->update(['payment_id' => $payment->id]);
+        \App\Models\TimelineEvent::create(['entity_type' => 'deal', 'entity_id' => $deal->id, 'platform_id' => $market->id, 'event_type' => 'deal_activated',
+            'actor_id' => $staff->id, 'content' => ['payment_id' => $payment->id], 'created_at' => $paidAt->copy()->addMinutes(10)]);
+        $path = tempnam(sys_get_temp_dir(), 'gh-history');
+        chmod($path, 0600);
+        file_put_contents($path, implode("\n", [
+            json_encode(['id' => 1, 'sender' => 'MobileMoney', 'message' => $this->momo('93000000301', '380.00', 'LEARNED PAYER'), 'receivedAt' => $paidAt->toIso8601String()]),
+            json_encode(['id' => 2, 'sender' => 'MobileMoney', 'message' => 'Go cashless with MoMoPay.', 'receivedAt' => $paidAt->toIso8601String()]),
+            json_encode(['id' => 3, 'sender' => 'MobileMoney', 'message' => $this->momo('90000000999'), 'receivedAt' => now()->subDays(200)->toIso8601String()]),
+        ])."\n");
+        $this->artisan('collections:import-history', ['device' => $device->id, 'jsonl' => $path])->assertSuccessful();
+        $this->assertSame(0, \App\Models\Collections\CollectionReceipt::count());
+        $this->artisan('collections:import-history', ['device' => $device->id, 'jsonl' => $path, '--apply' => true])->assertSuccessful();
+        $seeded = \App\Models\Collections\CollectionReceipt::sole();
+        $this->assertTrue($seeded->historical_only);
+        $this->artisan('collections:import-history', ['device' => $device->id, 'jsonl' => $path, '--apply' => true])->assertSuccessful();
+        $this->assertSame(1, \App\Models\Collections\CollectionReceipt::count());
+        $this->assertTrue(DB::table('collection_audit')->where('action', 'historical_receipts_imported')->exists());
+
+        // The import runs before live capture starts; the learner only reads receipts created before a payment.
+        $this->travel(2)->minutes();
+        $live = $this->receive($device, $this->momo('94000000302', '380.00', 'Learned Payer'), 'live-1');
+        $this->assertFalse($live->historical_only);
+        $match = app(\App\Services\Collections\CollectionMatchService::class)->automatic($live);
+        $this->assertSame($client->id, $match['selected_client_id']);
+        $this->assertSame('staff_confirmed_sms', $match['suggestions'][0]['source']);
+    }
+
+    public function test_staff_cannot_reuse_a_receipt_the_phone_proves_is_used_but_unseen_ids_still_record(): void
+    {
+        [, $device, $market] = $this->ghana();
+        $this->receive($device, $this->momo('94000000401', '380.00', 'GUARD PAYER'), 'g1');
+        $this->receive($device, $this->momo('94000000402', '230.00', 'GUARD PAYER'), 'g2');
+        $this->claim($market, '94000000401', '380.00', now()->subHour());
+        $client = Client::factory()->create(['platform_id' => $market->id]);
+        $deal = Deal::factory()->create(['platform_id' => $market->id, 'client_id' => $client->id, 'product_id' => $this->product->id, 'amount' => '380.00', 'currency' => 'GHS']);
+        $service = app(\App\Services\DealPaymentService::class);
+        foreach (['94000000401' => 'already used for', ' 94000000402 ' => 'received only GHS 230'] as $reference => $message) {
+            try {
+                $service->createManualPaymentForDeal($deal, $client, $reference, 1);
+                $this->fail('Proven over-claim accepted');
+            } catch (\Illuminate\Validation\ValidationException $e) {
+                $this->assertStringContainsString($message, $e->errors()['payment_reference'][0]);
+            }
+        }
+        $this->assertSame('94099999998', $service->createManualPaymentForDeal($deal, $client, '94099999998', 1)->transaction_reference);
+        // Internal collection writers pass their own provenance and are never blocked here.
+        $this->assertSame('94000000401', $service->createManualPaymentForDeal($deal, $client, '94000000401', 1, ['raw_payload' => ['source' => 'manual_collection']])->transaction_reference);
+    }
 }

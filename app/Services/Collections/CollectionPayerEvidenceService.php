@@ -25,6 +25,7 @@ class CollectionPayerEvidenceService
             $names = [];
             $sources = [];
             $parties = [];
+            $payerReference = null;
             $rows = $events->get($receipt->id, collect());
             $complete = $rows->count() <= 200;
             foreach ($rows->take(200) as $event) {
@@ -41,6 +42,7 @@ class CollectionPayerEvidenceService
 
                     continue;
                 }
+                $payerReference ??= ($payer['payer_reference'] ?? null) ?: null;
                 if ($payer['name']) {
                     $names[mb_strtolower($payer['name'])] = $payer['name'];
                     $sources[] = $event->id;
@@ -55,6 +57,8 @@ class CollectionPayerEvidenceService
                 'party' => count($names) ? null : ($parties[0] ?? null),
                 'complete' => $complete && count($names) <= 1,
                 'source_event_ids' => array_values(array_unique($sources)),
+                // Free text the payer typed (Ghana MoMo "Reference"); advisory only.
+                'payer_reference' => $payerReference !== null ? mb_substr($payerReference, 0, 120) : null,
             ];
         }
 
