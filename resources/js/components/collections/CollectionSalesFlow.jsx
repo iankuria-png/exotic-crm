@@ -9,6 +9,7 @@ import CollectionSalesResult from './CollectionSalesResult';
 import SubsidiaryTrialSection from '../clients/SubsidiaryTrialSection';
 import { ProfileSubscription } from './CollectionReceiptEvidence';
 import { MatchReasonPicker } from './CollectionMatchFeedback';
+import CollectionProfileSearch from './CollectionProfileSearch';
 import DiscountPricingEditor, { roundMoney, normalizePayableAmount, discountPercentageFromPayable, discountedAmount, formatNumericInput, formatPercentInput } from '../billing/DiscountPricingEditor';
 
 const button = 'rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-teal-600 disabled:opacity-40';
@@ -190,11 +191,6 @@ function CollectionActionFooter({ target, children }) {
 function AllocationRow({ row, item, index, duplicate, onChange, onRemove, disabled, suggestions = [], needsChoice = false, remaining = 0, availableMinor = 0, topSuggestion = null, overrides = false }) {
     const { user } = useAuth();
     const [changing, setChanging] = useState(!item.client);
-    const [search, setSearch] = useState('');
-    const [term, setTerm] = useState('');
-    useEffect(() => { const timer = setTimeout(() => setTerm(search.trim()), 250); return () => clearTimeout(timer); }, [search]);
-    const results = useQuery({ queryKey: ['collection-sale-search', user?.id, row.id, term], enabled: term.length >= 2,
-        queryFn: async () => (await api.get(`/crm/collections/receipts/${row.id}/candidates`, { params: { search: term, workflow: 'manual' } })).data, retry: false });
     const options = useQuery({ queryKey: ['collection-sale-options', user?.id, row.id, item.client_id], enabled: !!item.client_id,
         queryFn: async () => (await api.get(`/crm/collections/receipts/${row.id}/candidates`, { params: { selected_client_id: item.client_id, workflow: 'manual' } })).data, retry: false });
     const baseMinor = Number(item.purchase?.catalogue_minor || item.purchase?.amount_minor || 0);
@@ -235,12 +231,10 @@ function AllocationRow({ row, item, index, duplicate, onChange, onRemove, disabl
         {item.client && <><ProfileSubscription status={options.data?.clients?.[0]?.status || item.client.status} /><button type="button" className="py-2 text-sm font-medium text-teal-800 underline" onClick={() => setChanging(value => !value)} aria-expanded={changing}>Change profile</button></>}
         {item.client && (overrides || !topSuggestion) && <MatchReasonPicker id={`receipt-${row.id}-profile-${index}`} suggestion={overrides ? topSuggestion : null} chosenName={item.client.name}
             value={item.match_reason} note={item.match_note} required={overrides} disabled={disabled} onChange={({ reason, note }) => onChange({ match_reason: reason, match_note: note })} />}
-        {changing && <div className="space-y-2"><label className="block text-sm font-medium">Find advertiser profile<input className="crm-input mt-1" value={search} onChange={e => setSearch(e.target.value)} placeholder="Name, full phone number or profile" /></label>
+        {changing && <div className="space-y-2">
             {needsChoice && !item.client && <p className="text-xs text-amber-900">Choose the intended profile. The payment evidence does not identify one unique customer.</p>}
-            {results.isFetching && <p role="status" className="text-xs text-slate-500">Searching permitted profiles…</p>}
-            {results.isError && <p role="alert" className="text-sm text-rose-800">Search failed. <button type="button" className="underline" onClick={() => results.refetch()}>Try again</button></p>}
-            {(term.length >= 2 ? results.data?.clients || [] : suggestions).map(client => <div key={client.id} className="flex items-center gap-3 rounded-lg border border-slate-200 p-3"><button type="button" className="min-w-0 flex-1 text-left hover:text-teal-800 focus-visible:ring-2 focus-visible:ring-teal-600" onClick={() => { onChange({ client, client_id: client.id, product_price_id: '', deal_id: null, saved_intent_id: null, purchase: null, discount: { enabled: false }, discount_ready: true, replace_saved_price: false, subsidiary_trial: { enabled: false }, subsidiary_ready: true }); setChanging(false); setSearch(''); }}><strong>{client.name}</strong><span className="ml-2 text-xs text-slate-500">Profile {client.wp_post_id}</span>{client.reasons?.[0] && <span className="mt-1 block text-xs text-slate-500">{client.reasons[0]}</span>}</button><Link to={`/clients/${client.id}`} target="_blank" rel="noopener noreferrer" aria-label={`Open ${client.name} profile in a new tab`} className="shrink-0 py-2 text-sm font-medium text-teal-800 underline">Open profile</Link></div>)}
-            {term.length >= 2 && results.isSuccess && !results.data?.clients?.length && <p className="text-sm text-slate-500">No matching profile found. Try a different name or phone.</p>}
+            <CollectionProfileSearch receiptId={row.id} suggestions={suggestions} disabled={disabled} autoFocus={!!item.client}
+                onChoose={client => { onChange({ client, client_id: client.id, product_price_id: '', deal_id: null, saved_intent_id: null, purchase: null, discount: { enabled: false }, discount_ready: true, replace_saved_price: false, subsidiary_trial: { enabled: false }, subsidiary_ready: true }); setChanging(false); }} />
         </div>}
         {item.client && <label className="block text-sm font-medium">Purchased service<select className="crm-input mt-1" value={item.saved_intent_id ? `saved:${item.product_price_id}` : item.deal_id ? `quote:${item.deal_id}` : item.product_price_id || ''} onChange={e => price(e.target.value)}><option value="">Choose exact package and duration</option>{item.saved_intent_id && item.purchase && <option value={`saved:${item.product_price_id}`}>Saved purchase · {item.purchase.tier.toUpperCase()} · {item.purchase.duration_days} days · {money(item.purchase.amount_minor, row.currency)}</option>}{options.data?.quotes?.filter(q => q.status === 'pending' && (!item.saved_intent_id || q.id !== item.deal_id)).map(q => <option key={`q${q.id}`} value={`quote:${q.id}`}>{q.product_price_id ? 'Existing quote' : 'Custom quote'} · {q.plan_type.toUpperCase()} · {q.duration_days} days · {q.currency} {Number(q.amount).toLocaleString()}</option>)}{options.data?.prices?.map(p => <option value={item.saved_intent_id ? `catalogue:${p.id}` : p.id} key={p.id}>{p.product.name} · {p.duration_days} days · {p.currency} {Number(p.price).toLocaleString()}</option>)}</select></label>}
         {item.purchase?.custom_quote && <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs leading-5 text-slate-600 ring-1 ring-inset ring-slate-200"><span className="font-semibold text-slate-800">Custom quote created by staff.</span> {item.purchase.duration_days} days for {money(item.purchase.amount_minor, item.purchase.currency)}. This price and duration are final: no discount or extra market can be added.{remaining < 0 ? ' It is more than this payment, so choose a catalogue package instead or share the payment differently.' : ''}</p>}

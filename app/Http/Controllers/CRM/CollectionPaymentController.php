@@ -250,7 +250,7 @@ class CollectionPaymentController extends Controller
     {
         $this->enabled();
         $r = $this->access->receipt($request->user(), $receipt);
-        $v = $request->validate(['search' => 'required_without:selected_client_id|string|min:2|max:128',
+        $v = $request->validate(['search' => 'required_without:selected_client_id|string|min:2|max:500',
             'selected_client_id' => 'nullable|integer|min:1', 'subsidiary_for_client_id' => 'nullable|integer|min:1', 'workflow' => 'nullable|in:manual']);
         $context = app(CollectionReviewContextService::class);
         if (! empty($v['selected_client_id'])) {
@@ -270,15 +270,12 @@ class CollectionPaymentController extends Controller
 
             return response()->json(['clients' => $context->clientRows($clients)])->header('Cache-Control', 'private, no-store');
         }
-        $term = $v['search'];
+        // Same search staff use on the Clients page: profile links, names, phones, emails and IDs.
+        $found = app(\App\Services\Collections\CollectionProfileSearch::class)->search($r, $request->user(), $v['search']);
         $platforms = DB::table('collection_account_platforms')->where('account_id', $r->account_id)->whereNull('valid_until')->pluck('platform_id');
-        $phone = app(\App\Services\Collections\CollectionParserRegistry::class)->anyPhone($term);
-        $payerClients = $phone ? CollectionPayerLink::where('account_id', $r->account_id)->where('payer_fingerprint', app(CollectionPrivacy::class)->fingerprint($phone))->whereNull('revoked_at')->where('valid_until', '>', now())->pluck('client_id')->all() : [];
-        $clients = $context->selectable()->whereIn('platform_id', $platforms)->where(function ($q) use ($term, $payerClients, $phone) {
-            $q->where('name', 'like', '%'.$term.'%')->orWhere('wp_profile_permalink', $term)->orWhere('wp_profile_permalink', rtrim($term, '/').'/')->orWhere('phone_normalized', 'like', '%'.($phone ?? $term).'%')->orWhere('wp_post_id', $term)->orWhereIn('id', $payerClients);
-        })->orderBy('name')->limit(20)->get();
+        $clients = collect($found['clients'])->map(fn ($row) => (object) $row);
 
-        return response()->json(['clients' => $context->clientRows($clients), 'prices' => ProductPrice::with('product:id,name,tier,platform_id')->where('is_active', true)->where('currency', $r->currency)
+        return response()->json(['clients' => $found['clients'], 'resolution' => $found['resolution'], 'prices' => ProductPrice::with('product:id,name,tier,platform_id')->where('is_active', true)->where('currency', $r->currency)
             ->whereHas('product', fn ($q) => $q->whereIn('platform_id', $platforms)->where('is_active', true)->where(fn ($q) => $q->whereNull('is_archived')->orWhere('is_archived', false)))->get(),
             'quotes' => Deal::whereIn('client_id', $clients->pluck('id'))->whereIn('status', ['pending', 'active'])->where('currency', $r->currency)->orderByDesc('id')->limit(60)->get(['id', 'client_id', 'product_price_id', 'plan_type', 'duration_days', 'amount', 'currency', 'discount_source', 'discount_approved_by']),
             'recent_subscriptions' => Deal::whereIn('client_id', $clients->pluck('id'))->whereNotNull('activated_at')->where('amount', '>', 0)

@@ -140,3 +140,30 @@ test('a custom-duration quote can be chosen and is sent as the quote itself', as
     await activate.click();
     await expect.poll(() => state.mutations.find(m => m.path.endsWith('/sales/preview'))?.body.items[0]).toMatchObject({ client_id: 43, product_price_id: null, deal_id: 500 });
 });
+
+test('profile search works like the Clients page: paste a link, see why it matched, Enter picks it', async ({ page }) => {
+    await setup(page, { unsaved: true });
+    const searches = [];
+    await page.route('**/api/crm/collections/receipts/1/candidates**', route => {
+        const url = new URL(route.request().url()); const search = url.searchParams.get('search');
+        if (!search) return route.fallback();
+        searches.push(search);
+        const linzy = { id: 43, name: 'Example Profile B', wp_post_id: 10002, platform_id: 6, matched_by: 'profile_link', phone: '+255711222333', city: 'Dar es Salaam', status: { subscription: null } };
+        if (search.includes('another-market')) return route.fulfill({ json: { clients: [], resolution: { mode: 'unresolved', source: 'host_mismatch' } } });
+        return route.fulfill({ json: { clients: [linzy], resolution: { mode: 'exact', source: 'stored_slug', resolved_wp_post_id: 10002 } } });
+    });
+    const profile = page.getByRole('group', { name: 'PROFILE 1', exact: true });
+    await profile.getByRole('button', { name: 'Change profile', exact: true }).click();
+    const box = profile.getByRole('textbox', { name: 'Find advertiser profile' });
+    await expect(box).toBeFocused();
+    await box.fill('https://www.another-market.test/escort/linzy/');
+    await expect(profile).toContainText('This link is not from this payment’s market');
+    await box.fill('https://www.tz-fixture.test/escort/linzy/');
+    await expect(profile).toContainText('Exact profile link match');
+    await expect(profile).toContainText('Matched the pasted link directly to profile 10002.');
+    await expect(profile.getByRole('button', { name: /Choose Example Profile B · Profile 10002 · matched by Profile link/ })).toBeVisible();
+    await expect(profile).toContainText('Profile 10002 · Dar es Salaam · +255711222333');
+    await box.press('Enter');
+    await expect(profile.getByRole('link', { name: 'Example Profile B', exact: true })).toBeVisible();
+    expect(searches).toContain('https://www.tz-fixture.test/escort/linzy/');
+});

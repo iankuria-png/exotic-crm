@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { primaryButton, secondaryButton } from './collectionUi';
 import { MatchReasonPicker } from './CollectionMatchFeedback';
+import CollectionProfileSearch from './CollectionProfileSearch';
 
 const explanations = {
     purchase_authority_stale_or_incompatible: 'The selected package or profile is no longer eligible for this payment. Check the package price and profile details.',
@@ -56,8 +57,6 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
     const removing = action === 'undo_effect';
     const initialTarget = initialCorrection?.preview?.target_client || (initialCorrection?.preview?.target ? { ...initialCorrection.preview.target, id: initialCorrection.preview.target.client_id, name: initialCorrection.preview.target.name || 'Selected profile' } : null);
     const [target, setTarget] = useState(initialTarget || (!removed && !removing ? (sourceClient || { id: source.client_id, name: sourceName, platform_id: source.platform_id }) : null));
-    const [term, setTerm] = useState('');
-    const [searchTerm, setSearchTerm] = useState('');
     const [price, setPrice] = useState('');
     const [note, setNote] = useState('');
     const [why, setWhy] = useState({ reason: '', note: '' });
@@ -94,11 +93,8 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
         if (finished(serverCorrection.state)) complete(serverCorrection);
     }, [serverCorrection]);
 
-    useEffect(() => { const timer = setTimeout(() => setSearchTerm(term.trim()), 250); return () => clearTimeout(timer); }, [term]);
     const context = useQuery({ queryKey: ['correction-suggestions', receipt.id], enabled: !removing,
         queryFn: () => api.get(base + '/review-context', { params: { workflow: 'manual' } }).then(r => r.data), retry: false });
-    const search = useQuery({ queryKey: ['correction-profiles', receipt.id, searchTerm], enabled: !removing && searchTerm.length >= 2,
-        queryFn: () => api.get(base + '/candidates', { params: { search: searchTerm, workflow: 'manual' } }).then(r => r.data), retry: false });
     const options = useQuery({ queryKey: ['correction-packages', receipt.id, target?.id], enabled: !removing && Boolean(target),
         queryFn: () => api.get(base + '/candidates', { params: { selected_client_id: target.id, workflow: 'manual' } }).then(r => r.data), retry: false });
     const prices = (options.data?.prices || []).filter(p => Number(p.product?.platform_id) === Number(source.platform_id));
@@ -110,11 +106,9 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
         const equivalent = valid.filter(p => p.product?.tier === source.tier && Number(p.duration_days) === Number(source.duration_days) && Math.round(Number(p.price) * 100) === amount);
         setPrice(same ? String(same.id) : equivalent.length === 1 ? String(equivalent[0].id) : '');
     }, [options.data, source.product_price_id, source.platform_id, source.tier, source.duration_days, amount]);
-    const suggestions = searchTerm.length >= 2 ? search.data?.clients || [] : context.data?.suggestions || receipt.match_suggestions || [];
-    const candidates = suggestions.filter(c => Number(c.platform_id) === Number(source.platform_id));
     const chosenPrice = prices.find(p => String(p.id) === price);
     function choose(client) {
-        setTarget(client); setTerm(''); setSearchTerm(''); explicitPrice.current = false; setPrice(''); setSaved(null); setError(''); key.current = crypto.randomUUID();
+        setTarget(client); explicitPrice.current = false; setPrice(''); setSaved(null); setError(''); key.current = crypto.randomUUID();
     }
     async function submit(event) {
         event.preventDefault(); if (busy || (!started.current && !removing && relatedHold)) return;
@@ -160,14 +154,10 @@ export default function CollectionActivationCorrection({ receipt, item = null, a
         {locked && saved && <CorrectionProgress receipt={receipt} correction={saved} />}
         {!removing && relatedHold && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-950">Review the related payment record before assigning this payment again. Existing subscriptions stay in place.</p>}
         {!removing && !locked && <>
-            <label className="block text-sm font-medium text-slate-800">Profile
-                <input className="crm-input mt-1 w-full" value={term} onChange={e => setTerm(e.target.value)} placeholder="Search by name, phone or profile link" disabled={busy} />
-            </label>
             {target && <div className="flex items-center justify-between gap-3 rounded-lg border border-teal-200 bg-teal-50/60 px-3 py-2.5"><div><p className="text-sm font-semibold text-teal-950">{target.name}</p><p className="mt-0.5 text-xs text-teal-800">{Number(target.id) === Number(source.client_id) ? 'Current profile' : 'Selected profile'}</p></div><span aria-hidden="true" className="text-teal-700">✓</span></div>}
-            {(search.isFetching || context.isPending) && <p role="status" className="text-xs text-slate-600">Finding profiles…</p>}
-            {((searchTerm.length >= 2 && search.isError) || (!searchTerm && context.isError)) && <p role="alert" className="text-sm text-rose-800">Profiles could not be loaded. <button type="button" className="min-h-11 underline" onClick={() => searchTerm ? search.refetch() : context.refetch()}>Try again</button></p>}
-            {!!candidates.filter(c => Number(c.id) !== Number(target?.id)).length && <div className="space-y-1" aria-label="Suggested profiles">{candidates.filter(c => Number(c.id) !== Number(target?.id)).slice(0, 8).map(c => <button key={c.id} type="button" className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-800 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600" disabled={busy} onClick={() => choose(c)}><span className="font-medium">{c.name}</span><span className="text-xs text-teal-800">Choose</span></button>)}</div>}
-            {searchTerm.length >= 2 && !search.isFetching && !search.isError && !candidates.length && <p className="text-sm text-slate-600">No profiles found. Try the name or full profile link.</p>}
+            {context.isError && <p role="alert" className="text-sm text-rose-800">Suggested profiles could not be loaded. <button type="button" className="min-h-11 underline" onClick={() => context.refetch()}>Try again</button></p>}
+            <CollectionProfileSearch receiptId={receipt.id} platformId={source.platform_id} label="Find the right profile" excludeId={target?.id} disabled={busy}
+                suggestions={context.data?.suggestions || receipt.match_suggestions || []} onChoose={choose} />
             {target && <label className="block text-sm font-medium text-slate-800">Package
                 <select className="crm-input mt-1 w-full" value={price} disabled={busy || options.isPending} onChange={e => { setPrice(e.target.value); explicitPrice.current = true; setSaved(null); setError(''); }}>
                     <option value="">{options.isPending ? 'Loading packages…' : 'Choose the purchased package'}</option>
