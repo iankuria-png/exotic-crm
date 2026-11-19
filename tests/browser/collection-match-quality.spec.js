@@ -114,3 +114,29 @@ test('matching quality has honest empty and error states', async ({ page }) => {
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('Matching quality could not be loaded.');
 });
+
+test('a custom-duration quote can be chosen and is sent as the quote itself', async ({ page }) => {
+    const state = await setup(page);
+    const price = { id: 8, price: '35000.00', currency: 'TZS', duration_days: 7, product: { id: 4, name: 'VIP', tier: 'vip', platform_id: 6 } };
+    const custom = { id: 500, client_id: 43, product_price_id: null, plan_type: 'premium', duration_days: 16, amount: '35000.00', currency: 'TZS', status: 'pending' };
+    await page.route('**/api/crm/collections/receipts/1/candidates**', route => {
+        const url = new URL(route.request().url());
+        const clients = [{ id: 42, name: 'Example Profile A', wp_post_id: 10001, platform_id: 6 }, { id: 43, name: 'Example Profile B', wp_post_id: 10002, platform_id: 6 }];
+        return route.fulfill({ json: { clients: url.searchParams.has('selected_client_id') ? clients.filter(c => String(c.id) === url.searchParams.get('selected_client_id')) : clients,
+            discount_policy: { pin_configured: true, max_percentage: 40 }, prices: [price], quotes: url.searchParams.get('selected_client_id') === '43' ? [custom] : [], subsidiary_clients: [], subsidiary_platform_id: null } });
+    });
+    const profile = page.getByRole('group', { name: 'PROFILE 1', exact: true });
+    await profile.getByRole('button', { name: 'Change profile', exact: true }).click();
+    await profile.getByRole('textbox', { name: 'Find advertiser profile' }).fill('Example');
+    await profile.getByRole('button', { name: /Example Profile B.*Profile 10002/ }).click();
+    const service = profile.getByRole('combobox', { name: 'Purchased service' });
+    await expect(service.locator('option', { hasText: 'Custom quote · PREMIUM · 16 days · TZS 35,000' })).toHaveCount(1);
+    await service.selectOption('quote:500');
+    await expect(profile).toContainText('Custom quote created by staff. 16 days for TZS 35,000. This price and duration are final');
+    await expect(profile.getByRole('checkbox', { name: /^Include (Tanzania|another market)/ })).toHaveCount(0);
+    await profile.getByRole('radio', { name: 'Advertiser told us' }).check({ force: true });
+    const activate = page.getByRole('button', { name: 'Activate subscription', exact: true });
+    await expect(activate).toBeEnabled();
+    await activate.click();
+    await expect.poll(() => state.mutations.find(m => m.path.endsWith('/sales/preview'))?.body.items[0]).toMatchObject({ client_id: 43, product_price_id: null, deal_id: 500 });
+});

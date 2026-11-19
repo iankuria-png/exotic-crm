@@ -45,7 +45,8 @@ class CollectionSalesController extends Controller
     {
         return $request->validate(['receipt_version' => 'required|integer|min:1', 'session_version' => 'required|integer|min:0',
             'items' => 'required|array|min:1|max:20', 'items.*.client_id' => 'required|integer|min:1',
-            'items.*.product_price_id' => 'required|integer|min:1', 'items.*.saved_intent_id' => 'nullable|uuid',
+            // A staff-created custom quote has no catalogue price; it is then identified by its deal.
+            'items.*.product_price_id' => 'nullable|required_without:items.*.deal_id|integer|min:1', 'items.*.saved_intent_id' => 'nullable|uuid',
             'items.*.deal_id' => 'nullable|integer|min:1', 'items.*.subsidiary_client_id' => 'nullable|integer|min:1',
             'items.*.subscription_lifecycle' => 'nullable|in:new,renewal', 'items.*.subscription_lifecycle_reason' => 'nullable|string|max:1000',
             'items.*.replace_saved_price' => 'nullable|boolean',

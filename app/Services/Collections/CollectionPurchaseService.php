@@ -46,6 +46,9 @@ class CollectionPurchaseService
         if ($standing) {
             app(MarketAuthorizationService::class)->ensureManager($actor);
         }
+        if (empty($input['product_price_id'])) {
+            return $this->prepareCustomQuote($account, $client, $actor, $input, $standing, $legacySubsidiary);
+        }
         $price = app(DealPaymentService::class)->resolveScopedProductPrice((int) $input['product_price_id'],
             app(DealPaymentService::class)->resolveScopedProduct((int) ProductPrice::findOrFail($input['product_price_id'])->product_id, $client->platform_id));
         $product = $price->product;
@@ -91,6 +94,43 @@ class CollectionPurchaseService
             'payer_link_id' => $link?->id, 'authority' => $standing ? 'standing_agreement' : 'reviewed_quote', 'provider_reference' => $input['provider_reference'] ?? null,
             'purchase_snapshot' => $snapshot, 'deal_id' => $standing ? null : $deal?->id, 'payment_id' => $standing ? null : $deal?->payment_id,
             'approved_by' => $actor->id, 'approved_at' => now(), 'valid_from' => now(), 'valid_until' => $input['valid_until'], 'max_renewals' => $standing ? ($input['max_renewals'] ?? 1) : 1]);
+    }
+
+    /**
+     * A staff-created custom quote (custom amount and duration, no catalogue price) paid by a reviewed receipt.
+     * Its own amount, duration and tier are the purchase. Staff review only: never a standing or automatic authority,
+     * no discount and no same-period subsidiary benefit.
+     */
+    private function prepareCustomQuote(CollectionAccount $account, Client $client, User $actor, array $input, bool $standing, bool $legacySubsidiary): CollectionPurchaseIntent
+    {
+        if ($standing || empty($input['deal_id'])) {
+            throw new CollectionException('custom_quote_requires_staff_review', 422);
+        }
+        $deal = Deal::where('client_id', $client->id)->where('platform_id', $client->platform_id)->findOrFail($input['deal_id']);
+        $product = app(DealPaymentService::class)->resolveScopedProduct((int) $deal->product_id, (int) $client->platform_id);
+        $minor = app(TzMpesaParser::class)->minor((string) $deal->amount);
+        if ($deal->product_price_id || ! in_array($deal->status, ['pending', 'active'], true) || $minor <= 0
+            || (int) $deal->duration_days < 1 || (int) $deal->duration_days > 365 || $deal->currency !== $account->currency
+            || ! $product->is_active || $product->is_archived || ! in_array($product->tier, ['basic', 'premium', 'vip', 'vvip'], true)
+            || $deal->plan_type !== $product->tier) {
+            throw new CollectionException('purchase_terms_incompatible', 422);
+        }
+        if ($legacySubsidiary && config('collection.subsidiary_platforms.'.$client->platform_id)) {
+            throw new CollectionException('custom_quote_subsidiary_benefit_unsupported', 422);
+        }
+        $days = (int) $deal->duration_days;
+        $snapshot = ['client_id' => $client->id, 'platform_id' => $client->platform_id, 'wp_post_id' => $client->wp_post_id, 'wp_user_id' => $client->wp_user_id,
+            'product_id' => $product->id, 'product_price_id' => null, 'base_product_price_id' => $deal->base_product_price_id ? (int) $deal->base_product_price_id : null,
+            'custom_quote' => true, 'tier' => $product->tier, 'duration_days' => $days, 'duration_key' => 'custom_'.$days, 'duration_label' => $days.' days',
+            'amount_minor' => $minor, 'currency' => $deal->currency, 'catalogue_minor' => $minor,
+            'discount_approved_by' => $deal->discount_approved_by, 'discount_source' => $deal->discount_source,
+            'original_amount' => $deal->original_amount, 'discount_percentage' => $deal->discount_percentage,
+            'stacking' => 'same_tier', 'identity_authority' => 'staff_reviewed_quote', 'subsidiary' => null];
+
+        return new CollectionPurchaseIntent(['id' => (string) Str::uuid(), 'account_id' => $account->id, 'client_id' => $client->id, 'platform_id' => $client->platform_id,
+            'payer_link_id' => null, 'authority' => 'reviewed_quote', 'provider_reference' => $input['provider_reference'] ?? null,
+            'purchase_snapshot' => $snapshot, 'deal_id' => $deal->id, 'payment_id' => $deal->payment_id,
+            'approved_by' => $actor->id, 'approved_at' => now(), 'valid_from' => now(), 'valid_until' => $input['valid_until'], 'max_renewals' => 1]);
     }
 
     /** Capture exact existing pricing authority; never invent a duration or approve a discount. */
@@ -168,7 +208,16 @@ class CollectionPurchaseService
     {
         $p = $intent->purchase_snapshot;
         $client = Client::findOrFail($intent->client_id);
-        $price = ProductPrice::with('product')->find($p['product_price_id']);
+        $custom = ! empty($p['custom_quote']);
+        $price = $custom ? null : ProductPrice::with('product')->find($p['product_price_id']);
+        $product = $custom ? \App\Models\Product::find($p['product_id']) : $price?->product;
+        // A custom quote has no catalogue price: its product, the quote itself and staff review are the authority.
+        $catalogueStale = $custom
+            ? ($automatic || $intent->authority !== 'reviewed_quote' || ! $intent->deal_id || ! $product || ! $product->is_active || $product->is_archived
+                || $product->tier !== $p['tier'] || (int) $p['duration_days'] < 1 || (int) $p['duration_days'] > 365)
+            : (! $price || ! $price->is_active || ! $price->product?->is_active || $price->product->is_archived
+                || $price->product->tier !== $p['tier'] || (int) $price->duration_days !== (int) $p['duration_days']
+                || (int) $price->product_id !== (int) $p['product_id'] || $price->currency !== $p['currency']);
         if (! in_array($intent->authority, ['standing_agreement', 'reviewed_quote', 'matched_catalogue', 'matched_receipt_history'], true)
             || ! in_array($p['identity_authority'] ?? '', ['reviewed_payer', 'staff_reviewed_quote', 'rule_supported_payer'], true)
             || ($p['stacking'] ?? '') !== 'same_tier') {
@@ -179,9 +228,7 @@ class CollectionPurchaseService
             || (! $reserved && $intent->used_count >= $intent->max_renewals)
             || (int) $client->platform_id !== (int) $intent->platform_id || (int) $client->wp_post_id !== (int) $p['wp_post_id'] || (int) $client->wp_user_id !== (int) $p['wp_user_id']
             || ! $client->wp_post_id || ! $client->wp_user_id || $client->profile_removal_requested_at || $client->profile_paused_at || $client->closed_at || $client->profile_reverted_at || $client->is_high_risk
-            || in_array($client->lifecycle_state, ['archived', 'removed']) || ! $price || ! $price->is_active || ! $price->product?->is_active || $price->product->is_archived
-            || $price->product->tier !== $p['tier'] || (int) $price->duration_days !== (int) $p['duration_days']
-            || (int) $price->product_id !== (int) $p['product_id'] || $price->currency !== $p['currency']
+            || in_array($client->lifecycle_state, ['archived', 'removed']) || $catalogueStale
             || (int) $p['amount_minor'] !== $receipt->principal_minor || $p['currency'] !== $receipt->currency) {
             throw new CollectionException('purchase_authority_stale_or_incompatible', 422);
         }
@@ -200,6 +247,7 @@ class CollectionPurchaseService
             $quote = Deal::find($intent->deal_id);
             if (! $quote || (int) $quote->client_id !== (int) $client->id || ! in_array($quote->status, ['pending', 'active'])
                 || (int) $quote->product_price_id !== (int) $p['product_price_id'] || (int) $quote->duration_days !== (int) $p['duration_days']
+                || ($custom && (int) $quote->product_id !== (int) $p['product_id'])
                 || app(TzMpesaParser::class)->minor((string) $quote->amount) !== (int) $p['amount_minor'] || $quote->currency !== $p['currency']
                 || (string) $quote->discount_approved_by !== (string) ($p['discount_approved_by'] ?? '')
                 || (string) $quote->discount_source !== (string) ($p['discount_source'] ?? '')) {

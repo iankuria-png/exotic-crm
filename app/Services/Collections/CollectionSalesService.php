@@ -79,7 +79,7 @@ class CollectionSalesService
                 throw new CollectionException('saved_purchase_changed');
             }
             $terms = ['authority' => 'reviewed_quote', 'valid_until' => now()->addMinutes(5), 'provider_reference' => $receipt->reference_norm,
-                'product_price_id' => (int) $value['product_price_id'], 'deal_id' => $value['deal_id'] ?? $saved?->deal_id,
+                'product_price_id' => ! empty($value['product_price_id']) ? (int) $value['product_price_id'] : null, 'deal_id' => $value['deal_id'] ?? $saved?->deal_id,
                 'subsidiary_client_id' => $value['subsidiary_client_id'] ?? data_get($saved?->purchase_snapshot, 'subsidiary.client_id')];
             $discount = $value['discount'] ?? [];
             $newDiscount = ! empty($discount['enabled']);
@@ -98,6 +98,15 @@ class CollectionSalesService
             $amendBenefit = ! empty($value['replace_saved_benefit']) && (bool) data_get($saved?->purchase_snapshot, 'subsidiary');
             $legacyBenefit = (bool) data_get($saved?->purchase_snapshot, 'subsidiary') && ! $amendBenefit;
             $prepared = app(CollectionPurchaseService::class)->prepare($receipt->account, $client, $actor, $terms, $legacyBenefit);
+            if (! empty($prepared->purchase_snapshot['custom_quote'])) {
+                // The custom quote's price and duration are final terms agreed by staff.
+                if ($newDiscount || $replacePrice) {
+                    throw new CollectionException('custom_quote_price_is_final', 422);
+                }
+                if (! empty($value['subsidiary_trial']['enabled'])) {
+                    throw new CollectionException('custom_quote_trial_unsupported', 422);
+                }
+            }
             if ($quoteToAmend) {
                 $prepared->deal_id = $quoteToAmend;
             }

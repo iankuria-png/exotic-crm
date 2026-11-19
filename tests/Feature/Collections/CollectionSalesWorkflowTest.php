@@ -194,6 +194,64 @@ class CollectionSalesWorkflowTest extends CollectionWorkflowTestCase
         $this->assertSame(1, DB::table('payments')->count());
     }
 
+    private function customQuote($client, $price, string $amount = '35000.00', int $days = 16): \App\Models\Deal
+    {
+        return \App\Models\Deal::create(['platform_id' => $client->platform_id, 'client_id' => $client->id, 'product_id' => $price->product_id,
+            'product_price_id' => null, 'base_product_price_id' => $price->id, 'plan_type' => 'vip', 'amount' => $amount, 'currency' => 'TZS',
+            'duration' => 'manual', 'duration_days' => $days, 'status' => 'pending']);
+    }
+
+    public function test_staff_activate_a_custom_duration_quote_from_a_receipt_with_its_own_terms(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $quote = $this->customQuote($client, $price);
+        $this->getJson('/api/crm/collections/receipts/'.$r->id.'/candidates?workflow=manual&selected_client_id='.$client->id)->assertOk()
+            ->assertJsonFragment(['id' => $quote->id, 'product_price_id' => null, 'duration_days' => 16]);
+        $this->fakeWordPress();
+        $input = ['receipt_version' => $r->version, 'session_version' => 0, 'request_key' => (string) Str::uuid(),
+            'items' => [['client_id' => $client->id, 'product_price_id' => null, 'deal_id' => $quote->id]]];
+        $preview = $this->postJson('/api/crm/collections/receipts/'.$r->id.'/sales/preview', $input)->assertOk()
+            ->assertJsonPath('items.0.purchase.custom_quote', true)->assertJsonPath('items.0.purchase.duration_days', 16)
+            ->assertJsonPath('items.0.purchase.product_price_id', null)->assertJsonPath('items.0.amount_minor', 3500000)->json();
+        $service = app(\App\Services\Collections\CollectionSalesFulfillmentService::class);
+        $result = $this->accepted($input, $r, $actor);
+        $session = $service->prepare($r, $actor, $result)['session'];
+        $this->assertSame('prepared', $session['state']);
+        $item = \App\Models\Collections\CollectionSalesItem::firstOrFail();
+        $this->assertSame($quote->id, $item->deal_id, 'The staff quote itself is activated; no catalogue deal is created.');
+        $this->assertSame('confirmed', $service->resume($item->id)->state);
+        $this->assertSame(1, $this->posts);
+        $quote->refresh();
+        $this->assertSame('active', $quote->status);
+        $this->assertNull($quote->product_price_id);
+        $this->assertSame(16, (int) $quote->duration_days);
+        $expiry = (int) $this->remote[77]['meta']['escort_expire'];
+        $this->assertEqualsWithDelta(now()->addDays(16)->timestamp, $expiry, 120, 'Site coverage uses the quote duration.');
+        $this->assertSame(1, \App\Models\Deal::where('client_id', $client->id)->count());
+        $this->assertNotEmpty($preview['preview_token']);
+    }
+
+    public function test_custom_quote_terms_are_final_and_mismatches_are_refused(): void
+    {
+        [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
+        $base = ['receipt_version' => $r->version, 'session_version' => 0, 'request_key' => (string) Str::uuid()];
+        $path = '/api/crm/collections/receipts/'.$r->id.'/sales/preview';
+        $quote = $this->customQuote($client, $price);
+        $this->postJson($path, $base + ['items' => [['client_id' => $client->id]]])->assertStatus(422);
+        $this->postJson($path, $base + ['items' => [['client_id' => $client->id, 'deal_id' => $quote->id,
+            'discount' => ['enabled' => true, 'payable_amount' => '30000', 'pin' => '1234']]]])->assertStatus(422)->assertJsonPath('reason', 'custom_quote_price_is_final');
+        $this->postJson($path, $base + ['items' => [['client_id' => $client->id, 'deal_id' => $quote->id,
+            'subsidiary_trial' => ['enabled' => true, 'platform_id' => 2, 'duration_days' => 7, 'preview_token' => 'x', 'request_key' => (string) Str::uuid()]]]])
+            ->assertStatus(422)->assertJsonPath('reason', 'custom_quote_trial_unsupported');
+        $other = \App\Models\Client::factory()->create(['platform_id' => $client->platform_id, 'wp_post_id' => 78, 'wp_user_id' => 56, 'is_high_risk' => false]);
+        $this->postJson($path, $base + ['items' => [['client_id' => $other->id, 'deal_id' => $quote->id]]])->assertNotFound();
+        $quote->update(['currency' => 'KES']);
+        $this->postJson($path, $base + ['items' => [['client_id' => $client->id, 'deal_id' => $quote->id]]])->assertStatus(422)->assertJsonPath('reason', 'purchase_terms_incompatible');
+        $quote->update(['currency' => 'TZS', 'amount' => '40000.00']);
+        $this->postJson($path, $base + ['items' => [['client_id' => $client->id, 'deal_id' => $quote->id]]])->assertStatus(422);
+        $this->assertSame(['deals' => 1, 'payments' => 0], $this->counts());
+    }
+
     public function test_activation_is_not_blocked_by_status_clock_or_background_sync_between_preview_and_confirm(): void
     {
         [$account, $device, $client, $intent, $actor, $price, $r] = $this->fixture();
