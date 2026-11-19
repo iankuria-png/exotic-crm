@@ -15,6 +15,9 @@ class CollectionDefaultGatesTest extends TestCase
         }
         $this->assertSame(['c12d64b4-d300-4927-bea1-94301e28c1ef', '5c1b4a9f-b95e-4e64-bbf9-76ccc5c713d6'], config('collection.automatic_accounts'));
         $this->assertSame([6 => 2], config('collection.subsidiary_platforms'));
+        // Staff Match & activate is released for the same two wallets and their paid markets.
+        $this->assertSame(['c12d64b4-d300-4927-bea1-94301e28c1ef', '5c1b4a9f-b95e-4e64-bbf9-76ccc5c713d6'], config('collection_sales.verified_accounts'));
+        $this->assertSame([6, 3], config('collection_sales.verified_platforms'));
         $this->assertSame('full_purchased', config('collection.correction_duration_policy'));
     }
 }
