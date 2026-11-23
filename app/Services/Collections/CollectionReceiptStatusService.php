@@ -124,7 +124,7 @@ class CollectionReceiptStatusService
                 }
             }
         };
-        foreach (array_chunk($references, 500) as $chunk) {
+        foreach (array_chunk($references, DB::connection()->getDriverName() === 'mysql' ? 5000 : 500) as $chunk) {
             DB::table('payments')->whereIn('platform_id', $platforms)
                 ->where(fn ($q) => $q->whereNull('resolution_code')->orWhere('resolution_code', '!=', Payment::RESOLUTION_RECEIPT_DUPLICATE))
                 ->where(function ($q) use ($chunk) {

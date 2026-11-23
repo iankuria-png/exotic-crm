@@ -48,8 +48,15 @@ class KopokopoReference
                 foreach ($columns as $column) {
                     $expression = self::expression($column);
                     $q->orWhereIn(\Illuminate\Support\Facades\DB::raw($expression), $refs);
-                    foreach ($refs as $ref) {
-                        $q->orWhereRaw($expression.' LIKE ?', [$ref.'-%'])->orWhereRaw($expression.' LIKE ?', [$ref.'/%']);
+                    if ($q->getConnection()->getDriverName() === 'mysql') {
+                        // Compare each stored code once, rather than expanding two LIKE branches per report row.
+                        // MariaDB/MySQL retain only the valid positive numeric split suffix supported by matches().
+                        $root = \Illuminate\Support\Facades\DB::raw("REGEXP_REPLACE($expression, '[-/][1-9][0-9]*$', '')");
+                        $q->orWhereIn($root, $refs);
+                    } else {
+                        foreach ($refs as $ref) {
+                            $q->orWhereRaw($expression.' LIKE ?', [$ref.'-%'])->orWhereRaw($expression.' LIKE ?', [$ref.'/%']);
+                        }
                     }
                 }
             });
