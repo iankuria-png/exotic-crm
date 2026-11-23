@@ -10,6 +10,9 @@ class CollectionMessageService
 {
     public function forReceipt(CollectionReceipt $receipt): array
     {
+        if ($receipt->account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER) {
+            return app(\App\Services\Collections\Kopokopo\KopokopoEvidenceService::class)->messages($receipt);
+        }
         $events = CollectionEvent::where('receipt_id', $receipt->id)->where('account_id', $receipt->account_id)
             ->where('state', 'parsed')->where('event_kind', 'sms:received')->orderByDesc('id')->limit(201)->get();
         $messages = [];

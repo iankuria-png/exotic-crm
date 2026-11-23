@@ -132,6 +132,7 @@ class CollectionPackageHistoryService
             $refs = $batch->pluck('reference_norm')->merge($aliases->flatten()->pluck('reference'))->unique()->values()->all();
             $payments = Payment::with('deal')->whereIn('platform_id', $platforms)->where(function ($q) use ($refs) {
                 $q->whereIn('reference_root', $refs)->orWhereIn('transaction_reference', $refs)->orWhereIn('reference_number', $refs);
+                \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['reference_root', 'transaction_reference', 'reference_number'], $refs);
             })->limit(1501)->get();
             if ($payments->count() > 1500) {
                 $result['complete'] = false;
@@ -150,7 +151,8 @@ class CollectionPackageHistoryService
             $payerEvidence = app(CollectionPayerEvidenceService::class)->forReceipts($batch);
             foreach ($batch as $r) {
                 $ownRefs = [$r->reference_norm, ...($aliases->get($r->id, collect())->pluck('reference')->all())];
-                $matches = $payments->filter(fn ($p) => array_intersect($ownRefs, [$p->reference_root, $p->transaction_reference, $p->reference_number]));
+                $matches = $payments->filter(fn ($p) => array_intersect($ownRefs, [$p->reference_root, $p->transaction_reference, $p->reference_number])
+                    || ((int) $p->platform_id === 1 && collect([$p->reference_root, $p->transaction_reference, $p->reference_number])->contains(fn ($ref) => \App\Services\Collections\Kopokopo\KopokopoReference::matches($ref, $ownRefs))));
                 $payment = $matches->count() === 1 ? $matches->first() : null;
                 $deal = $payment?->deal;
                 $sale = $sales->get($r->id);

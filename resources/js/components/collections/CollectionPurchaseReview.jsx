@@ -52,10 +52,11 @@ function ConfidenceMeter({ score, threshold }) {
 
 export function CollectionPayerSummary({ payer }) {
     const [copied, setCopied] = useState('');
-    return <section aria-label="SMS payer" className="space-y-1">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Paid by · Receiving SMS</h3>
-        <p className="break-words text-lg font-semibold text-slate-900">{payer?.name || (payer?.name_state === 'conflicting' ? 'Payer names differ between messages' : 'Name not supplied in this SMS')}</p>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><p className="font-medium tabular-nums text-slate-700">{payer?.phone || 'Phone not supplied in this SMS'}</p>
+    const provider = payer?.source === 'kopokopo';
+    return <section aria-label={provider ? 'KopoKopo payer' : 'SMS payer'} className="space-y-1">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Paid by · {provider ? 'KopoKopo' : 'Receiving SMS'}</h3>
+        <p className="break-words text-lg font-semibold text-slate-900">{payer?.name || (payer?.name_state === 'conflicting' ? 'Payer names differ between messages' : (provider ? 'Name not supplied by provider' : 'Name not supplied in this SMS'))}</p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><p className="font-medium tabular-nums text-slate-700">{payer?.phone || (provider ? (payer?.protected_identity ? 'Phone protected by provider' : 'Phone not supplied by provider') : 'Phone not supplied in this SMS')}</p>
             {payer?.phone && <button type="button" className="text-xs font-medium text-teal-700 underline" onClick={async () => { try { await navigator.clipboard.writeText(payer.phone); setCopied('Number copied'); } catch { setCopied('Select the number to copy it.'); } }}>Copy number</button>}
             {copied && <span role="status" className="text-xs text-slate-500">{copied}</span>}</div>
         {!payer?.name && payer?.party && <p className="break-words text-xs text-slate-500">SMS sender details: {payer.party}</p>}

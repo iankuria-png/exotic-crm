@@ -208,6 +208,9 @@ class CollectionPurchaseService
     {
         $p = $intent->purchase_snapshot;
         $client = Client::findOrFail($intent->client_id);
+        if ($automatic) {
+            app(\App\Services\Collections\Kopokopo\KopokopoPurchaseAuthority::class)->assertAutomatic($intent, $receipt);
+        }
         $custom = ! empty($p['custom_quote']);
         $price = $custom ? null : ProductPrice::with('product')->find($p['product_price_id']);
         $product = $custom ? \App\Models\Product::find($p['product_id']) : $price?->product;

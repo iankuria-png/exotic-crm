@@ -185,8 +185,12 @@ class CollectionSalesFulfillmentService
                     $refs = array_merge([$r->reference_norm], DB::table('collection_receipt_aliases')->where('receipt_id', $r->id)->where('account_id', $r->account_id)->pluck('reference')->all());
                     $cash = Payment::where('platform_id', $preview['platform_id'])->where(function ($q) use ($refs) {
                         $q->whereIn('reference_root', $refs)->orWhereIn('transaction_reference', $refs)->orWhereIn('reference_number', $refs);
+                        \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['reference_root', 'transaction_reference', 'reference_number'], $refs);
                     })->lockForUpdate()->first();
-                    if ($cash || ManualPaymentBundle::where('platform_id', $preview['platform_id'])->whereIn('reference_root', $refs)->lockForUpdate()->exists()) {
+                    if ($cash || ManualPaymentBundle::where('platform_id', $preview['platform_id'])->where(function ($q) use ($refs) {
+                        $q->whereIn('reference_root', $refs);
+                        \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['reference_root'], $refs);
+                    })->lockForUpdate()->exists()) {
                         throw new CollectionException('existing_cash_requires_receipt_attachment');
                     }
                     $session = CollectionSalesSession::where('receipt_id', $r->id)->lockForUpdate()->first();

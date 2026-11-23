@@ -116,7 +116,7 @@ class CollectionReceiptStatusService
         $references = array_map('strval', array_keys($lookup));
         $columns = ['id', 'platform_id', 'reference_root', 'transaction_reference', 'reference_number'];
         $pair = function (string $type, object $row, array $refs) use (&$out, $owners, $receipts, $bound) {
-            foreach (array_unique(array_filter(array_map(fn ($ref) => $this->referenceKey($ref), $refs))) as $key) {
+            foreach (array_unique(array_filter(array_map(fn ($ref) => (int) $row->platform_id === 1 ? \App\Services\Collections\Kopokopo\KopokopoReference::normalize(preg_replace('~[-/][1-9][0-9]*$~', '', (string) $ref)) : $this->referenceKey($ref), $refs))) as $key) {
                 foreach ($owners[$key] ?? [] as $receiptId) {
                     if (in_array((int) $row->platform_id, $bound[$receipts[$receiptId]->account_id] ?? [], true)) {
                         $out[$type][$receiptId][$row->id] = $row;
@@ -127,10 +127,16 @@ class CollectionReceiptStatusService
         foreach (array_chunk($references, 500) as $chunk) {
             DB::table('payments')->whereIn('platform_id', $platforms)
                 ->where(fn ($q) => $q->whereNull('resolution_code')->orWhere('resolution_code', '!=', Payment::RESOLUTION_RECEIPT_DUPLICATE))
-                ->where(fn ($q) => $q->whereIn('reference_root', $chunk)->orWhereIn('transaction_reference', $chunk)->orWhereIn('reference_number', $chunk))
+                ->where(function ($q) use ($chunk) {
+                    $q->whereIn('reference_root', $chunk)->orWhereIn('transaction_reference', $chunk)->orWhereIn('reference_number', $chunk);
+                    \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['reference_root', 'transaction_reference', 'reference_number'], $chunk);
+                })
                 ->get($detail ? [...$columns, 'status', 'record_classification', 'provider_environment', 'payment_data', 'currency', 'amount', 'client_id', 'deal_id', 'manual_payment_bundle_id'] : $columns)
                 ->each(fn ($p) => $pair('payments', $p, [$p->reference_root, $p->transaction_reference, $p->reference_number]));
-            DB::table('manual_payment_bundles')->whereIn('platform_id', $platforms)->whereIn('reference_root', $chunk)
+            DB::table('manual_payment_bundles')->whereIn('platform_id', $platforms)->where(function ($q) use ($chunk) {
+                $q->whereIn('reference_root', $chunk);
+                \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['reference_root'], $chunk);
+            })
                 ->get($detail ? ['id', 'platform_id', 'reference_root', 'status', 'currency', 'total_amount'] : ['id', 'platform_id', 'reference_root'])
                 ->each(fn ($b) => $pair('bundles', $b, [$b->reference_root]));
         }
@@ -185,16 +191,22 @@ class CollectionReceiptStatusService
         $refs = $receipts->pluck('reference_norm')->merge($allAliases->pluck('reference'))->unique();
         $mapping = DB::table('collection_account_platforms')->whereIn('account_id', $receipts->pluck('account_id'))->get();
         $payments = Payment::with(['client', 'deal'])->withoutReceiptDuplicates()->whereIn('platform_id', $mapping->pluck('platform_id'))
-            ->where(fn ($q) => $q->whereIn('reference_root', $refs)->orWhereIn('transaction_reference', $refs)->orWhereIn('reference_number', $refs))
+            ->where(function ($q) use ($refs) {
+                $q->whereIn('reference_root', $refs)->orWhereIn('transaction_reference', $refs)->orWhereIn('reference_number', $refs);
+                \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['reference_root', 'transaction_reference', 'reference_number'], $refs);
+            })
             ->orderBy('id')->limit(626)->get();
-        $bundles = DB::table('manual_payment_bundles')->whereIn('platform_id', $mapping->pluck('platform_id'))->whereIn('reference_root', $refs)->limit(626)->get();
+        $bundles = DB::table('manual_payment_bundles')->whereIn('platform_id', $mapping->pluck('platform_id'))->where(function ($q) use ($refs) {
+            $q->whereIn('reference_root', $refs);
+            \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['reference_root'], $refs);
+        })->limit(626)->get();
         $aliases = $allAliases->groupBy('receipt_id');
         $out = [];
         foreach ($receipts as $r) {
             $platforms = $mapping->where('account_id', $r->account_id)->pluck('platform_id')->all();
             $references = [$r->reference_norm, ...($aliases[$r->id] ?? collect())->pluck('reference')->all()];
-            $matches = $payments->filter(fn ($p) => in_array($p->platform_id, $platforms) && array_intersect($references, [$p->reference_root, $p->transaction_reference, $p->reference_number]))->values();
-            $matchedBundles = $bundles->filter(fn ($b) => in_array($b->platform_id, $platforms) && in_array($b->reference_root, $references));
+            $matches = $payments->filter(fn ($p) => in_array($p->platform_id, $platforms) && ((int) $p->platform_id === 1 ? collect([$p->reference_root, $p->transaction_reference, $p->reference_number])->contains(fn ($v) => \App\Services\Collections\Kopokopo\KopokopoReference::matches($v, $references)) : array_intersect($references, [$p->reference_root, $p->transaction_reference, $p->reference_number])))->values();
+            $matchedBundles = $bundles->filter(fn ($b) => in_array($b->platform_id, $platforms) && ((int) $b->platform_id === 1 ? \App\Services\Collections\Kopokopo\KopokopoReference::matches($b->reference_root, $references) : in_array($b->reference_root, $references)));
             $complete = $payments->count() < 626 && $bundles->count() < 626 && $matches->count() <= 25;
             $own = $r->relationLoaded('sale') ? $r->sale : null;
             $state = $own || $r->allocation ? 'owned' : 'unrecorded';

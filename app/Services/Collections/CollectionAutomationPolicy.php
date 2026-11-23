@@ -45,9 +45,9 @@ class CollectionAutomationPolicy
     {
         $p = $account->policy ?? [];
 
-        return ['enabled' => ($p['automation_enabled'] ?? false) === true,
+        return ['source' => $account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER ? 'kopokopo' : 'phone', 'enabled' => ($p['automation_enabled'] ?? false) === true,
             'match_threshold' => $p['match_threshold'] ?? 80, 'purchase_matching' => $p['purchase_matching'] ?? 'reviewed_only', 'catalogue_price_defaults' => $p['catalogue_price_defaults'] ?? [],
-            'max_auto_age_seconds' => $p['max_auto_age_seconds'] ?? null, 'continuous_operation' => $this->continuous($account), 'continuous_available' => $this->tzScope($account), 'receipt_learning' => $p['receipt_learning'] ?? ['enabled' => false], 'independent_subsidiary' => $this->independentSubsidiary($account),
+            'max_auto_age_seconds' => $p['max_auto_age_seconds'] ?? null, 'continuous_operation' => $this->continuous($account), 'continuous_available' => $this->tzScope($account) || $account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER, 'receipt_learning' => $p['receipt_learning'] ?? ['enabled' => false], 'independent_subsidiary' => $this->independentSubsidiary($account),
             'enabled_from' => $p['enabled_from'] ?? null, 'include_backlog' => false,
             'observation_exception' => $p['observation_exception'] ?? null, 'default_packages' => $this->defaultPackages($account),
             'readiness' => $this->readiness($account)];
@@ -103,8 +103,10 @@ class CollectionAutomationPolicy
                 ->whereIn('product.platform_id', $platforms)->where('pp.currency', $account->currency)->where('pp.is_active', true)->where('product.is_active', true)->exists();
         $checks[] = ['key' => 'authority', 'label' => 'Exact package matching policy or reviewed purchase available', 'ready' => $reviewed || $catalogue];
 
-        return array_map(fn ($check) => ($check['kind'] ?? null) === 'signoff' ? $check
+        $checks = array_map(fn ($check) => ($check['kind'] ?? null) === 'signoff' ? $check
             : $check + ['kind' => 'system', 'group' => 'system', 'action' => self::SYSTEM_ACTIONS[$check['key']] ?? null], $checks);
+
+        return app(\App\Services\Collections\Kopokopo\KopokopoPolicyPresentation::class)->readiness($account, $checks);
     }
 
     /** Read model for staff: live state, pilot clock, activity since switch-on and the last recorded change. */
@@ -215,13 +217,16 @@ class CollectionAutomationPolicy
             if ((int) ($p['version'] ?? 0) !== (int) $v['expected_version']) {
                 throw new CollectionException('collection_policy_changed', 409);
             }
+            if ($account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER && isset($v['purchase_matching']) && $v['purchase_matching'] !== 'reviewed_only') {
+                throw new CollectionException('provider_reviewed_purchase_policy_required', 422);
+            }
             $before = $this->present($account);
             $authorityChanged = false;
             foreach (['continuous_operation', 'receipt_learning', 'independent_subsidiary'] as $field) {
                 if (! array_key_exists($field, $v)) {
                     continue;
                 }
-                if (! $this->tzScope($account)) {
+                if (! $this->tzScope($account) && ! ($account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER && $field !== 'independent_subsidiary')) {
                     throw new CollectionException('continuous_tz_account_scope_required', 422);
                 }
                 if ($field === 'independent_subsidiary' && $v[$field]) {

@@ -30,6 +30,9 @@ class CollectionPaymentHistoryService
 
     private function read(CollectionReceipt $receipt, string $reader, ?string $cursor): array
     {
+        if ($receipt->account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER) {
+            return app(\App\Services\Collections\Kopokopo\KopokopoPaymentHistory::class)->read($receipt, $reader, $cursor);
+        }
         $platforms = DB::table('collection_account_platforms')->where('account_id', $receipt->account_id)
             ->where('valid_from', '<=', $receipt->provider_at ?? now())->whereNull('valid_until')->pluck('platform_id')->map(fn ($id) => (int) $id)->sort()->values()->all();
         $scope = hash('sha256', json_encode([$reader, $receipt->id, $receipt->account_id, $receipt->payer_fingerprint, $platforms]));

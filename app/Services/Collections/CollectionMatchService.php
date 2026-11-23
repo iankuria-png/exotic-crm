@@ -167,8 +167,9 @@ class CollectionMatchService
             $guards[] = 'suggested_profile_dormant';
         }
 
-        return ['suggestions' => $suggestions, 'recommended_client_id' => $recommended, 'needs_choice' => $conflict, 'clients' => $clients,
-            'rule_version' => self::RULE_VERSION, 'learned_payer' => $learned, 'guards' => array_values(array_unique($guards))];
+        return app(\App\Services\Collections\Kopokopo\KopokopoPurchaseAuthority::class)->evidence($receipt, $valid,
+            ['suggestions' => $suggestions, 'recommended_client_id' => $recommended, 'needs_choice' => $conflict, 'clients' => $clients,
+                'rule_version' => self::RULE_VERSION, 'learned_payer' => $learned, 'guards' => array_values(array_unique($guards))]);
     }
 
     public function automatic(CollectionReceipt $receipt): array
@@ -176,8 +177,16 @@ class CollectionMatchService
         $history = app(CollectionPaymentHistoryService::class)->forAccountReceipt($receipt);
         $payer = app(CollectionPayerEvidenceService::class)->forReceipt($receipt);
         $valid = [];
-        foreach (\App\Models\Collections\CollectionPurchaseIntent::where('account_id', $receipt->account_id)
-            ->where('provider_reference', $receipt->reference_norm)->whereNull('revoked_at')->limit(50)->get() as $intent) {
+        $intents = \App\Models\Collections\CollectionPurchaseIntent::where('account_id', $receipt->account_id)
+            ->where(function ($q) use ($receipt) {
+                $q->where('provider_reference', $receipt->reference_norm);
+                if ($receipt->account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER) {
+                    $links = \App\Models\Collections\CollectionPayerLink::where('account_id', $receipt->account_id)
+                        ->where('payer_fingerprint', $receipt->payer_fingerprint)->select('id');
+                    $q->orWhere(fn ($standing) => $standing->where('authority', 'standing_agreement')->whereIn('payer_link_id', $links));
+                }
+            })->whereNull('revoked_at')->where('valid_until', '>', now())->limit(50)->get();
+        foreach ($intents as $intent) {
             try {
                 app(CollectionPurchaseService::class)->validate($intent, $receipt, true);
                 $valid[] = $intent;

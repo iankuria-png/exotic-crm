@@ -48,6 +48,9 @@ class Kernel extends ConsoleKernel
             $schedule->command('collections:work --loop --max-runtime=45 --poll=2 --limit=100')
                 ->everyMinute()->withoutOverlapping(5)->onOneServer()->runInBackground();
         }
+        if (config('collection.capture_enabled') && config('collection_kopokopo.enabled')) {
+            $schedule->command('collections:kopokopo-reconcile')->cron('4-59/5 * * * *')->withoutOverlapping(5)->onOneServer()->runInBackground();
+        }
         $schedule->command('tours:refresh-catalog')->cron('11,26,41,56 * * * *')->withoutOverlapping(60)->onOneServer()->runInBackground();
         $schedule->command('tours:sweep --limit=50')->cron('7,22,37,52 * * * *')->withoutOverlapping(20)->onOneServer()->runInBackground();
         $schedule->command('monetize:expire-passes')->hourly()->withoutOverlapping()->runInBackground();

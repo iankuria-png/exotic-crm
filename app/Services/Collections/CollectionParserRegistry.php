@@ -62,6 +62,7 @@ class CollectionParserRegistry
     {
         return match ($country) {
             'GH' => app(GhMtnMomoParser::class)->phone($phone),
+            'KE' => app(\App\Services\Collections\Kopokopo\KopokopoReceiptParser::class)->phone($phone),
             default => app(CollectionPrivacy::class)->tzPhone($phone),
         };
     }
@@ -70,6 +71,10 @@ class CollectionParserRegistry
     public function anyPhone(?string $phone): ?string
     {
         $digits = preg_replace('/\D/', '', (string) $phone);
+
+        if (str_starts_with($digits, '254')) {
+            return $this->phone('KE', $phone);
+        }
 
         return str_starts_with($digits, '233') ? $this->phone('GH', $phone) : (app(CollectionPrivacy::class)->tzPhone($phone) ?? $this->phone('GH', $phone));
     }

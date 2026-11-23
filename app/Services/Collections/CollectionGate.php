@@ -46,7 +46,7 @@ class CollectionGate
         if ($automatic) {
             $deviceReady = app(CollectionDeviceHealthService::class)->accountReady($account->id);
             if (! $deviceReady) {
-                throw new CollectionException('receiving_device_offline_or_unbound');
+                throw new CollectionException($account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER ? 'provider_reconciliation_not_ready' : 'receiving_device_offline_or_unbound');
             }
             $unknown = DB::table('collection_allocations as a')->join('collection_receipts as r', 'r.id', '=', 'a.receipt_id')
                 ->where('r.account_id', $account->id)->when($ownAllocation, fn ($q) => $q->where('a.id', '!=', $ownAllocation))->whereIn('a.state', ['uncertain', 'correcting'])->exists();

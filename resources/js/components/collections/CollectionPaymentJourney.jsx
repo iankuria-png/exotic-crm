@@ -13,6 +13,8 @@ const explanations = {
     receipt_outside_automatic_age: 'This payment is older than the automatic window. Staff review is required.',
     receipt_outside_automation_epoch: 'This payment predates the current automatic policy. Staff review is required.',
     historical_receipt_no_dispatch: 'Historical evidence is for reconciliation. It cannot activate a subscription.',
+    provider_reconciliation_not_ready: 'KopoKopo reconciliation needs checking before automatic activation can run.',
+    current_purchase_authority_required: 'Confirm the intended profile and purchase. Payer history alone cannot authorize activation.',
     receiving_device_offline_or_unbound: 'The receiving phone needs attention before automatic activation can run.',
     automatic_account_acceptance_required: 'Automatic activation is awaiting the remaining acceptance checks.',
     exact_site_writer_acceptance_required: 'Site activation and correction checks must be accepted first.',
@@ -38,7 +40,7 @@ export default function CollectionPaymentJourney({ row, assessment, loading, fai
     const packageMatched = !!purchase || assessment?.package?.state === 'matched';
     const finalLabel = recorded ? 'Already recorded' : confirmed ? 'Site confirmed' : checking ? 'Checking confirmation' : processing ? 'Activation processing' : 'Not activated';
     const stages = [
-        { label: 'SMS received', detail: row.account_label, done: true },
+        { label: row.source === 'kopokopo' ? 'Payment received' : 'SMS received', detail: row.account_label, done: true },
         { label: selected ? 'Profile selected' : profile ? 'Client matched' : 'Client needs review', detail: profile ? `${profile.name} · ${profile.score} / 100` : selected ? 'Saved purchase' : `Needs a unique score above ${assessment?.threshold ?? 80}`, done: !!profile || selected },
         { label: selected ? 'Package selected' : packageMatched ? 'Package matched' : 'Package needs review', detail: purchase ? `${purchase.tier?.toUpperCase()} · ${purchase.duration_days} days` : 'Confirm the purchased service', done: packageMatched },
         { label: finalLabel, detail: confirmed ? 'Subscription verified on the site' : recorded ? 'No new activation' : checking ? 'Do not activate again' : processing ? 'Waiting for the site' : 'No new activation confirmed', done: confirmed || recorded },

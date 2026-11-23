@@ -6,6 +6,12 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation', 'role:admin,sub_admin,sales'])
     ->prefix('crm/collections')->group(function () {
+        Route::get('kopokopo', [\App\Http\Controllers\CRM\CollectionKopokopoController::class, 'status']);
+        Route::post('kopokopo/setup', [\App\Http\Controllers\CRM\CollectionKopokopoController::class, 'setup']);
+        Route::post('kopokopo/subscribe', [\App\Http\Controllers\CRM\CollectionKopokopoController::class, 'subscribe']);
+        Route::post('kopokopo/subscriptions/verify', [\App\Http\Controllers\CRM\CollectionKopokopoController::class, 'verifySubscription']);
+        Route::post('kopokopo/reconcile', [\App\Http\Controllers\CRM\CollectionKopokopoController::class, 'reconcile']);
+        Route::post('kopokopo/polls/{poll}/recover', [\App\Http\Controllers\CRM\CollectionKopokopoController::class, 'recover'])->whereUuid('poll');
         Route::get('capabilities', [CollectionPaymentController::class, 'capabilities']);
         Route::get('clients/{client}/sales', [CollectionSalesController::class, 'clientSales'])->whereNumber('client');
         Route::get('receipts', [CollectionPaymentController::class, 'index']);
@@ -53,3 +59,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('accounts/{account}/adjustments', [CollectionPaymentController::class, 'adjustment']);
         Route::post('receipts/{receipt}/aliases', [CollectionPaymentController::class, 'alias'])->whereNumber('receipt');
     });
+
+// KopoKopo receives its own raw signed envelope; the legacy STK callback remains independent.
+Route::post('collection-events/v1/kopokopo/{feed}', [\App\Http\Controllers\API\KopokopoCollectionWebhookController::class, 'receipt'])->whereUuid('feed');
+Route::post('collection-events/v1/kopokopo/{feed}/polls/{poll}', [\App\Http\Controllers\API\KopokopoCollectionWebhookController::class, 'polling'])->whereUuid('feed')->whereUuid('poll');

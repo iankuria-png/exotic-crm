@@ -66,7 +66,7 @@ export async function setup(page, { shared = false, held = false, partial = fals
         await route.fulfill({ json: data });
     });
     await page.goto('/tests/browser/fixtures/collection-payments.html');
-    await page.getByRole('button', { name: used ? 'View receipt' : automaticState === 'uncertain' ? 'View progress' : automaticState === 'active_review_pending' ? 'Review activation' : 'Match & activate', exact: true }).click();
+    await page.getByRole('button', { name: used || reversed ? 'View receipt' : automaticState === 'uncertain' ? 'View progress' : automaticState === 'active_review_pending' ? 'Review activation' : 'Match & activate', exact: true }).click();
     await expect(page.getByRole('dialog')).toBeVisible();
     if (!used && !automaticState) await expect(page.getByRole('group', { name: 'PROFILE 1', exact: true })).toBeVisible();
     return state;

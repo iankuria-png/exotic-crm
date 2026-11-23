@@ -62,6 +62,14 @@ class CollectionPayerEvidenceService
             ];
         }
 
+        if (\Illuminate\Support\Facades\Schema::hasTable('collection_provider_feeds')) {
+            $providerAccounts = \Illuminate\Support\Facades\DB::table('collection_provider_feeds')->whereIn('account_id', $receipts->pluck('account_id'))->pluck('account_id')->all();
+            $providerRows = $receipts->filter(fn ($r) => in_array($r->account_id, $providerAccounts, true));
+            if ($providerRows->isNotEmpty()) {
+                $result = array_replace($result, app(\App\Services\Collections\Kopokopo\KopokopoEvidenceService::class)->forReceipts($providerRows));
+            }
+        }
+
         return $result;
     }
 

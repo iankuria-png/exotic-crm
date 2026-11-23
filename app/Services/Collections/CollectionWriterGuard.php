@@ -87,8 +87,14 @@ class CollectionWriterGuard
             return $callback();
         }
 
-        return DB::transaction(function () use ($accounts, $callback) {
+        return DB::transaction(function () use ($accounts, $callback, $payment) {
             \App\Models\Collections\CollectionAccount::whereIn('id', $accounts)->orderBy('id')->lockForUpdate()->get();
+            if ((int) $payment->platform_id === 1 && in_array(data_get($payment->raw_payload, 'source'), ['deal_manual_payment', 'manual_payment_bundle'], true)) {
+                $this->assertPayment($payment);
+                if (! $payment->exists && ! $this->owner && $payment->deal_id && in_array(data_get($payment->raw_payload, 'source'), ['deal_manual_payment', 'manual_payment_bundle'], true)) {
+                    app(CollectionReferenceGuard::class)->assertStaffClaim(\App\Models\Deal::findOrFail($payment->deal_id), (string) ($payment->reference_root ?: $payment->transaction_reference), (float) $payment->amount);
+                }
+            }
 
             return $callback();
         });
@@ -131,6 +137,8 @@ class CollectionWriterGuard
             throw new CollectionException('collection_operation_owns_profile');
         }
         $pilot = CollectionPurchaseIntent::whereNull('revoked_at')->where('valid_until', '>', now())
+            ->where(fn ($q) => $q->whereNull('authority')->orWhere('authority', '!=', 'standing_agreement')
+                ->orWhereNotIn('account_id', DB::table('collection_accounts')->where('provider_key', \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER)->select('id')))
             ->where(fn ($q) => $q->where('client_id', $clientId)->orWhere('purchase_snapshot->subsidiary->client_id', $clientId))
             ->whereIn('account_id', DB::table('collection_accounts')->whereIn('mode', ['assisted', 'auto'])->select('id'))
             ->when($this->receiptSale, fn ($q) => $q->where(fn ($q) => $q->where('account_id', '!=', $this->receiptSale['account_id'])
@@ -152,7 +160,7 @@ class CollectionWriterGuard
             if ($sale && $sale->id !== $this->saleItem) {
                 throw new CollectionException('payment_owned_by_receipt_sale');
             }
-            $refs = array_values(array_unique(array_map(fn ($v) => strtoupper(trim($v)), array_filter([$payment->transaction_reference, $payment->reference_number, $payment->reference_root]))));
+            $refs = array_values(array_unique(array_map(fn ($v) => (int) $payment->platform_id === 1 ? \App\Services\Collections\Kopokopo\KopokopoReference::root($v) : strtoupper(trim($v)), array_filter([$payment->transaction_reference, $payment->reference_number, $payment->reference_root]))));
             if ($refs) {
                 $receipts = DB::table('collection_receipts as r')->join('collection_account_platforms as b', 'b.account_id', '=', 'r.account_id')
                     ->where('b.platform_id', $payment->platform_id)->where(function ($q) use ($refs) {
@@ -188,9 +196,9 @@ class CollectionWriterGuard
             if ($refs) {
                 $reserved = DB::table('collection_receipts as r')->join('collection_allocations as a', 'a.receipt_id', '=', 'r.id')
                     ->join('collection_account_platforms as b', 'b.account_id', '=', 'r.account_id')->where('b.platform_id', $payment->platform_id)
-                    ->where(function ($q) use ($refs) {
+                    ->where(function ($q) use ($refs, $payment) {
                         foreach ($refs as $ref) {
-                            $q->orWhere('r.reference_norm', strtoupper(trim($ref)));
+                            $q->orWhere('r.reference_norm', (int) $payment->platform_id === 1 ? \App\Services\Collections\Kopokopo\KopokopoReference::root($ref) : strtoupper(trim($ref)));
                         }
                     })->first(['a.id']);
                 if ($reserved && $reserved->id !== $this->owner) {

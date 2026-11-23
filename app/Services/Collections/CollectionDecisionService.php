@@ -114,7 +114,11 @@ class CollectionDecisionService
                 foreach ($references as $ref) {
                     $q->orWhere('transaction_reference', 'like', '%'.$ref.'%')->orWhere('reference_number', 'like', '%'.$ref.'%')->orWhere('reference_root', 'like', '%'.$ref.'%');
                 }
+                \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['transaction_reference', 'reference_number', 'reference_root'], $references);
             })->get()->filter(function ($p) use ($references) {
+                if ((int) $p->platform_id === 1 && collect([$p->transaction_reference, $p->reference_number, $p->reference_root])->contains(fn ($v) => \App\Services\Collections\Kopokopo\KopokopoReference::matches($v, $references))) {
+                    return true;
+                }
                 foreach ([$p->transaction_reference, $p->reference_number, $p->reference_root] as $field) {
                     foreach ($references as $ref) {
                         if (preg_match('/(?<![A-Z0-9])'.preg_quote($ref, '/').'(?![A-Z0-9])/i', (string) $field)) {

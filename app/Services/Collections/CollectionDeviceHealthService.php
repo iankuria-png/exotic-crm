@@ -38,6 +38,12 @@ class CollectionDeviceHealthService
                 ...$health];
         })->all();
         foreach ($accounts as $account) {
+            if ($account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER) {
+                $feed = \App\Models\Collections\CollectionProviderFeed::where('account_id', $account->id)->first();
+                $health = $feed ? app(\App\Services\Collections\Kopokopo\KopokopoFeedService::class)->health($feed) : ['state' => 'not_enrolled', 'capture_ready' => false, 'source' => 'kopokopo'];
+                $rows[] = ['id' => $feed?->id, 'label' => $account->label, 'account_labels' => [$account->label], ...$health];
+                continue;
+            }
             if (! $bindings->contains('account_id', $account->id)) {
                 $rows[] = ['id' => null, 'label' => $account->label, 'account_labels' => [$account->label],
                     'state' => 'not_enrolled', 'capture_ready' => false, 'last_contact_at' => null, 'last_check_in_at' => null];
@@ -50,6 +56,9 @@ class CollectionDeviceHealthService
 
     public function accountReady(string $accountId): bool
     {
+        if (\Illuminate\Support\Facades\Schema::hasTable('collection_provider_feeds') && ($feed = \App\Models\Collections\CollectionProviderFeed::where('account_id', $accountId)->first())) {
+            return app(\App\Services\Collections\Kopokopo\KopokopoFeedService::class)->health($feed)['capture_ready'];
+        }
         $devices = CollectionDevice::whereIn('id', DB::table('collection_sim_bindings')->where('account_id', $accountId)
             ->whereNull('valid_until')->where('valid_from', '<=', now())->select('device_id'))->get();
 

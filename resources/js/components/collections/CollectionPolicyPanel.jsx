@@ -37,14 +37,14 @@ export function CollectionAutomationSummary({ onConfigure, platformId }) {
         : head.state === 'pilot_ended' ? 'The 24-hour pilot ended. New payments wait for staff review.'
         : status?.can_enable ? 'All go-live checks pass. A manager can switch it on.'
         : finance ? `Awaiting Finance acceptance and remaining activation checks · ${pending.length} open.` : `${pending.length} go-live ${pending.length === 1 ? 'check' : 'checks'} open. Staff activate payments meanwhile.`;
-    return <section aria-label="Automatic activation status" className={`mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${head?.tone === 'live' ? 'border-teal-200 bg-teal-50/70' : head?.tone === 'action' ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}>
+    return <section aria-label="Automatic activation status" className={`mb-5 flex flex-col items-stretch justify-between gap-3 rounded-xl sm:flex-row sm:items-center border px-4 py-3 text-sm ${head?.tone === 'live' ? 'border-teal-200 bg-teal-50/70' : head?.tone === 'action' ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}>
         <div className="flex min-w-0 flex-1 items-start gap-3">
             {head && <span className="mt-0.5"><StatusPill tone={head.tone} pulse={head.pulse}>{head.badge}</StatusPill></span>}
             <div className="min-w-0"><p className="font-semibold text-slate-900">{title}</p>
                 {line && <p className="mt-0.5 tabular-nums text-slate-600">{line}</p>}
                 {query.isError && <p className="mt-1 text-slate-600">Refresh the status before relying on automatic activation. <button type="button" className="text-teal-800 underline" onClick={() => query.refetch()}>Retry status</button></p>}</div>
         </div>
-        <button type="button" onClick={onConfigure} className={status?.can_enable || head?.tone === 'action' ? primaryButton : secondaryButton}>Automation settings</button>
+        <button type="button" onClick={onConfigure} className={`${status?.can_enable || head?.tone === 'action' ? primaryButton : secondaryButton} shrink-0 self-start sm:self-auto`}>Automation settings</button>
     </section>;
 }
 

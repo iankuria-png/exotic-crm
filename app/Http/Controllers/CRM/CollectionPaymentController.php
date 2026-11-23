@@ -212,6 +212,7 @@ class CollectionPaymentController extends Controller
             ? ['id' => $candidate['id'], 'name' => $profiles[$candidate['id']]->name, 'score' => $candidate['score']] : null, $suggestions)));
 
         return ['id' => $r->id, 'receipt_link' => $p['receipt_link'] ?? null, 'subsidiary_obligation' => $obligation && $allocation->state !== 'unassigned' && empty($p['receipt_link']) ? ['state' => $obligation->state, 'version' => $obligation->version, 'last_error_code' => $obligation->last_error_code] : null, 'account_id' => $r->account_id, 'account_label' => $r->account->label, 'account_mode' => $r->account->mode,
+            'source' => $r->account->provider_key === \App\Services\Collections\Kopokopo\KopokopoFeedService::PROVIDER ? 'kopokopo' : 'phone',
             'reference' => $r->reference_norm, 'principal_minor' => $r->principal_minor, 'currency' => $r->currency,
             'payer' => $payer ?? app(CollectionPayerEvidenceService::class)->forReceipt($r), 'captured_payer_receipts' => $capturedCount,
             'usage' => $usage, 'activation' => $activation, 'payer_masked' => $r->payer_phone ? '••••'.substr($r->payer_phone, -4) : 'Not supplied by receiving message',

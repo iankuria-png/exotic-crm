@@ -14,6 +14,7 @@ createRoot(document.getElementById('fixture')).render(
 <ToastProvider><MediaUploadProvider><BrowserRouter><Routes><Route element={<MainLayout />}>
 <Route path="/tests/browser/fixtures/collection-payments.html" element={<div className="p-4"><CollectionWorkspace /></div>} />
 <Route path="/tests/browser/fixtures/collection-markets.html" element={<MarketWorkspace />} />
+<Route path="/tests/browser/fixtures/collection-kopokopo.html" element={<div className="p-4"><CollectionWorkspace platformId="1" platformOptions={[{ platform_id: 1, name: 'Kenya' }]} /></div>} />
 <Route path="/payments" element={<div className="p-4"><CollectionWorkspace /></div>} />
 <Route path="/clients/:id" element={<ClientDetail />} />
 </Route></Routes></BrowserRouter></MediaUploadProvider></ToastProvider></QueryClientProvider>);

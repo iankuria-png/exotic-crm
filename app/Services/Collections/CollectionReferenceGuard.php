@@ -19,7 +19,10 @@ class CollectionReferenceGuard
     {
         $accounts = DB::table('collection_account_platforms')->where('platform_id', $deal->platform_id)
             ->where(fn ($q) => $q->whereNull('valid_until')->orWhere('valid_until', '>', now()))->pluck('account_id');
-        $reference = trim($reference);
+        $reference = (int) $deal->platform_id === 1 ? \App\Services\Collections\Kopokopo\KopokopoReference::root($reference) : trim($reference);
+        if ((int) $deal->platform_id === 1) {
+            \App\Models\Collections\CollectionAccount::whereIn('id', $accounts)->orderBy('id')->lockForUpdate()->get();
+        }
         if ($accounts->isEmpty() || $reference === '') {
             return;
         }
@@ -43,7 +46,10 @@ class CollectionReferenceGuard
         }
         $refsWithAliases = array_values(array_unique([$receipt->reference_norm, ...DB::table('collection_receipt_aliases')->where('receipt_id', $receipt->id)->pluck('reference')->all(), ...$refs]));
         $used = Payment::with('client:id,name')->withoutReceiptDuplicates()->where('platform_id', $deal->platform_id)->whereIn('status', Payment::SUCCESSFUL_STATUSES)
-            ->where(fn ($q) => $q->whereIn('transaction_reference', $refsWithAliases)->orWhereIn('reference_root', $refsWithAliases)->orWhereIn('reference_number', $refsWithAliases))
+            ->where(function ($q) use ($refsWithAliases) {
+                $q->whereIn('transaction_reference', $refsWithAliases)->orWhereIn('reference_root', $refsWithAliases)->orWhereIn('reference_number', $refsWithAliases);
+                \App\Services\Collections\Kopokopo\KopokopoReference::orNormalized($q, ['transaction_reference', 'reference_root', 'reference_number'], $refsWithAliases);
+            })
             ->lockForUpdate()->get();
         $usedMinor = (int) round($used->sum(fn ($p) => (float) $p->amount) * 100);
         if ($usedMinor + (int) round($amount * 100) > $receipt->principal_minor) {
