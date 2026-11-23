@@ -692,7 +692,12 @@ class LeadController extends Controller
         ]);
 
         try {
-            $result = $this->leadConversionService->convert($request, $lead, $validated);
+            $result = $this->leadConversionService->withLockedLead(
+                $lead,
+                fn (Lead $lockedLead) => $this->leadConversionService->convert($request, $lockedLead, $validated)
+            );
+        } catch (\Symfony\Component\HttpKernel\Exception\ConflictHttpException $e) {
+            return response()->json(['message' => $e->getMessage()], 409);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (\RuntimeException $e) {

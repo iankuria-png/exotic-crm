@@ -736,6 +736,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('/deals/{deal}/renew', [DealController::class, 'renew'])->middleware(\App\Http\Middleware\TrialApprovalMiddleware::class.':renew');
 
         // Leads
+        Route::post('/leads/bulk-convert/preview', [\App\Http\Controllers\CRM\BulkLeadConversionController::class, 'preview']);
+        Route::post('/leads/{lead}/bulk-convert', [\App\Http\Controllers\CRM\BulkLeadConversionController::class, 'store']);
         Route::get('/leads', [LeadController::class, 'index']);
         Route::post('/leads', [LeadController::class, 'store']);
         Route::post('/leads/scrape-entry', [LeadController::class, 'scrapeEntry']);

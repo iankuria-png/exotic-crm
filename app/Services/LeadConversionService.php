@@ -9,15 +9,33 @@ use App\Models\TimelineEvent;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class LeadConversionService
 {
     public function __construct(
         private readonly AuditService $auditService,
         private readonly MarketAuthorizationService $marketAuthorizationService
-    ) {
+    ) {}
+
+    /** Serialize both conversion entry points and protect lead state during provisioning. */
+    public function withLockedLead(Lead $lead, callable $callback): array
+    {
+        $lock = Cache::store('file')->lock('lead-conversion-market:'.$lead->platform_id, 600);
+        if (! $lock->get()) {
+            throw new ConflictHttpException('Another conversion is running in this market. Try again shortly.');
+        }
+
+        try {
+            return DB::transaction(function () use ($lead, $callback) {
+                return $callback(Lead::query()->lockForUpdate()->findOrFail($lead->id));
+            });
+        } finally {
+            $lock->release();
+        }
     }
 
     /**
@@ -73,7 +91,7 @@ class LeadConversionService
             throw new \InvalidArgumentException('This lead has already been converted.');
         }
 
-        if (!$this->platformHasWpDatabaseCredentials($platform)) {
+        if (! $this->platformHasWpDatabaseCredentials($platform)) {
             throw new \InvalidArgumentException('WordPress database credentials are incomplete for this market.');
         }
 
@@ -84,10 +102,10 @@ class LeadConversionService
         }
 
         $phone = PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix);
-        $email = !empty($payload['email']) ? strtolower(trim((string) $payload['email'])) : null;
+        $email = ! empty($payload['email']) ? strtolower(trim((string) $payload['email'])) : null;
 
         $profileStatus = strtolower(trim((string) ($payload['profile_status'] ?? 'private')));
-        if (!in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
+        if (! in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
             $profileStatus = 'private';
         }
 
@@ -95,6 +113,7 @@ class LeadConversionService
         $dupeCheck = $this->checkDuplicate($lead, $platformId, $phone, $email);
         if ($dupeCheck['match']) {
             $existingClient = $dupeCheck['client'];
+
             return [
                 'duplicate' => true,
                 'matched_by' => $dupeCheck['matched_by'],
@@ -109,11 +128,13 @@ class LeadConversionService
         }
 
         // Provision WP profile
-        $provisioningResult = (new WpDirectProvisioningService($platform))->provisionEscort([
+        $provisioningResult = app(WpDirectProvisioningService::class, ['site' => $platform])->provisionEscort([
+            // Stable across previews, actors and retries, including a WP-only commit.
+            'provision_request_id' => 'lead-client-'.$lead->id,
             'name' => $name,
             'email' => $email ?? '',
             'phone' => $phone ?? '',
-            'city' => !empty($payload['city']) ? trim((string) $payload['city']) : '',
+            'city' => ! empty($payload['city']) ? trim((string) $payload['city']) : '',
             'post_status' => $profileStatus,
         ]);
 
@@ -123,7 +144,7 @@ class LeadConversionService
             throw new \RuntimeException('WordPress provisioning did not return valid profile IDs.');
         }
 
-        $assignedTo = !empty($payload['assigned_to'])
+        $assignedTo = ! empty($payload['assigned_to'])
             ? (int) $payload['assigned_to']
             : $lead->assigned_to;
 
@@ -145,7 +166,7 @@ class LeadConversionService
                     'name' => $name,
                     'phone_normalized' => $phone,
                     'email' => $email,
-                    'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
+                    'city' => ! empty($payload['city']) ? trim((string) $payload['city']) : null,
                     'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
                     'assigned_to' => $assignedTo,
                     'premium' => false,
@@ -158,7 +179,7 @@ class LeadConversionService
             // Try to sync from WP to fill in additional fields
             $syncStatus = 'skipped';
             try {
-                $syncedClient = (new ClientSyncService($platform))->syncOne($wpPostId);
+                $syncedClient = app(ClientSyncService::class, ['platform' => $platform])->syncOne($wpPostId);
                 if ($assignedTo && (int) ($syncedClient->assigned_to ?? 0) !== $assignedTo) {
                     $syncedClient->assigned_to = $assignedTo;
                     $syncedClient->save();
@@ -248,9 +269,9 @@ class LeadConversionService
 
     private function platformHasWpDatabaseCredentials(Platform $platform): bool
     {
-        return !empty($platform->db_host)
-            && !empty($platform->db_name)
-            && !empty($platform->db_user)
-            && !empty($platform->db_pass);
+        return ! empty($platform->db_host)
+            && ! empty($platform->db_name)
+            && ! empty($platform->db_user)
+            && ! empty($platform->db_pass);
     }
 }

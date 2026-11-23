@@ -9,6 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
+import BulkLeadConversionDialog from '../components/leads/BulkLeadConversionDialog';
 import { useToast } from '../components/ToastProvider';
 import { flaggedPlatformLabel, platformOptionsWithFlags } from '../utils/flags';
 import { normalizePhone } from '../utils/phone';
@@ -104,6 +105,7 @@ export default function Leads() {
     });
 
     const [convertDialog, setConvertDialog] = useState(null);
+    const [bulkConversionLeads, setBulkConversionLeads] = useState(null);
     const [convertForm, setConvertForm] = useState({
         name: '',
         phone_normalized: '',
@@ -688,10 +690,16 @@ export default function Leads() {
 
     const bulkActions = [
         {
+            key: 'bulk-convert-clients',
+            label: 'Convert selected to clients',
+            variant: 'primary',
+            onClick: (rowsSelection) => setBulkConversionLeads({ rows: rowsSelection, trigger: document.activeElement }),
+        },
+        {
             key: 'bulk-stage',
             label: `Move selected to ${bulkTargetStatus}`,
             loadingLabel: 'Updating...',
-            variant: 'primary',
+            variant: 'secondary',
             onClick: async (rowsSelection) => {
                 await bulkStatusMutation.mutateAsync({ rowsSelection, targetStatus: bulkTargetStatus });
             },
@@ -1069,6 +1077,16 @@ export default function Leads() {
                     ) : null}
                 </section>
             ) : null}
+
+            {bulkConversionLeads ? <BulkLeadConversionDialog
+                leads={bulkConversionLeads.rows}
+                returnFocus={bulkConversionLeads.trigger}
+                onClose={() => setBulkConversionLeads(null)}
+                onComplete={() => {
+                    ['leads', 'clients', 'dashboard'].forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
+                    setClearSelectionKey((key) => key + 1);
+                }}
+            /> : null}
 
             <DataTable
                 columns={columns}
