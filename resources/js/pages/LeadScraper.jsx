@@ -145,7 +145,7 @@ export default function LeadScraper() {
     const ready = site && site.is_active && site.compliance_ack_robots && site.compliance_ack_tos;
 
     return (
-        <div className="space-y-4">
+        <div className="relative space-y-4">
             <PageHeader
                 title="Lead Scraper"
                 subtitle="Check a directory at a glance, fix what blocks it, then collect and import leads."
@@ -192,7 +192,7 @@ export default function LeadScraper() {
                                 ))}
                             </div>
                         </div>
-                        <ul className="flex-1 divide-y divide-slate-100 overflow-y-auto">
+                        <ul className="relative flex-1 divide-y divide-slate-100 overflow-y-auto overscroll-contain">
                             {overview.isLoading ? [0, 1, 2, 3].map((i) => <li key={i} className="p-3"><div className="h-12 animate-pulse rounded bg-slate-100 motion-reduce:animate-none" /></li>) : null}
                             {!overview.isLoading && sites.length === 0 ? (
                                 <li className="px-4 py-10 text-center">

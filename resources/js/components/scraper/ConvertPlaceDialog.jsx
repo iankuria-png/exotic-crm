@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import api from '../../services/api';
-import { Spinner, errorMessage } from './scraperUi';
+import { Spinner, errorMessage, useScrollLock } from './scraperUi';
 import LockProfilesDialog from '../clients/LockProfilesDialog';
 
 const LIMIT = 100;
@@ -16,6 +16,8 @@ const CONFIDENCE = {
 };
 const optionKey = (o) => (o ? `${o.region_id}:${o.city_id ?? ''}` : '');
 const THIN = 5;
+const LOOKS = { 3: 'Sexy', 4: 'Ultra Sexy' };
+const describeDefaults = (d) => (d ? `Born ${String(d.birthday).slice(0, 4)} · ${d.height} cm · ${d.weight} kg · ${LOOKS[d.looks] || 'Looks set'}` : null);
 
 /**
  * After a scrape: turn imported leads into private client profiles placed in a real
@@ -31,8 +33,11 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
     const [reviewing, setReviewing] = useState(false);
     const [progress, setProgress] = useState({ running: false, done: 0, results: {} });
     const stopRef = useRef(false);
+    useScrollLock(true);
     const [lockOpen, setLockOpen] = useState(false);
     const [lockOutcome, setLockOutcome] = useState(null); // 'later' | { locked, total }
+    const [smartDefaults, setSmartDefaults] = useState(true);
+    const [aiBio, setAiBio] = useState(true);
 
     const places = useMemo(() => [...new Set(usable.map((l) => l.city || ''))], [usable]);
     const match = useQuery({
@@ -101,7 +106,7 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
         try {
             const placements = {};
             included.forEach((l) => { const o = placementFor(l); if (o) placements[l.lead_id] = { region_id: o.region_id, city_id: o.city_id }; });
-            const { data } = await api.post('/crm/leads/bulk-convert/preview', { lead_ids: included.map((l) => l.lead_id), placements });
+            const { data } = await api.post('/crm/leads/bulk-convert/preview', { lead_ids: included.map((l) => l.lead_id), placements, smart_defaults: smartDefaults, ai_bio: aiBio });
             setReview(data);
             setStep('review');
         } catch (e) {
@@ -114,6 +119,7 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
     const ready = (review?.rows || []).filter((r) => r.action === 'create');
     const create = async (rows) => {
         stopRef.current = false;
+        setLockOutcome(null);
         setStep('create');
         setProgress((p) => ({ ...p, running: true }));
         for (const row of rows) {
@@ -135,7 +141,13 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
     const createdClients = ready
         .filter((r) => progress.results[r.id]?.status === 'created' && progress.results[r.id]?.client_id)
         .map((r) => ({ id: progress.results[r.id].client_id, name: r.name }));
-    const askToLock = step === 'create' && !progress.running && createdClients.length > 0 && lockOutcome === null;
+    // Leads converted earlier (another pass, or before going Back) can still be locked from the review.
+    const convertedClients = (review?.rows || [])
+        .filter((r) => r.action === 'already_converted' && r.client_id)
+        .map((r) => ({ id: r.client_id, name: r.name }));
+    const lockTargets = step === 'create' ? createdClients : convertedClients;
+    const askToLock = !progress.running && lockOutcome === null && lockTargets.length > 0
+        && (step === 'create' || step === 'review');
     useEffect(() => {
         if (step === 'create' && !progress.running && results.length) {
             onFinished?.(createdCount);
@@ -162,7 +174,7 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                     {leads.length > LIMIT ? <li className="ml-auto self-center font-normal text-amber-700">First {LIMIT} of {leads.length} leads</li> : null}
                 </ol>
 
-                <div className="flex-1 overflow-y-auto px-4 py-4">
+                <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4">
                     {step === 'place' ? (
                         match.isLoading ? (
                             <p className="flex items-center gap-2 py-10 text-sm text-slate-600"><Spinner />Matching scraped places to {platformName} cities…</p>
@@ -210,6 +222,19 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                                         );
                                     })}
                                 </ul>
+                                <fieldset className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                                    <legend className="px-1 text-sm font-semibold text-slate-900">Starting point for each profile</legend>
+                                    <label className="flex items-start gap-2 text-sm text-slate-700">
+                                        <input type="checkbox" className="mt-0.5" checked={smartDefaults} onChange={(e) => setSmartDefaults(e.target.checked)} />
+                                        <span>Fill in smart defaults
+                                            <span className="block text-xs text-slate-500">Female · born 2000–2005 · 150–170 cm · 50–80 kg · Sexy or Ultra Sexy, picked at random per profile. Edit anything you know better.</span></span>
+                                    </label>
+                                    <label className="mt-2 flex items-start gap-2 text-sm text-slate-700">
+                                        <input type="checkbox" className="mt-0.5" checked={aiBio} onChange={(e) => setAiBio(e.target.checked)} />
+                                        <span>Write an AI bio after creating
+                                            <span className="block text-xs text-slate-500">No numbers and no contact details. Runs in the background and never replaces a bio someone has written.</span></span>
+                                    </label>
+                                </fieldset>
                             </div>
                         )
                     ) : null}
@@ -221,14 +246,26 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                                 <Stat label="Already clients" value={(review.rows || []).filter((r) => ['existing_match', 'already_converted'].includes(r.action)).length} />
                                 <Stat label="Need attention" value={(review.rows || []).filter((r) => ['needs_attention', 'skipped'].includes(r.action)).length} tone="text-amber-700" />
                             </dl>
-                            <ul className="max-h-[22rem] divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 text-sm">
+                            {askToLock ? (
+                                <LockPrompt count={lockTargets.length} existing onLock={() => setLockOpen(true)} onLater={() => setLockOutcome('later')} />
+                            ) : null}
+                            <LockOutcome outcome={lockOutcome} existing />
+                            <ul className="max-h-[22rem] divide-y divide-slate-100 overflow-y-auto overscroll-contain rounded-lg border border-slate-200 text-sm">
                                 {review.rows.map((r) => (
                                     <li key={r.id} className="flex items-center justify-between gap-3 px-3 py-2">
-                                        <span className="min-w-0 truncate"><span className="font-medium text-slate-900">{r.name}</span> <span className="crm-mono text-xs text-slate-500">{r.contact}</span></span>
-                                        <span className="shrink-0 text-xs">{r.place ? <span className="mr-2 text-slate-600">📍 {r.place}</span> : null}<span className={r.action === 'create' ? 'font-semibold text-teal-800' : 'text-slate-500'}>{r.message}</span></span>
+                                        <span className="min-w-0 truncate"><span className="font-medium text-slate-900">{r.name}</span> <span className="crm-mono text-xs text-slate-500">{r.contact}</span>
+                                            {r.action === 'create' && r.profile_defaults ? <span className="block truncate text-xs text-slate-500">{describeDefaults(r.profile_defaults)}</span> : null}</span>
+                                        <span className="shrink-0 text-xs">{r.place ? <span className="mr-2 text-slate-600">📍 {r.place}</span> : null}{r.client_id && ['already_converted', 'existing_match'].includes(r.action)
+                                            ? <Link className="font-medium text-teal-700 hover:underline" to={`/clients/${r.client_id}`}>{r.message} →</Link>
+                                            : <span className={r.action === 'create' ? 'font-semibold text-teal-800' : 'text-slate-500'}>{r.message}</span>}</span>
                                     </li>
                                 ))}
                             </ul>
+                            {aiBio && ready.length ? (
+                                <p className={`rounded-md px-3 py-2 text-xs ${review.ai_bio ? 'bg-teal-50 text-teal-900' : 'bg-amber-50 text-amber-900'}`}>
+                                    {review.ai_bio ? '✨ An AI bio will be written for each new profile in the background, usually within a few minutes.' : 'AI bios are off for this CRM (SEO engine switched off). Profiles will be created without a bio.'}
+                                </p>
+                            ) : null}
                             <p className="text-xs text-slate-500">This review is valid until {new Date(review.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Existing matches are not changed; reconcile them from Leads.</p>
                         </div>
                     ) : null}
@@ -243,27 +280,10 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                                 {progress.running ? `Creating ${progress.done + 1} of ${ready.length}…` : `${createdCount} created · ${results.length - createdCount} not created`}
                             </p>
                             {askToLock ? (
-                                <div className="rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-white p-4" role="region" aria-label="Lock new profiles">
-                                    <div className="flex items-start gap-3">
-                                        <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800">🔒</span>
-                                        <div className="min-w-0 flex-1">
-                                            <p className="text-sm font-semibold text-slate-900">Lock the {createdClients.length} new profile{createdClients.length === 1 ? '' : 's'}?</p>
-                                            <p className="mt-0.5 text-sm text-slate-600">They stay private. Locking also hides their contacts and stops the advertiser editing until someone unlocks them, a good fit while these scraped profiles are checked.</p>
-                                            <div className="mt-3 flex flex-wrap gap-2">
-                                                <button type="button" className="crm-btn-primary px-3 py-1.5" onClick={() => setLockOpen(true)}>Lock {createdClients.length} profile{createdClients.length === 1 ? '' : 's'}…</button>
-                                                <button type="button" className="crm-btn-secondary px-3 py-1.5" onClick={() => setLockOutcome('later')}>Not now</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
+                                <LockPrompt count={lockTargets.length} onLock={() => setLockOpen(true)} onLater={() => setLockOutcome('later')} />
                             ) : null}
-                            {lockOutcome && lockOutcome !== 'later' ? (
-                                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">🔒 {lockOutcome.locked} of {lockOutcome.total} new profile{lockOutcome.total === 1 ? '' : 's'} locked.{lockOutcome.locked < lockOutcome.total ? ' Open the others from Clients to lock them individually.' : ''}</p>
-                            ) : null}
-                            {lockOutcome === 'later' ? (
-                                <p className="text-xs text-slate-500">Not locked. You can lock them later from Clients (select them, then Lock).</p>
-                            ) : null}
-                            <ul className="max-h-[22rem] divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 text-sm">
+                            <LockOutcome outcome={lockOutcome} />
+                            <ul className="max-h-[22rem] divide-y divide-slate-100 overflow-y-auto overscroll-contain rounded-lg border border-slate-200 text-sm">
                                 {ready.map((r) => {
                                     const res = progress.results[r.id];
                                     return (
@@ -271,7 +291,7 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                                             <span className="min-w-0 truncate font-medium text-slate-900">{r.name}</span>
                                             <span className="shrink-0 text-xs">
                                                 {!res ? <span className="text-slate-400">Waiting</span>
-                                                    : res.status === 'created' ? <Link className="font-semibold text-teal-700 hover:underline" to={`/clients/${res.client_id}`}>Created{res.city ? ` in ${res.city}` : ''} →</Link>
+                                                    : res.status === 'created' ? <>{res.bio === 'queued' ? <span className="mr-2 text-slate-500">✨ Bio queued</span> : null}<Link className="font-semibold text-teal-700 hover:underline" to={`/clients/${res.client_id}`}>Created{res.city ? ` in ${res.city}` : ''} →</Link></>
                                                         : <span className="text-rose-700">{res.message}</span>}
                                             </span>
                                         </li>
@@ -311,10 +331,10 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
         </div>
             <LockProfilesDialog
                 open={lockOpen}
-                clients={createdClients}
+                clients={lockTargets}
                 defaultReasonCode="verification_required"
                 onClose={() => setLockOpen(false)}
-                onCompleted={(tally) => setLockOutcome({ locked: Number(tally?.locked || 0), total: createdClients.length })}
+                onCompleted={(tally) => setLockOutcome({ locked: Number(tally?.locked || 0), total: lockTargets.length })}
             />
         </>
     );
@@ -326,5 +346,39 @@ function Stat({ label, value, tone }) {
             <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</dt>
             <dd className={`crm-mono text-xl font-semibold tabular-nums ${tone || 'text-slate-900'}`}>{value}</dd>
         </div>
+    );
+}
+
+function LockPrompt({ count, existing = false, onLock, onLater }) {
+    const noun = `${existing ? '' : 'new '}profile${count === 1 ? '' : 's'}`;
+    return (
+        <div className="rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-white p-4" role="region" aria-label="Lock profiles">
+            <div className="flex items-start gap-3">
+                <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800">🔒</span>
+                <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900">
+                        {existing ? `${count} of these leads are already clients. Lock their profiles?` : `Lock the ${count} ${noun}?`}
+                    </p>
+                    <p className="mt-0.5 text-sm text-slate-600">They stay private. Locking also hides their contacts and stops the advertiser editing until someone unlocks them, a good fit while these scraped profiles are checked.</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                        <button type="button" className="crm-btn-primary px-3 py-1.5" onClick={onLock}>Lock {count} {noun}…</button>
+                        <button type="button" className="crm-btn-secondary px-3 py-1.5" onClick={onLater}>Not now</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function LockOutcome({ outcome, existing = false }) {
+    if (!outcome) return null;
+    if (outcome === 'later') {
+        return <p className="text-xs text-slate-500">Not locked. You can lock them later from Clients (select them, then Lock).</p>;
+    }
+    const noun = `${existing ? '' : 'new '}profile${outcome.total === 1 ? '' : 's'}`;
+    return (
+        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+            🔒 {outcome.locked} of {outcome.total} {noun} locked.{outcome.locked < outcome.total ? ' The rest could not be locked; open them from Clients to see why.' : ''}
+        </p>
     );
 }

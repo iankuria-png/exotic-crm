@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
-import { Spinner, errorMessage, timeAgo } from './scraperUi';
+import { Spinner, errorMessage, timeAgo, useScrollLock } from './scraperUi';
 
 /**
  * Human-in-the-loop override: the person opens the site in their own browser, passes
@@ -14,6 +14,7 @@ export default function CapturePanel({ site, open, onClose, onReceived, toast })
     const [pasteUrl, setPasteUrl] = useState('');
     const [captureId, setCaptureId] = useState(null);
     const bookmarkRef = useRef(null);
+    useScrollLock(open);
 
     const create = useMutation({
         mutationFn: () => api.post(`/crm/scraper/sites/${site.id}/captures`).then((r) => r.data),

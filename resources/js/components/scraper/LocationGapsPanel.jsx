@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
-import { Spinner, errorMessage, timeAgo } from './scraperUi';
+import { Spinner, errorMessage, timeAgo, useScrollLock } from './scraperUi';
 import ConvertPlaceDialog from './ConvertPlaceDialog';
 
 const FILTERS = [
@@ -209,6 +209,7 @@ function BatchDialog({ platform, places, rows, sites, onClose, onDone, toast }) 
         rows.forEach((r) => r.competitors.by_site.forEach((b) => { m[b.site_id] = (m[b.site_id] || 0) + b.count; }));
         return m;
     }, [rows]);
+    useScrollLock(true);
     const [mode, setMode] = useState('dry_run');
     const [picked, setPicked] = useState(() => new Set(sites.filter((s) => s.runnable && (perSite[s.id] || s.basis === 'none')).map((s) => s.id)));
     const ordered = [...sites].sort((a, b) => (b.runnable - a.runnable) || ((perSite[b.id] || 0) - (perSite[a.id] || 0)));
@@ -235,7 +236,7 @@ function BatchDialog({ platform, places, rows, sites, onClose, onDone, toast }) 
                     </div>
                     <button type="button" className="crm-btn-secondary px-3 py-1.5" onClick={onClose}>Close</button>
                 </header>
-                <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+                <div className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4">
                     <div className="grid gap-2 sm:grid-cols-2">
                         {[['dry_run', 'Preview first', 'Review and pick before any lead is created.'], ['import', 'Run & import', 'Every new matching profile becomes a lead.']].map(([key, title, hint]) => (
                             <label key={key} className={`flex cursor-pointer flex-col rounded-lg border p-3 text-sm ${mode === key ? 'border-teal-600 bg-teal-50/60 ring-1 ring-teal-600' : 'border-slate-200 hover:bg-slate-50'}`}>

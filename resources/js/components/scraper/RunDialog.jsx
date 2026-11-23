@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import LocationPicker, { mergeLocationSuggestions } from './LocationPicker';
-import { Spinner } from './scraperUi';
+import { Spinner, useScrollLock } from './scraperUi';
 
 const norm = (v) => String(v || '').normalize('NFD').replace(/\p{Mn}+/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
@@ -14,6 +14,7 @@ export default function RunDialog({ open, site, initialMode = 'dry_run', initial
     const [places, setPlaces] = useState([]);
     const [includeUnknown, setIncludeUnknown] = useState(false);
     const [saveDefault, setSaveDefault] = useState(false);
+    useScrollLock(open);
 
     const defaults = site?.crawl_settings?.locations || site?.default_locations || [];
 
@@ -72,7 +73,7 @@ export default function RunDialog({ open, site, initialMode = 'dry_run', initial
                     <button type="button" className="crm-btn-secondary px-3 py-1.5" onClick={onClose}>Close</button>
                 </header>
 
-                <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4">
+                <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-4">
                     <fieldset>
                         <legend className="text-sm font-semibold text-slate-900">What should happen</legend>
                         <div className="mt-2 grid gap-2 sm:grid-cols-2">

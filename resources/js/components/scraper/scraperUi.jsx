@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 
 export const HEALTH = {
     ready: { label: 'Ready', dot: 'bg-emerald-500', chip: 'border-emerald-200 bg-emerald-50 text-emerald-800', icon: '✓' },
@@ -108,4 +108,18 @@ export function groupTech(tech = []) {
         (groups[t.category] ||= []).push(t);
     });
     return TECH_ORDER.filter((c) => groups[c]).map((c) => ({ category: c, items: groups[c] }));
+}
+
+/**
+ * Freeze the page behind an open dialog: the CRM scrolls inside <main>, so lock that
+ * (and the document, just in case) and restore the previous values on close.
+ */
+export function useScrollLock(active = true) {
+    useEffect(() => {
+        if (!active) return undefined;
+        const targets = [document.querySelector('main'), document.documentElement].filter(Boolean);
+        const previous = targets.map((el) => el.style.overflow);
+        targets.forEach((el) => { el.style.overflow = 'hidden'; });
+        return () => targets.forEach((el, i) => { el.style.overflow = previous[i]; });
+    }, [active]);
 }

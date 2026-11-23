@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Jobs\GenerateLeadProfileBioJob;
 use App\Models\Client;
 use App\Models\Lead;
+use App\Support\LeadProfileDefaults;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -19,7 +21,10 @@ class BulkLeadConversionService
         private readonly LeadConversionService $conversion
     ) {}
 
-    public function preview(Request $request, array $ids, array $placements = []): array
+    /**
+     * @param  array{smart_defaults?: bool, ai_bio?: bool}  $options  Lead Scraper starter facts and AI bio.
+     */
+    public function preview(Request $request, array $ids, array $placements = [], array $options = []): array
     {
         $leads = Lead::with(['platform', 'assignedAgent'])->findMany($ids)->keyBy('id');
         if ($leads->count() !== count($ids)) {
@@ -31,7 +36,13 @@ class BulkLeadConversionService
 
         $expires = now()->addMinutes(30);
         $placements = $this->resolvePlacements($leads, $placements);
-        $rows = collect($ids)->map(fn ($id) => $this->inspect($leads[$id], $placements[$id] ?? null));
+        // Random starter facts are drawn once here and sealed in the token, so the
+        // reviewed profile is exactly the one created (and a retry stays idempotent).
+        $defaults = ! empty($options['smart_defaults'])
+            ? collect($ids)->mapWithKeys(fn ($id) => [$id => LeadProfileDefaults::generate()])->all()
+            : [];
+        $aiBio = ! empty($options['ai_bio']);
+        $rows = collect($ids)->map(fn ($id) => $this->inspect($leads[$id], $placements[$id] ?? null, $defaults[$id] ?? null));
         // Block every repeated contact, rather than choosing a winner by row order.
         $contacts = [];
         foreach ($rows as $row) {
@@ -42,7 +53,7 @@ class BulkLeadConversionService
             }
         }
         $repeated = collect($contacts)->filter(fn ($group) => count($group) > 1)->flatten()->unique();
-        $rows = $rows->map(function ($row) use ($request, $expires, $repeated, $placements) {
+        $rows = $rows->map(function ($row) use ($request, $expires, $repeated, $placements, $defaults, $aiBio) {
             if ($row['action'] === 'create' && $repeated->contains($row['id'])) {
                 $row['action'] = 'needs_attention';
                 $row['message'] = 'Shares a contact with another selected lead. Select one of these leads and review again.';
@@ -53,6 +64,8 @@ class BulkLeadConversionService
                     'lead_id' => $row['id'],
                     'fingerprint' => $row['fingerprint'],
                     'placement' => $placements[$row['id']] ?? null,
+                    'defaults' => $defaults[$row['id']] ?? null,
+                    'ai_bio' => $aiBio,
                     'expires' => $expires->timestamp,
                 ], JSON_THROW_ON_ERROR));
             }
@@ -66,6 +79,7 @@ class BulkLeadConversionService
             'expires_at' => $expires->toIso8601String(),
             'limit' => self::LIMIT,
             'summary' => $rows->countBy('action')->all(),
+            'ai_bio' => $aiBio && $this->bioEngineReady(),
         ];
     }
 
@@ -81,9 +95,10 @@ class BulkLeadConversionService
         abort_unless(($review['lead_id'] ?? null) === (int) $lead->id, 422, 'This review is for a different lead.');
         abort_if(($review['expires'] ?? 0) <= now()->timestamp, 422, 'This review has expired. Review the selection again.');
 
-        return $this->conversion->withLockedLead($lead, function (Lead $locked) use ($request, $review, $reason) {
+        $defaults = LeadProfileDefaults::sanitize($review['defaults'] ?? null);
+        $result = $this->conversion->withLockedLead($lead, function (Lead $locked) use ($request, $review, $reason, $defaults) {
             $this->authorize($request, $locked);
-            $row = $this->inspect($locked, is_array($review['placement'] ?? null) ? $review['placement'] : null);
+            $row = $this->inspect($locked, is_array($review['placement'] ?? null) ? $review['placement'] : null, $defaults);
             if ($row['action'] === 'already_converted') {
                 return ['status' => 'already_converted', 'client_id' => $row['client_id'], 'message' => 'Already converted. No new profile was created.'];
             }
@@ -99,6 +114,22 @@ class BulkLeadConversionService
             return ['status' => 'created', 'client_id' => (int) $result['client']->id, 'city' => $row['payload']['city'],
                 'message' => 'Client created'.($row['payload']['city'] ? ' in '.$row['payload']['city'] : '').'. Profile is private.'];
         });
+
+        if (($result['status'] ?? null) === 'created' && ! empty($review['ai_bio'])) {
+            if ($this->bioEngineReady()) {
+                GenerateLeadProfileBioJob::dispatch((int) $result['client_id'], (int) $request->user()->id);
+                $result['bio'] = 'queued';
+            } else {
+                $result['bio'] = 'unavailable';
+            }
+        }
+
+        return $result;
+    }
+
+    private function bioEngineReady(): bool
+    {
+        return (bool) config('services.seo_engine.enabled', false);
     }
 
     private function authorize(Request $request, Lead $lead): void
@@ -141,7 +172,7 @@ class BulkLeadConversionService
         return $resolved;
     }
 
-    private function inspect(Lead $lead, ?array $placement = null): array
+    private function inspect(Lead $lead, ?array $placement = null, ?array $defaults = null): array
     {
         $platform = $lead->platform;
         $phone = PhoneNormalizer::normalize($lead->phone_normalized, (string) ($platform?->phone_prefix ?: '254'));
@@ -151,6 +182,9 @@ class BulkLeadConversionService
             $payload['region_id'] = (int) $placement['region_id'];
             $payload['city_id'] = $placement['city_id'] !== null ? (int) $placement['city_id'] : null;
         }
+        if ($defaults) {
+            $payload += $defaults;
+        }
         $row = [
             'id' => (int) $lead->id,
             'name' => $lead->name ?: 'Unnamed lead',
@@ -159,6 +193,7 @@ class BulkLeadConversionService
             'owner' => $lead->assignedAgent?->name ?: 'Unassigned',
             'contact' => $phone ?: ($email ?: 'No contact details'),
             'place' => $placement['city'] ?? null,
+            'profile_defaults' => $defaults,
             'action' => 'create',
             'message' => 'Create private profile',
             'payload' => $payload,

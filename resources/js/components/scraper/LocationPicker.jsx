@@ -83,7 +83,7 @@ export default function LocationPicker({ value = [], onChange, suggestions = [],
                     onKeyDown={onKeyDown}
                 />
                 {open && !disabled && (matches.length > 0 || text.trim()) ? (
-                    <ul id={listId} role="listbox" className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                    <ul id={listId} role="listbox" className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto overscroll-contain rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
                         {matches.map((s, i) => (
                             <li key={s.label} role="option" aria-selected={i === active}>
                                 <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => add(s.label)} onMouseEnter={() => setActive(i)}

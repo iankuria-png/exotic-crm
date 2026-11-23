@@ -7,6 +7,7 @@ use App\Models\Lead;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Support\CrmAuditAction;
+use App\Support\LeadProfileDefaults;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -138,6 +139,11 @@ class LeadConversionService
             // WordPress places the profile by taxonomy term when a reviewed placement is given.
             ...(! empty($payload['region_id']) ? ['region_id' => (int) $payload['region_id']] : []),
             ...(! empty($payload['city_id']) ? ['city_id' => (int) $payload['city_id']] : []),
+            // Reviewed starter facts (Lead Scraper smart defaults), written as profile meta.
+            ...array_filter(
+                array_intersect_key($payload, array_flip(LeadProfileDefaults::FIELDS)),
+                static fn ($value) => is_string($value) && $value !== ''
+            ),
             'post_status' => $profileStatus,
         ]);
 

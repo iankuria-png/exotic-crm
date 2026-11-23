@@ -255,7 +255,7 @@ function RunResults({ run, site, toast }) {
                             ) : null}
                         </div>
                     </div>
-                    <div className="relative max-h-[34rem] overflow-auto">
+                    <div className="relative max-h-[34rem] overflow-auto overscroll-contain">
                         <table className="min-w-full text-sm">
                             <thead className="sticky top-0 bg-white text-left text-xs text-slate-500 shadow-[0_1px_0_#e2e8f0]">
                                 <tr>
@@ -339,7 +339,7 @@ function EventLog({ events = [] }) {
     if (!events?.length) return null;
     const tone = { error: 'text-rose-700', warning: 'text-amber-700', info: 'text-slate-600' };
     return (
-        <ol className="mt-2 max-h-40 space-y-0.5 overflow-y-auto rounded-md bg-white/70 p-2 text-xs">
+        <ol className="mt-2 max-h-40 space-y-0.5 overflow-y-auto overscroll-contain rounded-md bg-white/70 p-2 text-xs">
             {[...events].reverse().slice(0, 30).map((e, i) => (
                 <li key={i} className={`flex gap-2 ${tone[e.level] || tone.info}`}>
                     <span className="crm-mono shrink-0 text-slate-400">{new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>

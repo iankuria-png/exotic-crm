@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import api from '../../services/api';
 import { flaggedPlatformLabel } from '../../utils/flags';
 import ProbeSummary from './ProbeSummary';
-import { HealthChip, Spinner, errorMessage } from './scraperUi';
+import { HealthChip, Spinner, errorMessage, useScrollLock } from './scraperUi';
 
 /**
  * Paste a listing address → the CRM checks it (tech, blockers, template, sample) →
@@ -17,6 +17,7 @@ export default function AddSiteDrawer({ open, onClose, platforms, library, defau
     const [ackTos, setAckTos] = useState(false);
     const [profile, setProfile] = useState(null);
     const inputRef = useRef(null);
+    useScrollLock(open);
 
     useEffect(() => {
         if (!open) return;
@@ -87,7 +88,7 @@ export default function AddSiteDrawer({ open, onClose, platforms, library, defau
                     <button type="button" className="crm-btn-secondary px-3 py-1.5" onClick={onClose}>Close</button>
                 </header>
 
-                <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+                <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-4">
                     <form
                         className="space-y-3"
                         onSubmit={(e) => { e.preventDefault(); if (validUrl && platformId) probe.mutate(); }}

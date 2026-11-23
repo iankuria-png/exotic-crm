@@ -236,7 +236,7 @@ TEXT;
             $providersOrder,
             $run,
         ));
-        $rawText = $this->sanitizeOutput($rawText);
+        $rawText = $this->withoutNumbers($this->sanitizeOutput($rawText), $generationOptions);
         $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
 
         $analysis = $this->measure($run, 'quality', fn () => $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions, $run));
@@ -263,7 +263,7 @@ TEXT;
             }
 
             if (! $rewriteFallback) {
-                $rawText = $this->sanitizeOutput($rewriteText);
+                $rawText = $this->withoutNumbers($this->sanitizeOutput($rewriteText), $generationOptions);
                 $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
                 $analysis = $this->measure($run, 'quality', fn () => $this->uniqueness->analyze($rawText, $snapshot->platformId, $generationOptions, $run));
                 $providerUsed = $rewriteProvider;
@@ -396,6 +396,9 @@ TEXT;
         $rewriteInstruction = trim((string) ($options['rewrite_instruction'] ?? ''));
         $rewriteLine = $rewriteInstruction !== '' ? "\nRewrite instruction: {$rewriteInstruction}" : '';
         $builtInGuardrail = self::BUILT_IN_GUARDRAIL;
+        $numbersRule = ! empty($options['no_digits'])
+            ? "\n- Do not use any numbers at all, as digits or as words: no ages, years, prices, measurements, phone numbers or counts."
+            : '';
         $langCode = (string) ($options['language'] ?? 'en');
         $langDirective = self::SUPPORTED_LANGUAGES[$langCode]['directive']
             ?? self::SUPPORTED_LANGUAGES['en']['directive'];
@@ -423,7 +426,7 @@ Style rules:
 - Avoid generic AI phrases like "sophisticated presence", "natural elegance", "commands attention", "unforgettable experience", "mutual respect", "quality over quantity", "bustling city", "ideal companion", "captivating presence".
 - No markdown, no headings, no lists, no emoji, no Unicode symbols.
 - Use plain ASCII punctuation only.
-- Return clean prose only.
+- Return clean prose only.{$numbersRule}
 {$builtInGuardrail}{$customLine}{$sameClientFeedback}{$feedbackBlock}{$immediateFeedback}{$rewriteLine}
 PROMPT;
     }
@@ -467,6 +470,11 @@ PROMPT;
 
         if (! empty($snapshot->extraFacts)) {
             $data['Human details to use only if natural'] = implode('; ', array_slice($snapshot->extraFacts, 0, 10));
+        }
+
+        if (! empty($options['no_digits'])) {
+            // Starter facts (age, rates) may be placeholders; keep numbers out of the prompt.
+            unset($data['Age'], $data['Rate context']);
         }
 
         $contact = $this->contactText($overlay, $options);
@@ -871,6 +879,34 @@ PROMPT;
             'estimated_cost_label' => $cost > 0 ? '$'.number_format($cost, 6) : '$0.000000',
             'pricing_basis' => 'Estimated from provider token usage and configured default per-1M-token rates.',
         ]);
+    }
+
+    /**
+     * With the `no_digits` option, drop sentences that carry a digit (ages, prices,
+     * phone numbers). If that would remove too much, strip the digits instead.
+     */
+    private function withoutNumbers(string $text, array $options): string
+    {
+        if (empty($options['no_digits']) || ! preg_match('/\d/u', $text)) {
+            return $text;
+        }
+
+        $paragraphs = [];
+        foreach (preg_split('/\n{2,}/u', $text) ?: [$text] as $paragraph) {
+            $sentences = preg_split('/(?<=[.!?])\s+/u', trim($paragraph)) ?: [];
+            $kept = array_filter($sentences, static fn (string $sentence): bool => ! preg_match('/\d/u', $sentence));
+            if ($kept !== []) {
+                $paragraphs[] = implode(' ', $kept);
+            }
+        }
+        $result = implode("\n\n", $paragraphs);
+
+        if (mb_strlen($result) < mb_strlen($text) * 0.6) {
+            $result = (string) preg_replace('/\s*\+?\d[\d.,:\/\-]*\s*(?:cm|kg|yrs?|years?|%)?/iu', ' ', $text);
+            $result = (string) preg_replace('/\s+([,.!?])/u', '$1', $result);
+        }
+
+        return trim((string) preg_replace('/[ \t]{2,}/u', ' ', $result));
     }
 
     private function textToHtml(string $text): string
