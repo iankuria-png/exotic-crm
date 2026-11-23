@@ -11,6 +11,7 @@ import CapturePanel from '../components/scraper/CapturePanel';
 import ConfigurePanel from '../components/scraper/ConfigurePanel';
 import RunsPanel from '../components/scraper/RunsPanel';
 import RunDialog from '../components/scraper/RunDialog';
+import LocationGapsPanel from '../components/scraper/LocationGapsPanel';
 import { HEALTH, HealthChip, RunChip, Spinner, TechChip, errorMessage, timeAgo } from '../components/scraper/scraperUi';
 
 const TABS = [['overview', 'Overview'], ['configure', 'Configure'], ['runs', 'Runs & results']];
@@ -31,6 +32,7 @@ export default function LeadScraper() {
 
     const selectedId = params.get('site') ? Number(params.get('site')) : null;
     const tab = params.get('tab') || 'overview';
+    const view = params.get('view') === 'gaps' ? 'gaps' : 'sites';
     const setQuery = (patch) => {
         const next = new URLSearchParams(params);
         Object.entries(patch).forEach(([k, v]) => (v === null || v === undefined || v === '' ? next.delete(k) : next.set(k, String(v))));
@@ -55,8 +57,8 @@ export default function LeadScraper() {
 
     // Pick the first site on wide screens when nothing is selected.
     useEffect(() => {
-        if (!selectedId && sites.length && window.matchMedia('(min-width: 1024px)').matches) setQuery({ site: sites[0].id });
-    }, [sites.length]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (view === 'sites' && !selectedId && sites.length && window.matchMedia('(min-width: 1024px)').matches) setQuery({ site: sites[0].id });
+    }, [sites.length, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const refresh = (updatedSite) => {
         if (updatedSite) qc.setQueryData(['scraper-site', updatedSite.id], updatedSite);
@@ -149,6 +151,12 @@ export default function LeadScraper() {
                 subtitle="Check a directory at a glance, fix what blocks it, then collect and import leads."
                 actions={(
                     <>
+                        <div className="flex rounded-lg border border-slate-300 bg-white p-0.5" role="tablist" aria-label="Lead Scraper view">
+                            {[['sites', 'Sites'], ['gaps', 'Location gaps']].map(([key, label]) => (
+                                <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setQuery({ view: key === 'gaps' ? 'gaps' : null })}
+                                    className={`rounded-md px-3 py-1.5 text-sm font-semibold ${view === key ? 'bg-slate-800 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{label}</button>
+                            ))}
+                        </div>
                         <Link to="/leads" className="crm-btn-secondary">Back to leads</Link>
                         <select aria-label="Market" className="crm-select-enhanced w-48" value={market} onChange={(e) => { setMarket(e.target.value); setQuery({ platform_id: e.target.value || null }); }}>
                             <option value="">All markets</option>
@@ -159,7 +167,15 @@ export default function LeadScraper() {
                 )}
             />
 
-            {overview.isError ? (
+            {view === 'gaps' ? (
+                <LocationGapsPanel
+                    platformId={market || ((meta.platforms || []).length === 1 ? String(meta.platforms[0].id) : '')}
+                    platforms={meta.platforms}
+                    onPickMarket={(id) => { setMarket(id); setQuery({ platform_id: id }); }}
+                    onOpenRun={(siteId, runId) => { setSelectedRunId(runId); setQuery({ view: null, site: siteId, tab: 'runs' }); }}
+                    toast={toast}
+                />
+            ) : overview.isError ? (
                 <div className="crm-surface p-6 text-sm text-rose-800">Could not load the scraper. <button type="button" className="font-semibold underline" onClick={() => overview.refetch()}>Retry</button></div>
             ) : (
                 <div className="grid gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">

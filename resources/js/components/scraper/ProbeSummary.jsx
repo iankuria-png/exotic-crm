@@ -165,7 +165,7 @@ export default function ProbeSummary({ profile, onOverride, overrideBusy = null,
                         <h4 className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">What the scraper reads</h4>
                         <span className="text-xs text-slate-500">First {profile.sample.length} of {counts.rows}</span>
                     </div>
-                    <div className="overflow-x-auto">
+                    <div className="relative overflow-x-auto">
                         <table className="min-w-full text-sm">
                             <thead className="text-left text-xs text-slate-500">
                                 <tr>

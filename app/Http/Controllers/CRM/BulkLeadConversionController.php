@@ -16,9 +16,13 @@ class BulkLeadConversionController extends Controller
         $data = $request->validate([
             'lead_ids' => 'required|array|min:1|max:'.BulkLeadConversionService::LIMIT,
             'lead_ids.*' => 'required|integer|distinct|min:1',
+            // Optional WordPress location per lead (Lead Scraper "convert & place").
+            'placements' => 'nullable|array|max:'.BulkLeadConversionService::LIMIT,
+            'placements.*.region_id' => 'required_with:placements|integer|min:1',
+            'placements.*.city_id' => 'nullable|integer|min:1',
         ]);
 
-        return response()->json($service->preview($request, array_map('intval', $data['lead_ids'])));
+        return response()->json($service->preview($request, array_map('intval', $data['lead_ids']), (array) ($data['placements'] ?? [])));
     }
 
     public function store(Request $request, Lead $lead, BulkLeadConversionService $service)

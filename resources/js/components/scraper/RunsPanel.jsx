@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { RunChip, Spinner, errorMessage, timeAgo } from './scraperUi';
+import ConvertPlaceDialog from './ConvertPlaceDialog';
 
 const ACTIVE = ['queued', 'running'];
 const STOP_REASON = {
@@ -82,7 +83,7 @@ export default function RunsPanel({ site, selectedRunId, onSelectRun, toast }) {
                 {run.isLoading || !run.data ? <div className="h-40 animate-pulse rounded-xl bg-slate-100 motion-reduce:animate-none" /> : (
                     ACTIVE.includes(run.data.status)
                         ? <LiveProgress run={run.data} onCancel={() => cancel.mutate(run.data.id)} cancelling={cancel.isPending || run.data.cancel_requested} />
-                        : <RunResults run={run.data} toast={toast} />
+                        : <RunResults run={run.data} site={site} toast={toast} />
                 )}
             </div>
         </div>
@@ -119,14 +120,17 @@ function LiveProgress({ run, onCancel, cancelling }) {
     );
 }
 
-function RunResults({ run, toast }) {
+function RunResults({ run, site, toast }) {
     const qc = useQueryClient();
     const [filter, setFilter] = useState('new');
     const [query, setQuery] = useState('');
     const [selected, setSelected] = useState(() => new Set());
+    const [convertOpen, setConvertOpen] = useState(false);
+    const [convertDismissed, setConvertDismissed] = useState(false);
     const candidates = useMemo(() => (run.candidates || []).map((c, index) => ({ ...c, index })), [run.candidates]);
 
-    useEffect(() => { setSelected(new Set()); }, [run.id]);
+    useEffect(() => { setSelected(new Set()); setConvertDismissed(false); }, [run.id]);
+    const importedLeads = useMemo(() => candidates.filter((c) => c.status === 'created' && c.lead_id).map((c) => ({ lead_id: c.lead_id, name: c.name, city: c.city })), [candidates]);
 
     const counts = useMemo(() => ({
         all: candidates.length,
@@ -208,6 +212,23 @@ function RunResults({ run, toast }) {
                 {(run.progress?.events || []).length ? <details className="mt-3"><summary className="cursor-pointer text-xs font-semibold text-slate-600">Run log</summary><EventLog events={run.progress.events} /></details> : null}
             </div>
 
+            {importedLeads.length > 0 && !convertDismissed ? (
+                <div className="flex flex-col gap-3 rounded-xl border border-teal-200 bg-gradient-to-r from-teal-50 to-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p className="text-sm font-semibold text-slate-900">{importedLeads.length} lead{importedLeads.length === 1 ? '' : 's'} imported from this run</p>
+                        <p className="text-sm text-slate-600">Convert them to clients and place them in our thinnest locations?</p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                        <button type="button" className="crm-btn-secondary px-3 py-1.5" onClick={() => setConvertDismissed(true)}>Not now</button>
+                        <button type="button" className="crm-btn-primary px-3 py-1.5" onClick={() => setConvertOpen(true)}>Convert &amp; place</button>
+                    </div>
+                </div>
+            ) : null}
+            {convertOpen ? (
+                <ConvertPlaceDialog platformId={site.platform_id} platformName={site.platform?.name || 'this market'} leads={importedLeads} toast={toast}
+                    onClose={() => setConvertOpen(false)} onFinished={(n) => { if (n) setConvertDismissed(true); }} />
+            ) : null}
+
             {candidates.length > 0 ? (
                 <div className="overflow-hidden rounded-xl border border-slate-200">
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
@@ -234,7 +255,7 @@ function RunResults({ run, toast }) {
                             ) : null}
                         </div>
                     </div>
-                    <div className="max-h-[34rem] overflow-auto">
+                    <div className="relative max-h-[34rem] overflow-auto">
                         <table className="min-w-full text-sm">
                             <thead className="sticky top-0 bg-white text-left text-xs text-slate-500 shadow-[0_1px_0_#e2e8f0]">
                                 <tr>

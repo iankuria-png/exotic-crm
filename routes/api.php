@@ -747,6 +747,9 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
 
         // Lead Scraper workspace
         Route::get('/scraper/overview', [ScraperController::class, 'overview']);
+        Route::get('/scraper/location-supply', [ScraperController::class, 'locationSupply']);
+        Route::post('/scraper/batch-runs', [ScraperController::class, 'batchRuns'])->middleware('throttle:20,1');
+        Route::post('/scraper/placements', [ScraperController::class, 'placements'])->middleware('throttle:60,1');
         Route::post('/scraper/probe', [ScraperController::class, 'probe'])->middleware('throttle:30,1');
         Route::post('/scraper/sites', [ScraperController::class, 'store']);
         Route::get('/scraper/sites/{scraperSource}', [ScraperController::class, 'show']);

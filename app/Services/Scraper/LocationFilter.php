@@ -12,7 +12,7 @@ class LocationFilter
     private const STOPWORDS = [
         'in', 'at', 'of', 'the', 'and', 'near', 'along', 'off', 'town', 'city', 'kenya', 'estate', 'area',
         'road', 'rd', 'street', 'st', 'drive', 'avenue', 'ave', 'centre', 'center', 'mall', 'stage', 'county',
-        'escort', 'escorts', 'from', 'based',
+        'escort', 'escorts', 'from', 'based', 'township',
     ];
 
     /** @var array<int, string> */
@@ -152,6 +152,53 @@ class LocationFilter
         $out = [];
         foreach (array_slice($terms, 0, $limit, true) as $key => $count) {
             $out[] = ['label' => $labels[$key] ?? $key, 'count' => (int) $count];
+        }
+
+        return $out;
+    }
+
+    /**
+     * The distinctive part of a place name: "Nakuru town Escorts" → "nakuru",
+     * "Addis Ababa Town" → "addis ababa". Falls back to the full normalised name.
+     */
+    public static function core(?string $place): string
+    {
+        $norm = self::normalize($place);
+        $words = array_values(array_filter(explode(' ', $norm), fn ($w) => $w !== '' && ! in_array($w, self::STOPWORDS, true)));
+
+        return $words ? implode(' ', $words) : $norm;
+    }
+
+    /**
+     * True when a recorded city is a real place name (not "-1", "42" or empty).
+     */
+    public static function isPlace(?string $value): bool
+    {
+        return (bool) preg_match('/\p{L}{2,}/u', (string) $value);
+    }
+
+    /**
+     * Exact location strings with how many profiles list each, most common first.
+     *
+     * @param  array<int, ?string>  $cities
+     * @return array<int, array{label: string, count: int}>
+     */
+    public static function counts(array $cities, int $limit = 400): array
+    {
+        $counts = [];
+        $labels = [];
+        foreach ($cities as $city) {
+            $key = self::normalize($city);
+            if ($key === '') {
+                continue;
+            }
+            $counts[$key] = ($counts[$key] ?? 0) + 1;
+            $labels[$key] ??= trim((string) preg_replace('/\s+/u', ' ', (string) $city));
+        }
+        arsort($counts);
+        $out = [];
+        foreach (array_slice($counts, 0, $limit, true) as $key => $count) {
+            $out[] = ['label' => mb_substr($labels[$key], 0, 120), 'count' => (int) $count];
         }
 
         return $out;

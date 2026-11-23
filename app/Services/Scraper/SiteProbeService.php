@@ -161,6 +161,7 @@ class SiteProbeService
             'pagination' => $pagination,
             'counts' => $stats,
             'locations' => LocationFilter::facets(array_column($extraction['rows'], 'city')),
+            'location_counts' => LocationFilter::counts(array_column($extraction['rows'], 'city')),
             'with_location' => count(array_filter($extraction['rows'], fn ($r) => ($r['city'] ?? null) !== null)),
             'extraction_errors' => $extraction['errors'],
             'sample' => array_slice($extraction['rows'], 0, 8),
@@ -222,7 +223,7 @@ class SiteProbeService
             'title' => null, 'tech' => [], 'blockers' => [], 'robots' => null, 'sitemap' => null,
             'template' => null, 'detected_rules' => null, 'effective_rules' => [], 'pagination' => null,
             'counts' => ['rows' => 0, 'phones' => 0, 'whatsapp' => 0, 'links' => 0, 'names' => 0],
-            'extraction_errors' => [], 'sample' => [], 'locations' => [], 'with_location' => 0,
+            'extraction_errors' => [], 'sample' => [], 'locations' => [], 'location_counts' => [], 'with_location' => 0,
         ];
         if ($profile['headline'] === null && $profile['blockers'] !== []) {
             $profile['headline'] = $profile['blockers'][0]['title'];

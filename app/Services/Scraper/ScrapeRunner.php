@@ -371,6 +371,7 @@ class ScrapeRunner
             'outside_location' => $outside,
             'filters' => $filters,
             'locations' => LocationFilter::facets($allCities),
+            'location_counts' => LocationFilter::counts($allCities),
         ]);
     }
 
@@ -405,6 +406,7 @@ class ScrapeRunner
             'outside_location' => (int) ($extra['outside_location'] ?? 0),
             'filters' => $extra['filters'] ?? $run->filters,
             'locations' => $extra['locations'] ?? [],
+            'location_counts' => $extra['location_counts'] ?? [],
             'dry_run' => $run->mode !== 'import',
         ];
 

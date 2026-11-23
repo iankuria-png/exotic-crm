@@ -16,7 +16,9 @@ use App\Services\Scraper\Fetch\FetchDriverRegistry;
 use App\Services\Scraper\Fetch\UrlSafety;
 use App\Services\Scraper\Fetch\UrlTools;
 use App\Services\Scraper\LeadImporter;
+use App\Services\Scraper\LocationSupplyService;
 use App\Services\Scraper\OverrideCatalog;
+use App\Services\Scraper\PlacementMatcher;
 use App\Services\Scraper\SiteProbeService;
 use App\Services\Scraper\TemplateLibrary;
 use App\Services\ScraperSourceService;
@@ -274,27 +276,117 @@ class ScraperController extends Controller
             return response()->json(['message' => 'A run is already in progress for this site.', 'run' => $this->serializeRun($active, false)], 409);
         }
 
+        $run = $this->queueRun($request, $scraperSource, $validated['mode'], $filters, $validated['reason'] ?? null);
+
+        return response()->json(['run' => $this->serializeRun($run->fresh('initiatedBy:id,name'), true)], 202);
+    }
+
+    /**
+     * Location gaps: our available profiles per place against what the market's
+     * competitor sites list there, fewest of ours first.
+     */
+    public function locationSupply(Request $request, LocationSupplyService $supply)
+    {
+        $validated = $request->validate(['platform_id' => 'required|integer|exists:platforms,id']);
+        $platform = $this->platform($request->user(), (int) $validated['platform_id']);
+
+        return response()->json(['platform' => ['id' => $platform->id, 'name' => $platform->name, 'country' => $platform->country]] + $supply->forMarket($platform));
+    }
+
+    /**
+     * Loosely match scraped places to the market's WordPress cities (sanitized first),
+     * with our available profile count per city so thin places are obvious.
+     */
+    public function placements(Request $request, PlacementMatcher $matcher)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'places' => 'present|array|max:200',
+            'places.*' => 'nullable|string|max:200',
+        ]);
+        $platform = $this->platform($request->user(), (int) $validated['platform_id']);
+        try {
+            $options = $matcher->options($platform);
+        } catch (\Throwable) {
+            return response()->json(['message' => 'WordPress locations for '.$platform->name.' are unavailable right now. Try again shortly.'], 503);
+        }
+
+        $matches = [];
+        foreach (array_unique(array_map(fn ($p) => (string) $p, $validated['places'])) as $place) {
+            $matches[] = $matcher->match($place, $options);
+        }
+
+        return response()->json(['options' => $options, 'matches' => $matches]);
+    }
+
+    /**
+     * Start location-limited runs on several sites of one market at once.
+     */
+    public function batchRuns(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'site_ids' => 'required|array|min:1|max:30',
+            'site_ids.*' => 'integer',
+            'locations' => 'required|array|min:1|max:20',
+            'locations.*' => 'string|max:80',
+            'mode' => ['required', Rule::in(['dry_run', 'import'])],
+            'include_unknown_location' => 'nullable|boolean',
+        ]);
+        $platform = $this->platform($request->user(), (int) $validated['platform_id']);
+        $filters = ['locations' => CrawlSettings::locations($validated['locations']), 'include_unknown_location' => (bool) ($validated['include_unknown_location'] ?? false)];
+        if ($filters['locations'] === []) {
+            return response()->json(['message' => 'Choose at least one place.'], 422);
+        }
+
+        $started = [];
+        $skipped = [];
+        $sources = ScraperSource::query()->where('platform_id', $platform->id)->whereIn('id', array_unique($validated['site_ids']))->get();
+        foreach ($sources as $source) {
+            $reason = match (true) {
+                ! $source->is_active => 'Paused',
+                ! $source->compliance_ack_robots || ! $source->compliance_ack_tos => 'Checks not confirmed',
+                $source->runs()->whereIn('status', ['queued', 'running'])->where('created_at', '>=', now()->subHour())->exists() => 'Already running',
+                default => null,
+            };
+            if ($reason !== null) {
+                $skipped[] = ['site_id' => $source->id, 'name' => $source->name, 'reason' => $reason];
+
+                continue;
+            }
+            $run = $this->queueRun($request, $source, $validated['mode'], $filters, 'Location gaps: '.implode(', ', $filters['locations']));
+            $started[] = ['site_id' => $source->id, 'name' => $source->name, 'run' => $this->serializeRun($run->fresh(), false)];
+        }
+        foreach (array_diff(array_unique($validated['site_ids']), $sources->pluck('id')->all()) as $missing) {
+            $skipped[] = ['site_id' => (int) $missing, 'name' => null, 'reason' => 'Not a site in this market'];
+        }
+
+        return response()->json(['started' => $started, 'skipped' => $skipped, 'filters' => $filters], $started ? 202 : 422);
+    }
+
+    private function queueRun(Request $request, ScraperSource $source, string $mode, array $filters, ?string $reason): ScraperRun
+    {
         $run = ScraperRun::query()->create([
-            'scraper_source_id' => $scraperSource->id,
-            'platform_id' => $scraperSource->platform_id,
+            'scraper_source_id' => $source->id,
+            'platform_id' => $source->platform_id,
             'initiated_by' => $request->user()->id,
-            'mode' => $validated['mode'],
+            'mode' => $mode,
             'status' => 'queued',
-            'reason' => $validated['reason'] ?? null,
+            'reason' => $reason,
             'filters' => $filters,
             'progress' => ['phase' => 'queued', 'events' => []],
         ]);
 
-        $this->audit->fromRequest($request, (int) $scraperSource->platform_id, CrmAuditAction::SCRAPER_RUN, 'scraper_source', (int) $scraperSource->id, null, [
+        $this->audit->fromRequest($request, (int) $source->platform_id, CrmAuditAction::SCRAPER_RUN, 'scraper_source', (int) $source->id, null, [
             'run_id' => $run->id,
             'mode' => $run->mode,
-            'fetch_driver' => $scraperSource->fetch_driver,
+            'fetch_driver' => $source->fetch_driver,
             'locations' => $filters['locations'],
-        ], $validated['reason'] ?? 'Lead Scraper run');
+        ], $reason ?? 'Lead Scraper run');
 
         RunScraperSourceJob::dispatch((int) $run->id);
 
-        return response()->json(['run' => $this->serializeRun($run->fresh('initiatedBy:id,name'), true)], 202);
+        return $run;
     }
 
     public function showRun(Request $request, ScraperRun $scraperRun)

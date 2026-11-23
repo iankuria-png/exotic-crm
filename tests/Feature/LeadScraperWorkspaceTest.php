@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Client;
 use App\Models\Lead;
 use App\Models\Platform;
 use App\Models\ScraperCapture;
@@ -271,6 +272,54 @@ class LeadScraperWorkspaceTest extends TestCase
         $this->assertSame('ready', $following['verdict']);
         $this->assertSame('phones_on_profiles', $following['blockers'][0]['key']);
         $this->assertSame('info', $following['blockers'][0]['severity']);
+    }
+
+    public function test_location_gaps_rank_thin_places_and_batch_runs_scrape_them(): void
+    {
+        [$platform, $user] = $this->actingManager();
+        // Ours: Westlands 3 active, Kilimani 1 active + 1 expired (unlockable), Karen 0 available (private).
+        foreach (range(1, 3) as $i) {
+            Client::factory()->create(['platform_id' => $platform->id, 'city' => 'Westlands', 'wp_post_id' => 100 + $i]);
+        }
+        Client::factory()->create(['platform_id' => $platform->id, 'city' => 'Kilimani', 'wp_post_id' => 201]);
+        Client::factory()->create(['platform_id' => $platform->id, 'city' => 'kilimani ', 'wp_post_id' => 202, 'lifecycle_state' => \App\Support\ClientLifecycleState::EXPIRED]);
+        Client::factory()->create(['platform_id' => $platform->id, 'city' => 'Karen', 'wp_post_id' => 301, 'profile_status' => 'private']);
+
+        $siteA = $this->createSite($platform, $user, ['name' => 'Site A', 'source_url' => 'https://a.test/', 'site_profile' => ['location_counts' => [
+            ['label' => 'Kilimani, Nairobi', 'count' => 12], ['label' => 'Westlands, Nairobi', 'count' => 4], ['label' => 'Ruaka, Nairobi', 'count' => 9],
+        ]]]);
+        $siteB = $this->createSite($platform, $user, ['name' => 'Site B', 'source_url' => 'https://b.test/']);
+        ScraperRun::query()->create(['scraper_source_id' => $siteB->id, 'platform_id' => $platform->id, 'initiated_by' => $user->id, 'mode' => 'dry_run', 'status' => 'success',
+            'result' => ['location_counts' => [['label' => 'Karen Nairobi', 'count' => 6], ['label' => 'Ruaka Nairobi in Joyland', 'count' => 3]]], 'completed_at' => now()]);
+        $paused = $this->createSite($platform, $user, ['name' => 'Paused site', 'source_url' => 'https://c.test/', 'is_active' => false]);
+
+        $data = $this->getJson("/api/crm/scraper/location-supply?platform_id={$platform->id}")->assertOk()->json();
+        $rows = collect($data['rows'])->keyBy('place');
+
+        $this->assertSame(['available' => 0, 'active' => 0, 'unlockable' => 0, 'clients' => 1], $rows['Karen']['ours']);
+        $this->assertSame(6, $rows['Karen']['competitors']['total']);
+        $this->assertSame(2, $rows['Kilimani']['ours']['available'], 'Active + unlockable, like Clients → Locations.');
+        $this->assertSame(12, $rows['Kilimani']['competitors']['total']);
+        $this->assertSame('competitor_only', $rows['Ruaka']['kind']);
+        $this->assertFalse($rows->has('Nairobi'), 'A parent region of our places is not a gap.');
+        $this->assertSame(12, $rows['Ruaka']['competitors']['total']);
+        // Fewest of ours first; among equals, most competitor profiles first.
+        $this->assertSame(['Ruaka', 'Karen'], array_slice(array_column($data['rows'], 'place'), 0, 2));
+        $this->assertSame('run', collect($data['sites'])->firstWhere('id', $siteB->id)['basis']);
+        $this->assertFalse(collect($data['sites'])->firstWhere('id', $paused->id)['runnable']);
+
+        // Batch: scrape Ruaka + Karen from all three; the paused site is skipped.
+        Http::fake(['*' => Http::response('<html><body></body></html>', 200, self::HTML)]);
+        $batch = $this->postJson('/api/crm/scraper/batch-runs', [
+            'platform_id' => $platform->id, 'site_ids' => [$siteA->id, $siteB->id, $paused->id], 'locations' => ['Ruaka', 'Karen'], 'mode' => 'dry_run',
+        ])->assertStatus(202)->json();
+        $this->assertCount(2, $batch['started']);
+        $this->assertSame([['site_id' => $paused->id, 'name' => 'Paused site', 'reason' => 'Paused']], $batch['skipped']);
+        $this->assertSame(['Ruaka', 'Karen'], ScraperRun::query()->where('scraper_source_id', $siteA->id)->latest('id')->first()->filters['locations']);
+
+        // Another market's site cannot be pulled in.
+        $other = $this->createPlatform('Uganda');
+        $this->postJson('/api/crm/scraper/batch-runs', ['platform_id' => $other->id, 'site_ids' => [$siteA->id], 'locations' => ['Kampala'], 'mode' => 'dry_run'])->assertForbidden();
     }
 
     public function test_multi_page_dry_run_then_selective_import(): void

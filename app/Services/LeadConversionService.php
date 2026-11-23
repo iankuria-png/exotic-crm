@@ -135,6 +135,9 @@ class LeadConversionService
             'email' => $email ?? '',
             'phone' => $phone ?? '',
             'city' => ! empty($payload['city']) ? trim((string) $payload['city']) : '',
+            // WordPress places the profile by taxonomy term when a reviewed placement is given.
+            ...(! empty($payload['region_id']) ? ['region_id' => (int) $payload['region_id']] : []),
+            ...(! empty($payload['city_id']) ? ['city_id' => (int) $payload['city_id']] : []),
             'post_status' => $profileStatus,
         ]);
 

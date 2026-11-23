@@ -19,7 +19,7 @@ class BulkLeadConversionService
         private readonly LeadConversionService $conversion
     ) {}
 
-    public function preview(Request $request, array $ids): array
+    public function preview(Request $request, array $ids, array $placements = []): array
     {
         $leads = Lead::with(['platform', 'assignedAgent'])->findMany($ids)->keyBy('id');
         if ($leads->count() !== count($ids)) {
@@ -30,7 +30,8 @@ class BulkLeadConversionService
         }
 
         $expires = now()->addMinutes(30);
-        $rows = collect($ids)->map(fn ($id) => $this->inspect($leads[$id]));
+        $placements = $this->resolvePlacements($leads, $placements);
+        $rows = collect($ids)->map(fn ($id) => $this->inspect($leads[$id], $placements[$id] ?? null));
         // Block every repeated contact, rather than choosing a winner by row order.
         $contacts = [];
         foreach ($rows as $row) {
@@ -41,7 +42,7 @@ class BulkLeadConversionService
             }
         }
         $repeated = collect($contacts)->filter(fn ($group) => count($group) > 1)->flatten()->unique();
-        $rows = $rows->map(function ($row) use ($request, $expires, $repeated) {
+        $rows = $rows->map(function ($row) use ($request, $expires, $repeated, $placements) {
             if ($row['action'] === 'create' && $repeated->contains($row['id'])) {
                 $row['action'] = 'needs_attention';
                 $row['message'] = 'Shares a contact with another selected lead. Select one of these leads and review again.';
@@ -51,6 +52,7 @@ class BulkLeadConversionService
                     'actor_id' => (int) $request->user()->id,
                     'lead_id' => $row['id'],
                     'fingerprint' => $row['fingerprint'],
+                    'placement' => $placements[$row['id']] ?? null,
                     'expires' => $expires->timestamp,
                 ], JSON_THROW_ON_ERROR));
             }
@@ -81,7 +83,7 @@ class BulkLeadConversionService
 
         return $this->conversion->withLockedLead($lead, function (Lead $locked) use ($request, $review, $reason) {
             $this->authorize($request, $locked);
-            $row = $this->inspect($locked);
+            $row = $this->inspect($locked, is_array($review['placement'] ?? null) ? $review['placement'] : null);
             if ($row['action'] === 'already_converted') {
                 return ['status' => 'already_converted', 'client_id' => $row['client_id'], 'message' => 'Already converted. No new profile was created.'];
             }
@@ -94,7 +96,8 @@ class BulkLeadConversionService
             ]);
             abort_if(! empty($result['duplicate']), 409, 'An existing client now matches this lead. Review it before continuing.');
 
-            return ['status' => 'created', 'client_id' => (int) $result['client']->id, 'message' => 'Client created. Profile is private.'];
+            return ['status' => 'created', 'client_id' => (int) $result['client']->id, 'city' => $row['payload']['city'],
+                'message' => 'Client created'.($row['payload']['city'] ? ' in '.$row['payload']['city'] : '').'. Profile is private.'];
         });
     }
 
@@ -103,12 +106,51 @@ class BulkLeadConversionService
         $this->authorization->ensureUserCanAccessPlatform($request->user(), (int) $lead->platform_id, 'You do not have access to a selected lead market.');
     }
 
-    private function inspect(Lead $lead): array
+    /**
+     * Validate requested WordPress placements against each lead market's location catalogue.
+     *
+     * @param  \Illuminate\Support\Collection<int, Lead>  $leads
+     * @return array<int, array{region_id: int, city_id: ?int, city: string}>
+     */
+    private function resolvePlacements($leads, array $requested): array
+    {
+        $resolved = [];
+        $catalogues = [];
+        foreach ($requested as $leadId => $placement) {
+            $lead = $leads[(int) $leadId] ?? null;
+            if (! $lead || ! is_array($placement)) {
+                throw ValidationException::withMessages(['placements' => 'A placement refers to a lead that is not selected.']);
+            }
+            $platformId = (int) $lead->platform_id;
+            try {
+                $catalogues[$platformId] ??= \App\Services\WpSyncService::forPlatform($platformId)->getLocations();
+            } catch (\Throwable) {
+                throw ValidationException::withMessages(['placements' => 'WordPress locations are unavailable for '.($lead->platform?->name ?: 'this market').'. Try again shortly.']);
+            }
+            $regions = $catalogues[$platformId]['locations'] ?? $catalogues[$platformId];
+            $region = collect($regions)->first(fn ($r) => (int) ($r['id'] ?? 0) === (int) $placement['region_id']);
+            $cities = (array) ($region['cities'] ?? []);
+            $cityId = isset($placement['city_id']) ? (int) $placement['city_id'] : null;
+            $city = $cityId ? collect($cities)->first(fn ($c) => (int) ($c['id'] ?? 0) === $cityId) : null;
+            if (! $region || ($cityId && ! $city) || (! $cityId && $cities !== [])) {
+                throw ValidationException::withMessages(['placements' => 'Choose a valid WordPress city for '.($lead->name ?: 'each lead').'.']);
+            }
+            $resolved[(int) $leadId] = ['region_id' => (int) $region['id'], 'city_id' => $cityId, 'city' => trim((string) ($city['name'] ?? $region['name']))];
+        }
+
+        return $resolved;
+    }
+
+    private function inspect(Lead $lead, ?array $placement = null): array
     {
         $platform = $lead->platform;
         $phone = PhoneNormalizer::normalize($lead->phone_normalized, (string) ($platform?->phone_prefix ?: '254'));
         $email = strtolower(trim((string) $lead->email)) ?: null;
-        $payload = ['name' => trim((string) $lead->name), 'phone_normalized' => $phone, 'email' => $email, 'city' => null, 'profile_status' => 'private', 'assigned_to' => $lead->assigned_to];
+        $payload = ['name' => trim((string) $lead->name), 'phone_normalized' => $phone, 'email' => $email, 'city' => $placement['city'] ?? null, 'profile_status' => 'private', 'assigned_to' => $lead->assigned_to];
+        if ($placement) {
+            $payload['region_id'] = (int) $placement['region_id'];
+            $payload['city_id'] = $placement['city_id'] !== null ? (int) $placement['city_id'] : null;
+        }
         $row = [
             'id' => (int) $lead->id,
             'name' => $lead->name ?: 'Unnamed lead',
@@ -116,6 +158,7 @@ class BulkLeadConversionService
             'market' => $platform?->name ?: 'Unavailable market',
             'owner' => $lead->assignedAgent?->name ?: 'Unassigned',
             'contact' => $phone ?: ($email ?: 'No contact details'),
+            'place' => $placement['city'] ?? null,
             'action' => 'create',
             'message' => 'Create private profile',
             'payload' => $payload,
