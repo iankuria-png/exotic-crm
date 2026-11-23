@@ -52,7 +52,7 @@ class ClientProfileLockController extends Controller
             ->orderBy('id')
             ->get();
 
-        $summary = ['lock' => 0, 'republish' => 0, 'already_locked' => 0, 'blocked' => 0, 'paid' => 0];
+        $summary = ['lock' => 0, 'lock_private' => 0, 'republish' => 0, 'already_locked' => 0, 'blocked' => 0, 'paid' => 0];
         $rows = $clients->map(function (Client $client) use ($request, &$summary): array {
             $plan = $this->canAccess($request, $client)
                 ? $this->lifecycle->lockPlan($client)
@@ -194,7 +194,9 @@ class ClientProfileLockController extends Controller
         return response()->json([
             'message' => $isActive
                 ? 'Profile unlocked and live again on its paid plan.'
-                : 'Lock lifted. With no running plan it stays Expired until the client pays.',
+                : ($fresh->profile_status === 'private'
+                    ? 'Lock lifted. The profile stays private and restricted until activation.'
+                    : 'Lock lifted. With no running plan it stays Expired until the client pays.'),
             'outcome' => $isActive ? 'active' : 'stays_expired',
             'client' => $fresh,
         ]);
@@ -228,6 +230,7 @@ class ClientProfileLockController extends Controller
             $fresh,
             $republished ? 'republished' : 'locked',
             match (true) {
+                $fresh->profile_status === 'private' => 'Locked. The profile stays private.',
                 $republished => 'Back online as a locked page. Contacts hidden.',
                 $plan['has_paid_plan'] => 'Locked. The paid plan keeps running.',
                 default => 'Locked. Still published, contacts hidden.',

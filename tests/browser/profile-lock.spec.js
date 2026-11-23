@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 // Isolated UI fixture (no Laravel / database): run with the crm-fixture-vite server
 // PLAYWRIGHT_BASE_URL=http://127.0.0.1:5176 npm run test:browser -- profile-lock.spec.js
 const fixture = (entry) => `/tests/browser/fixtures/profile-lock.html?entry=${encodeURIComponent(entry)}`;
-const shots = 'output/profile-lock-2026-11-15';
+const shots = 'output/private-profile-lock-2026-11-18';
 const platform = { id: 1, name: 'Kenya', currency_code: 'KES', phone_prefix: '254', billing_method_policy: {} };
 
 function client(id, overrides = {}) {
@@ -46,13 +46,14 @@ async function setup(page, { rows = [], detail = null, role = 'sales' } = {}) {
                 if (id === 3) return { action: 'already_locked', reason: 'Already locked by its lifecycle (Expired or Archived).' };
                 if (id === 4) return { action: 'blocked', code: 'high_risk', reason: 'High-risk profiles stay offline.' };
                 if (id === 2) return { action: 'republish' };
+                if (id === 6) return { action: 'lock_private' };
                 return { action: 'lock' };
             };
             const out = ids.map((id) => ({ id, name: `Advertiser ${id}`, city: 'Kilimani', has_paid_plan: id === 1, ...plan(id) }));
             const count = (action) => out.filter((row) => row.action === action).length;
             body = {
                 rows: out,
-                summary: { lock: count('lock'), republish: count('republish'), already_locked: count('already_locked'), blocked: count('blocked'), paid: out.filter((row) => row.has_paid_plan && ['lock', 'republish'].includes(row.action)).length, missing: 0 },
+                summary: { lock: count('lock'), lock_private: count('lock_private'), republish: count('republish'), already_locked: count('already_locked'), blocked: count('blocked'), paid: out.filter((row) => row.has_paid_plan && ['lock', 'republish'].includes(row.action)).length, missing: 0 },
                 slice_limit: 2,
             };
         }
@@ -71,8 +72,9 @@ async function setup(page, { rows = [], detail = null, role = 'sales' } = {}) {
         if (state.detail && path === `/api/crm/clients/${state.detail.id}`) body = state.detail;
         if (state.detail && path === `/api/crm/clients/${state.detail.id}/unlock`) {
             state.unlockCalls.push(request.postDataJSON());
-            state.detail = { ...state.detail, lifecycle_state: 'active', profile_locked_at: null };
-            body = { message: 'Profile unlocked and live again on its paid plan.', outcome: 'active', client: state.detail };
+            const paid = Boolean(state.detail.active_deal);
+            state.detail = { ...state.detail, lifecycle_state: paid ? 'active' : 'expired', profile_locked_at: null };
+            body = { message: paid ? 'Profile unlocked and live again on its paid plan.' : 'Lock lifted. The profile stays private and restricted until activation.', outcome: paid ? 'active' : 'stays_expired', client: state.detail };
         }
 
         await route.fulfill({ json: body });
@@ -84,21 +86,22 @@ async function setup(page, { rows = [], detail = null, role = 'sales' } = {}) {
 for (const width of [1440, 390]) {
     test(`bulk lock from the clients table previews, locks in slices and reports at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 1000 });
-        const rows = [1, 2, 3, 4, 5].map((id) => client(id, id === 2 ? { profile_status: 'private' } : {}));
+        const rows = [1, 2, 3, 4, 5, 6].map((id) => client(id, [2, 6].includes(id) ? { profile_status: 'private' } : {}));
         const state = await setup(page, { rows });
         await page.goto(fixture('/clients'));
 
         await expect(page.getByText('Advertiser 1', { exact: true })).toBeVisible();
-        for (const id of [1, 2, 3, 4, 5]) {
+        for (const id of [1, 2, 3, 4, 5, 6]) {
             await page.getByRole('row', { name: new RegExp(`Advertiser ${id}\\b`) }).getByRole('checkbox').check();
         }
         await page.getByRole('button', { name: 'Lock profiles' }).click();
 
-        const dialog = page.getByRole('dialog', { name: 'Lock 5 profiles' });
+        const dialog = page.getByRole('dialog', { name: 'Lock 6 profiles' });
         await expect(dialog).toBeVisible();
         await expect(dialog.getByText('Will be locked')).toBeVisible();
+        await expect(dialog.getByText('Stays private, locked')).toBeVisible();
         await expect(dialog.getByText(/1 has a running paid plan/)).toBeVisible();
-        const submit = dialog.getByRole('button', { name: 'Lock 3 profiles' });
+        const submit = dialog.getByRole('button', { name: 'Lock 4 profiles' });
         await expect(submit).toBeDisabled();
 
         await dialog.getByRole('button', { name: /Show the 2 skipped profiles/ }).click();
@@ -111,9 +114,9 @@ for (const width of [1440, 390]) {
         await page.screenshot({ path: `${shots}/bulk-configure-${width}.png`, fullPage: false });
         await submit.click();
 
-        await expect(dialog.getByText(/Locking \d of 3/)).toBeVisible();
-        await expect(dialog.getByText('3 profiles locked')).toBeVisible();
-        expect(state.lockCalls.map((call) => call.client_ids)).toEqual([[1, 2], [5]]);
+        await expect(dialog.getByText(/Locking \d of 4/)).toBeVisible();
+        await expect(dialog.getByText('4 profiles locked')).toBeVisible();
+        expect(state.lockCalls.map((call) => call.client_ids)).toEqual([[1, 2], [5, 6]]);
         expect(state.lockCalls[0]).toMatchObject({ reason_code: 'policy_violation', note: 'Fake photos reported by visitors' });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
         await page.screenshot({ path: `${shots}/bulk-done-${width}.png`, fullPage: false });
@@ -159,3 +162,30 @@ test('marketing sees no lock entry points', async ({ page }) => {
     await expect(page.getByRole('heading', { name: 'Read only', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Lock profile', exact: true })).toHaveCount(0);
 });
+
+for (const width of [1440, 390]) {
+    test(`never-subscribed private profile locks and unlocks while staying private at ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 1000 });
+        const state = await setup(page, { detail: client(6, { name: 'Private moderation fixture', profile_status: 'private', escort_expire: null }) });
+        await page.goto(fixture('/clients/6'));
+        await page.getByRole('button', { name: 'Lock profile', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Lock Private moderation fixture' });
+        await expect(dialog.getByText('The profile stays private. No subscription is needed to lock it.')).toBeVisible();
+        await dialog.getByText('Verification needed').click();
+        await page.screenshot({ path: `${shots}/private-preview-${width}.png` });
+        await dialog.getByRole('button', { name: 'Lock profile', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByText(/Private profile, editing restricted/)).toBeVisible();
+        expect(state.detail.profile_status).toBe('private');
+        expect(state.detail.active_deal).toBeNull();
+        await page.getByRole('button', { name: 'Unlock profile', exact: true }).click();
+        const unlock = page.getByRole('dialog', { name: 'Unlock Private moderation fixture' });
+        await expect(unlock.getByText('The profile stays private and restricted. Unlocking only lifts the staff hold.')).toBeVisible();
+        await unlock.getByRole('button', { name: 'Unlock profile', exact: true }).click();
+        await expect(unlock).toBeHidden();
+        await expect(page.getByText(/Locked by staff/)).toHaveCount(0);
+        expect(state.detail.profile_status).toBe('private');
+        expect(state.detail.lifecycle_state).toBe('expired');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+    });
+}

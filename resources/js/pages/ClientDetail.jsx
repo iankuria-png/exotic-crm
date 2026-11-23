@@ -4107,7 +4107,7 @@ export default function ClientDetail() {
                                     Locked by staff · {lockReasonLabel(client.profile_lock_reason_code)}
                                 </span>
                                 <span className="text-amber-800/80">
-                                    Since {formatDateTime(client.profile_locked_at)}. Published for SEO, contacts hidden{client.active_deal ? ', paid plan still running' : ''}.
+                                    Since {formatDateTime(client.profile_locked_at)}. {client.profile_status === 'private' ? 'Private profile, editing restricted' : 'Published for SEO, contacts hidden'}{client.active_deal ? ', paid plan still running' : ''}.
                                 </span>
                                 {client.profile_lock_reason_note ? (
                                     <span className="basis-full italic text-amber-800/80">&ldquo;{client.profile_lock_reason_note}&rdquo;</span>

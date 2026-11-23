@@ -17,6 +17,7 @@ export function LockIcon({ className = 'h-3.5 w-3.5', open = false }) {
 
 const IMPACT_TILES = [
     { key: 'lock', label: 'Will be locked', hint: 'Public now — contacts get hidden', tone: 'border-amber-200 bg-amber-50 text-amber-900' },
+    { key: 'lock_private', label: 'Stays private, locked', hint: 'Offline now — stays offline', tone: 'border-teal-200 bg-teal-50 text-teal-900' },
     { key: 'republish', label: 'Back online, locked', hint: 'Offline now — republished for SEO', tone: 'border-violet-200 bg-violet-50 text-violet-900' },
     { key: 'already_locked', label: 'Already locked', hint: 'Skipped — nothing to change', tone: 'border-slate-200 bg-slate-50 text-slate-700' },
     { key: 'blocked', label: "Can't be locked", hint: 'Skipped — see why below', tone: 'border-rose-200 bg-rose-50 text-rose-800' },
@@ -24,6 +25,7 @@ const IMPACT_TILES = [
 
 const ACTION_BADGES = {
     lock: { label: 'Lock', tone: 'bg-amber-100 text-amber-800' },
+    lock_private: { label: 'Lock, stay private', tone: 'bg-teal-100 text-teal-800' },
     republish: { label: 'Republish locked', tone: 'bg-violet-100 text-violet-800' },
     already_locked: { label: 'Already locked', tone: 'bg-slate-100 text-slate-600' },
     blocked: { label: "Can't lock", tone: 'bg-rose-100 text-rose-700' },
@@ -70,7 +72,7 @@ function ActionBadge({ action }) {
  *
  * `clients` is [{ id, name }]. One client renders the single-profile flow.
  */
-export default function LockProfilesDialog({ open, clients = [], onClose, onCompleted }) {
+export default function LockProfilesDialog({ open, clients = [], onClose, onCompleted, defaultReasonCode = '' }) {
     const queryClient = useQueryClient();
     const isSingle = clients.length === 1;
     const clientIds = useMemo(
@@ -87,7 +89,7 @@ export default function LockProfilesDialog({ open, clients = [], onClose, onComp
         gcTime: 0,
     });
 
-    const [reasonCode, setReasonCode] = useState('');
+    const [reasonCode, setReasonCode] = useState(defaultReasonCode);
     const [note, setNote] = useState('');
     const [showDetails, setShowDetails] = useState(false);
     const [phase, setPhase] = useState('configure'); // configure | running | done
@@ -99,7 +101,7 @@ export default function LockProfilesDialog({ open, clients = [], onClose, onComp
 
     useEffect(() => {
         if (!open) {
-            setReasonCode('');
+            setReasonCode(defaultReasonCode);
             setNote('');
             setShowDetails(false);
             setPhase('configure');
@@ -132,7 +134,7 @@ export default function LockProfilesDialog({ open, clients = [], onClose, onComp
     const rows = preview?.rows || [];
     const sliceLimit = Number(preview?.slice_limit || 10);
     const actionableIds = rows
-        .filter((row) => row.action === 'lock' || row.action === 'republish')
+        .filter((row) => ['lock', 'lock_private', 'republish'].includes(row.action))
         .map((row) => row.id);
     const skippedRows = rows.filter((row) => row.action === 'blocked' || row.action === 'already_locked');
     const canSubmit = phase === 'configure'
@@ -221,7 +223,7 @@ export default function LockProfilesDialog({ open, clients = [], onClose, onComp
                     <div className="min-w-0">
                         <h3 id="lock-profiles-title" className="truncate text-base font-semibold text-slate-900">{title}</h3>
                         <p className="mt-0.5 text-sm text-slate-500">
-                            Stays published and indexed in Google. Contacts are hidden and the advertiser can&rsquo;t edit until it&rsquo;s unlocked.
+                            Contacts and editing are restricted. Review the visibility shown below before locking.
                         </p>
                     </div>
                 </header>
@@ -230,7 +232,7 @@ export default function LockProfilesDialog({ open, clients = [], onClose, onComp
                     {phase === 'configure' ? (
                         <>
                             {previewQuery.isLoading ? (
-                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-busy="true">
+                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" aria-busy="true">
                                     {IMPACT_TILES.map((tile) => (
                                         <div key={tile.key} className="h-[74px] animate-pulse rounded-lg bg-slate-100" />
                                     ))}
@@ -251,6 +253,7 @@ export default function LockProfilesDialog({ open, clients = [], onClose, onComp
                                         <ActionBadge action={singleRow.action} />
                                         <span className="font-medium">
                                             {singleRow.action === 'lock' && 'Public now. Locking hides contacts straight away.'}
+                                            {singleRow.action === 'lock_private' && 'The profile stays private. No subscription is needed to lock it.'}
                                             {singleRow.action === 'republish' && 'Offline now. Locking republishes the page for SEO with contacts hidden.'}
                                             {(singleRow.action === 'blocked' || singleRow.action === 'already_locked') && singleRow.reason}
                                         </span>
@@ -263,7 +266,7 @@ export default function LockProfilesDialog({ open, clients = [], onClose, onComp
                                 </div>
                             ) : (
                                 <>
-                                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                                         {IMPACT_TILES.map((tile) => (
                                             <div key={tile.key} className={`rounded-lg border px-3 py-2.5 ${tile.tone} ${Number(summary[tile.key] || 0) === 0 ? 'opacity-50' : ''}`}>
                                                 <p className="text-[11px] font-semibold uppercase tracking-wide opacity-80">{tile.label}</p>
@@ -537,7 +540,9 @@ export function UnlockProfileDialog({ open, client, onClose, onUnlocked }) {
                     <div className={`rounded-lg border px-3 py-2.5 text-sm ${goesLive ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
                         {goesLive
                             ? `Goes live again on its ${activeDeal.product?.name || activeDeal.plan_label || activeDeal.plan_type || 'paid'} plan until ${expiresAt.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}. Contacts come back straight away.`
-                            : 'No running paid plan, so it stays Expired (contacts hidden) until the client pays. Unlocking only lifts the staff hold.'}
+                            : client.profile_status === 'private'
+                                ? 'The profile stays private and restricted. Unlocking only lifts the staff hold.'
+                                : 'No running paid plan, so it stays Expired (contacts hidden) until the client pays. Unlocking only lifts the staff hold.'}
                     </div>
                     <div>
                         <label htmlFor="unlock-note" className="block text-xs font-semibold uppercase tracking-wide text-slate-600">

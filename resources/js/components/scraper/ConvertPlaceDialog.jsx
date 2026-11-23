@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import api from '../../services/api';
 import { Spinner, errorMessage } from './scraperUi';
+import LockProfilesDialog from '../clients/LockProfilesDialog';
 
 const LIMIT = 100;
 const CONFIDENCE = {
@@ -30,6 +31,8 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
     const [reviewing, setReviewing] = useState(false);
     const [progress, setProgress] = useState({ running: false, done: 0, results: {} });
     const stopRef = useRef(false);
+    const [lockOpen, setLockOpen] = useState(false);
+    const [lockOutcome, setLockOutcome] = useState(null); // 'later' | { locked, total }
 
     const places = useMemo(() => [...new Set(usable.map((l) => l.city || ''))], [usable]);
     const match = useQuery({
@@ -71,10 +74,10 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
     }, [match.data, groups]);
 
     useEffect(() => {
-        const onKey = (e) => { if (e.key === 'Escape' && !progress.running) onClose(); };
+        const onKey = (e) => { if (e.key === 'Escape' && !progress.running && !lockOpen) onClose(); };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [onClose, progress.running]);
+    }, [onClose, progress.running, lockOpen]);
 
     const placementFor = (lead) => {
         const g = groups.find((x) => x.leads.includes(lead));
@@ -129,6 +132,10 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
 
     const results = Object.values(progress.results);
     const createdCount = results.filter((r) => r.status === 'created').length;
+    const createdClients = ready
+        .filter((r) => progress.results[r.id]?.status === 'created' && progress.results[r.id]?.client_id)
+        .map((r) => ({ id: progress.results[r.id].client_id, name: r.name }));
+    const askToLock = step === 'create' && !progress.running && createdClients.length > 0 && lockOutcome === null;
     useEffect(() => {
         if (step === 'create' && !progress.running && results.length) {
             onFinished?.(createdCount);
@@ -137,7 +144,8 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
     }, [progress.running]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/45 sm:items-center sm:p-4" onMouseDown={() => !progress.running && onClose()}>
+        <>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/45 sm:items-center sm:p-4" onMouseDown={(e) => { if (e.target === e.currentTarget && !progress.running && !lockOpen) onClose(); }}>
             <div role="dialog" aria-modal="true" aria-labelledby="convert-title" onMouseDown={(e) => e.stopPropagation()} className="flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-xl">
                 <header className="crm-panel-header">
                     <div>
@@ -234,6 +242,27 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                                 {progress.running ? <Spinner /> : null}
                                 {progress.running ? `Creating ${progress.done + 1} of ${ready.length}…` : `${createdCount} created · ${results.length - createdCount} not created`}
                             </p>
+                            {askToLock ? (
+                                <div className="rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-white p-4" role="region" aria-label="Lock new profiles">
+                                    <div className="flex items-start gap-3">
+                                        <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800">🔒</span>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-semibold text-slate-900">Lock the {createdClients.length} new profile{createdClients.length === 1 ? '' : 's'}?</p>
+                                            <p className="mt-0.5 text-sm text-slate-600">They stay private. Locking also hides their contacts and stops the advertiser editing until someone unlocks them, a good fit while these scraped profiles are checked.</p>
+                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                <button type="button" className="crm-btn-primary px-3 py-1.5" onClick={() => setLockOpen(true)}>Lock {createdClients.length} profile{createdClients.length === 1 ? '' : 's'}…</button>
+                                                <button type="button" className="crm-btn-secondary px-3 py-1.5" onClick={() => setLockOutcome('later')}>Not now</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : null}
+                            {lockOutcome && lockOutcome !== 'later' ? (
+                                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">🔒 {lockOutcome.locked} of {lockOutcome.total} new profile{lockOutcome.total === 1 ? '' : 's'} locked.{lockOutcome.locked < lockOutcome.total ? ' Open the others from Clients to lock them individually.' : ''}</p>
+                            ) : null}
+                            {lockOutcome === 'later' ? (
+                                <p className="text-xs text-slate-500">Not locked. You can lock them later from Clients (select them, then Lock).</p>
+                            ) : null}
                             <ul className="max-h-[22rem] divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 text-sm">
                                 {ready.map((r) => {
                                     const res = progress.results[r.id];
@@ -274,12 +303,20 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                         ) : progress.running ? (
                             <button type="button" className="crm-btn-danger" onClick={() => { stopRef.current = true; }}>Stop after current</button>
                         ) : (
-                            <button type="button" className="crm-btn-primary" onClick={onClose}>Done</button>
+                            <button type="button" className={askToLock ? 'crm-btn-secondary' : 'crm-btn-primary'} onClick={onClose}>Done</button>
                         )}
                     </div>
                 </footer>
             </div>
         </div>
+            <LockProfilesDialog
+                open={lockOpen}
+                clients={createdClients}
+                defaultReasonCode="verification_required"
+                onClose={() => setLockOpen(false)}
+                onCompleted={(tally) => setLockOutcome({ locked: Number(tally?.locked || 0), total: createdClients.length })}
+            />
+        </>
     );
 }
 

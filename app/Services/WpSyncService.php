@@ -825,6 +825,20 @@ class WpSyncService
         return $this->post("/clients/{$postId}/lifecycle", $payload);
     }
 
+    /** Older plugins must refuse this operation, never fall back to publishing. */
+    public function lockPrivateProfile(int $postId): array
+    {
+        $result = $this->post("/clients/{$postId}/lock-private", []);
+        if (($result['ok'] ?? null) !== true
+            || (int) ($result['post_id'] ?? 0) !== $postId
+            || ($result['post_status'] ?? null) !== 'private'
+            || ($result['crm_lifecycle_state'] ?? null) !== 'expired') {
+            throw new \RuntimeException('WordPress did not confirm a private profile lock.');
+        }
+
+        return $result;
+    }
+
     /**
      * Publish the market-wide lifecycle policy flag to WordPress. The theme's
      * legacy 5-minute expiry sweep (parent check_expired()) reads the resulting

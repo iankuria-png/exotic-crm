@@ -138,8 +138,8 @@ class ClientLifecycleService
      * What locking this profile would do, without writing anything. Powers the
      * bulk preview and guards the write itself.
      *
-     * Actions: `lock` (public → Expired), `republish` (offline → published as
-     * Expired, what SEO Recovery does), `already_locked`, or `blocked`.
+     * Actions: `lock` (public → Expired), `lock_private` (restricted, stays private),
+     * `republish` (offline recovery), `already_locked`, or `blocked`.
      *
      * @return array{action: string, has_paid_plan: bool, code?: string, reason?: string}
      */
@@ -207,11 +207,21 @@ class ClientLifecycleService
             ));
         }
 
+        if ($client->profile_locked_at !== null && $client->isPubliclyRestricted()) {
+            return $base + ['action' => 'already_locked', 'reason' => 'Already locked by staff. The profile stays private.'];
+        }
+
+        // A private restriction can also be a previous attempt whose confirming sync failed.
+        // Retrying it must never fall through to the publishing recovery path.
+        if ($client->isPubliclyRestricted()) {
+            return $base + ['action' => 'lock_private'];
+        }
+
         if (! $hasPaidPlan
             && $client->first_activated_at === null
             && $client->churned_at === null
             && ! $client->deals()->exists()) {
-            return $blocked('never_live', 'Never been live. Locking would publish a brand-new page.');
+            return $base + ['action' => 'lock_private'];
         }
 
         return $base + ['action' => 'republish'];
@@ -256,7 +266,7 @@ class ClientLifecycleService
             $client,
             ClientLifecycleState::EXPIRED,
             [
-                'profile_status' => 'publish',
+                'profile_status' => $plan['action'] === 'lock_private' ? 'private' : 'publish',
                 'lifecycle_expired_at' => now(),
                 'lifecycle_archived_at' => null,
                 'lifecycle_archive_deferred_until' => null,
@@ -276,6 +286,7 @@ class ClientLifecycleService
                 'previous_lifecycle_state' => (string) ($client->lifecycle_state ?? ClientLifecycleState::ACTIVE),
             ], static fn ($value) => $value !== null),
             $actorId,
+            preservePrivate: $plan['action'] === 'lock_private',
         );
     }
 
@@ -357,6 +368,7 @@ class ClientLifecycleService
         string $eventType,
         array $eventContent,
         ?int $actorId,
+        bool $preservePrivate = false,
     ): Client {
         $wpPostId = (int) ($client->wp_post_id ?? 0);
         if ($wpPostId <= 0) {
@@ -369,11 +381,19 @@ class ClientLifecycleService
             throw new InvalidArgumentException('The profile lifecycle policy is not enabled for this market.');
         }
 
-        // 1. Publish the authoritative state to WordPress (keeps the post published).
-        WpSyncService::forPlatform((int) $client->platform_id)->setLifecycleState($wpPostId, $state);
+        // 1. Write the authoritative restriction through its matching visibility contract.
+        $wp = WpSyncService::forPlatform((int) $client->platform_id);
+        if ($preservePrivate) {
+            $wp->lockPrivateProfile($wpPostId);
+        } else {
+            $wp->setLifecycleState($wpPostId, $state);
+        }
 
         // 2. Re-mirror, then stamp the lifecycle columns authoritatively.
         $synced = (new ClientSyncService($platform))->syncOne($wpPostId);
+        if ($preservePrivate && ($synced->profile_status !== 'private' || $synced->lifecycle_state !== $state)) {
+            throw new \RuntimeException('The confirming sync did not preserve the private restriction.');
+        }
         Client::withoutRetentionRefresh(function () use ($synced, $state, $columns): void {
             $synced->forceFill(array_merge(['lifecycle_state' => $state], $columns))->save();
         });
