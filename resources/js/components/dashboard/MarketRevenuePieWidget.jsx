@@ -104,7 +104,7 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
 
     return (
         <SectionFrame
-            title="Revenue by Market"
+            title="Subscription revenue by market"
             subtitle={selectedMarket ? `Scoped to ${marketLabel(selectedMarket)}. Clear the scope to compare all markets.` : 'Platform-level revenue share with collection-channel mix.'}
             className="overflow-hidden"
             contentClassName="min-h-[500px]"

@@ -30,6 +30,11 @@ class CeoDashboardDataService
         private readonly MarketHealthService $marketHealthService
     ) {}
 
+    public function productRevenue(Request $request): array
+    {
+        return app(CeoProductRevenueService::class)->report($request);
+    }
+
     public function summary(Request $request): array
     {
         $context = $this->context($request);

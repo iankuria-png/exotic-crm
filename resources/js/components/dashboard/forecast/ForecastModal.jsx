@@ -41,7 +41,7 @@ function leverSupportsMode(lever, mode) {
 }
 
 const MODE_COPY = {
-    replay: 'What this window would have produced at different rates. The starting figure is the collected revenue on the dashboard behind this.',
+    replay: 'What this window would have produced at different rates. The starting figure is subscription collections; other product cash is outside this forecast.',
     project: 'The selected window extended forward at its own daily rate. Nothing is assumed to grow on its own.',
     target: 'Name a monthly figure and the solver works backwards to the lever moves that reach it.',
 };
@@ -78,14 +78,14 @@ function DerivationNote({ mode, baseline, currency }) {
         return (
             <p className="text-xs leading-relaxed text-slate-500">
                 This is the <span className="font-semibold text-slate-700">{formatCurrency(collected, currency)}</span> actually
-                collected over {days} days — the same figure as Collected Revenue on the dashboard.
+                in subscription collections over {days} days. Other product cash is outside this forecast.
             </p>
         );
     }
 
     return (
         <p className="text-xs leading-relaxed text-slate-500">
-            <span className="font-semibold text-slate-700">{formatCurrency(collected, currency)}</span> collected over {days} days
+            <span className="font-semibold text-slate-700">{formatCurrency(collected, currency)}</span> in subscription collections over {days} days
             {' '}= <span className="font-semibold text-slate-700">{formatCurrency(daily, currency)}/day</span>, carried forward{' '}
             {horizon} days. A straight line — no growth assumed.
         </p>
@@ -93,8 +93,7 @@ function DerivationNote({ mode, baseline, currency }) {
 }
 
 export default function ForecastModal({ open, onClose, params, currency = 'USD' }) {
-    // Replay first: the opening number must equal the dashboard's collected revenue
-    // for the same window, or nothing else in here is trustworthy.
+    // Replay retains the existing subscription baseline for the selected window.
     const [mode, setMode] = useState('replay');
     const [targets, setTargets] = useState({});
     const [expanded, setExpanded] = useState(false);

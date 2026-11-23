@@ -28,10 +28,15 @@ final class RevenueReportingQuery
         $concat = fn (string $prefix, string $expression) => DB::connection()->getDriverName() === 'mysql'
             ? "CONCAT('$prefix', $expression)" : "('$prefix' || $expression)";
         $accountKey = 'COALESCE('.$concat('collection:', $account).', '.$concat('profile:', $providerAccount).')';
-        $wallet = "(LOWER(COALESCE(payments.source, '')) IN ('wallet','crm_wallet') OR LOWER(COALESCE($method, '')) = 'wallet' OR payments.wallet_transaction_id IS NOT NULL)";
+        // A product checkout can link a proceeds CREDIT. Only spending (or an
+        // unresolved legacy ledger link, conservatively) is wallet funded.
+        $ledgerType = Schema::hasTable('wallet_transactions')
+            ? '(SELECT LOWER(type) FROM wallet_transactions WHERE id = payments.wallet_transaction_id)'
+            : 'NULL';
+        $wallet = "(LOWER(COALESCE(payments.source, '')) IN ('wallet','crm_wallet') OR LOWER(COALESCE($method, '')) = 'wallet' OR (payments.wallet_transaction_id IS NOT NULL AND COALESCE($ledgerType, '') != 'credit'))";
         $funding = "CASE WHEN $wallet THEN 'wallet_redemption' WHEN LOWER(COALESCE(payments.source, '')) IN ('gateway','manual','manual_confirmation','mpesa','pawapay','bank','import') OR NULLIF(payments.provider_key, '') IS NOT NULL THEN 'new_cash' ELSE 'unknown' END";
         $reference = "UPPER(TRIM(COALESCE(NULLIF(payments.reference_root, ''), NULLIF(payments.transaction_reference, ''), NULLIF(payments.reference_number, ''))))";
-        $receipt = 'CASE WHEN payments.wallet_transaction_id IS NOT NULL THEN '.$concat('wallet:', 'payments.wallet_transaction_id')." ELSE $reference END";
+        $receipt = "CASE WHEN $wallet AND payments.wallet_transaction_id IS NOT NULL THEN ".$concat('wallet:', 'payments.wallet_transaction_id')." ELSE $reference END";
         $identity = 'CASE WHEN payments.manual_payment_bundle_id IS NOT NULL THEN '.$concat('bundle:', 'payments.manual_payment_bundle_id').' ELSE '.$concat('payment:', 'payments.id').' END';
         $category = "CASE WHEN payments.purpose IS NULL OR payments.purpose = 'subscription' THEN CASE WHEN payments.subscription_lifecycle = 'renewal' THEN 'renewal' ELSE 'subscription' END WHEN payments.purpose = 'visitor_contact_unlock' THEN 'contact_unlock' WHEN payments.purpose IN ('premium_content_sale','send_love','tour_pass','monetize_pass') THEN payments.purpose ELSE 'other_paid_service' END";
 

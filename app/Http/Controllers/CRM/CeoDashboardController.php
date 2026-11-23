@@ -16,6 +16,11 @@ class CeoDashboardController extends Controller
         private readonly MarketHealthService $marketHealthService
     ) {}
 
+    public function productRevenue(Request $request): JsonResponse
+    {
+        return response()->json($this->dashboardData->productRevenue($request));
+    }
+
     public function summary(Request $request): JsonResponse
     {
         return response()->json($this->dashboardData->summary($request));

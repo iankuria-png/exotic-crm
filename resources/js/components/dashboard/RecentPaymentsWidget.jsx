@@ -42,6 +42,7 @@ export default function RecentPaymentsWidget({
             title={`Last ${limit} Payments`}
             subtitle="Completed cash events only, refreshed while the tab is active."
             className="overflow-hidden"
+            headerClassName="flex-wrap [&>div:first-child]:min-w-[180px]"
             contentClassName="min-h-[360px]"
             action={(
                 <div className="flex flex-wrap justify-end gap-2">

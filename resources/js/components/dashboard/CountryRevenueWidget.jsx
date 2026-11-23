@@ -9,6 +9,7 @@ import {
     XAxis,
     YAxis,
 } from 'recharts';
+import MarketCashFocus from './MarketCashFocus';
 import api from '../../services/api';
 import SectionFrame from '../SectionFrame';
 import { getCountryFlag } from '../../utils/flags';
@@ -507,6 +508,7 @@ export default function CountryRevenueWidget({
     targetCurrency = 'USD',
     title = 'Top Performing Countries',
     hideOwnControls = false,
+    productRevenue, productLoading, productError, onRetryRevenue,
 }) {
     const [expandedPlatformId, setExpandedPlatformId] = useState(null);
     const [showAllMarkets, setShowAllMarkets] = useState(false);
@@ -557,7 +559,11 @@ export default function CountryRevenueWidget({
             className="overflow-hidden"
             action={hideOwnControls ? null : <PeriodToggle rangeMode={rangeMode} onSetWeek={onSetWeek} onSetMonth={onSetMonth} onSetCustom={onSetCustom} />}
         >
-            {isLoading ? (
+            {productRevenue !== undefined || productLoading !== undefined ? (
+                <MarketCashFocus data={productRevenue} loading={productLoading} error={productError} onRetry={onRetryRevenue} currencyMode={currencyMode}
+                    renderDetail={(site) => <WebsitePerformance site={site} params={detailParams} currencyMode={currencyMode} targetCurrency={targetCurrency} />}
+                />
+            ) : isLoading ? (
                 <div className="space-y-3">
                     {[1, 2, 3].map((item) => (
                         <div key={item} className="h-24 animate-pulse rounded-xl bg-slate-100" />
@@ -695,4 +701,14 @@ export default function CountryRevenueWidget({
             )}
         </SectionFrame>
     );
+}
+
+function WebsitePerformance({ site, params, currencyMode, targetCurrency }) {
+    const query = useQuery({
+        queryKey: ['dashboard-country-performance', site.platform_id, params],
+        queryFn: () => api.get(`/crm/dashboard/country-performance/${site.platform_id}`, { params }).then((r) => r.data),
+        staleTime: 60_000,
+    });
+    const detail = query.data ? { ...query.data, trend: { ...query.data.trend, points: (query.data.trend?.points || []).map((p) => ({ ...p, chart_value: p.revenue ?? p.normalized_total })) } } : null;
+    return <><p className="cash-muted mb-3">Website subscription performance · retained detail and target tools</p><DetailPanel detail={detail} detailQuery={query} currencyMode={currencyMode} targetCurrency={targetCurrency} fallbackCurrency={site.currency} /></>;
 }

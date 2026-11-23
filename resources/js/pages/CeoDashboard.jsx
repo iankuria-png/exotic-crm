@@ -39,13 +39,6 @@ function defaultCustomRange() {
     return { from: toInputDate(from), to: toInputDate(to) };
 }
 
-// The /country-revenue endpoint only accepts 'week' or 'month' (it selects the goal cadence to
-// compare markets against — the date range itself comes from the explicit from/to window). Short
-// windows map to weekly goals, everything else to monthly. Never send 'custom' — it 422s.
-function countryRangeMode(horizon) {
-    return (horizon === 'today' || horizon === '7d') ? 'week' : 'month';
-}
-
 function apiError(error, fallback) {
     return error?.response?.data?.message || fallback;
 }
@@ -126,6 +119,21 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         staleTime: 45_000,
     });
 
+    const productRevenueQuery = useQuery({
+        queryKey: ['ceo-dashboard', 'product-revenue', queryParams],
+        queryFn: () => api.get('/crm/dashboard/ceo/product-revenue', { params: queryParams }).then((response) => response.data),
+        staleTime: 45_000,
+        refetchInterval: 60_000,
+    });
+    const productError = productRevenueQuery.isError ? apiError(productRevenueQuery.error, 'Revenue could not be loaded. Try again.') : null;
+    const openRevenueSources = () => {
+        setTrendView('sources');
+        requestAnimationFrame(() => {
+            document.getElementById('revenue-tab-sources')?.focus({ preventScroll: true });
+            document.getElementById('revenue-tab-sources')?.scrollIntoView({ behavior: 'instant', block: 'center' });
+        });
+    };
+
     const marketPieQuery = useQuery({
         queryKey: ['ceo-dashboard', 'market-pie', queryParams],
         queryFn: () => api.get('/crm/dashboard/ceo/market-pie', { params: queryParams }).then((response) => response.data),
@@ -203,21 +211,6 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         queryFn: () => api.get('/crm/dashboard/ceo/market-health').then((response) => response.data),
         staleTime: 45_000,
         refetchInterval: 60_000,
-    });
-
-    const countryRevenueQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'top-markets', queryParams, summaryQuery.data?.window?.from, summaryQuery.data?.window?.to],
-        queryFn: () => api.get('/crm/dashboard/country-revenue', {
-            params: {
-                platform_id: platformFilter || undefined,
-                from: summaryQuery.data?.window?.from,
-                to: summaryQuery.data?.window?.to,
-                country_period: countryRangeMode(horizon),
-                ...reporting.queryParams,
-            },
-        }).then((response) => response.data),
-        enabled: Boolean(summaryQuery.data?.window?.from && summaryQuery.data?.window?.to),
-        staleTime: 60_000,
     });
 
     const marketOptions = Array.isArray(marketsQuery.data) ? marketsQuery.data : (marketsQuery.data?.markets || []);
@@ -402,6 +395,11 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
             </div>
 
             <CeoMetricStrip
+                productRevenue={productRevenueQuery.data}
+                productLoading={productRevenueQuery.isLoading}
+                productError={productError}
+                onRetryRevenue={() => productRevenueQuery.refetch()}
+                onOpenSources={openRevenueSources}
                 metrics={summaryQuery.data?.metrics || {}}
                 reporting={reporting}
                 isLoading={summaryQuery.isLoading}
@@ -430,6 +428,11 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 customerMix={summaryQuery.data?.customer_mix}
                 view={trendView}
                 onViewChange={setTrendView}
+                productRevenue={productRevenueQuery.data}
+                productLoading={productRevenueQuery.isLoading}
+                productError={productError}
+                onRetryRevenue={() => productRevenueQuery.refetch()}
+                displayMode={reporting.displayMode}
                 peakHoursData={peakHoursQuery.data}
                 peakHoursLoading={peakHoursQuery.isLoading}
                 peakHoursError={peakHoursQuery.isError ? apiError(peakHoursQuery.error, 'Peak-hours data could not be loaded.') : null}
@@ -448,12 +451,13 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-7">
                     <CountryRevenueWidget
-                        data={countryRevenueQuery.data || []}
+                        productRevenue={productRevenueQuery.data}
+                        productLoading={productRevenueQuery.isLoading}
+                        productError={productError}
+                        onRetryRevenue={() => productRevenueQuery.refetch()}
                         fromDate={window?.from || customRange.from}
                         toDate={window?.to || customRange.to}
                         rangeMode="custom"
-                        isLoading={countryRevenueQuery.isLoading}
-                        errorMessage={countryRevenueQuery.isError ? apiError(countryRevenueQuery.error, 'Top markets could not be loaded.') : null}
                         currencyMode={reporting.displayMode}
                         targetCurrency={reporting.targetCurrency}
                         title="Top Performing Markets"

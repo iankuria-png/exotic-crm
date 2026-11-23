@@ -361,6 +361,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::get('/dashboard/my-markets', [CrmDashboardController::class, 'myMarkets'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::middleware('crm.ceo')->prefix('dashboard/ceo')->group(function () {
         Route::get('/summary', [CeoDashboardController::class, 'summary']);
+        Route::get('/product-revenue', [CeoDashboardController::class, 'productRevenue']);
         Route::get('/market-pie', [CeoDashboardController::class, 'marketPie']);
         Route::get('/revenue-trend', [CeoDashboardController::class, 'revenueTrend']);
         Route::get('/peak-hours', [CeoDashboardController::class, 'peakHours']);

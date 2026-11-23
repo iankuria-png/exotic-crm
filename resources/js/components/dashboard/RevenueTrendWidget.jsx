@@ -10,6 +10,7 @@ import {
     XAxis,
     YAxis,
 } from 'recharts';
+import ProductRevenueView from './ProductRevenueView';
 import SectionFrame from '../SectionFrame';
 import { formatCurrency } from '../../utils/currency';
 import CustomerMixView from './CustomerMixView';
@@ -32,6 +33,7 @@ const VIEWS = [
     { key: 'trend', label: 'Trend' },
     { key: 'peak', label: 'Peak hours' },
     { key: 'mix', label: 'Customer mix' },
+    { key: 'sources', label: 'Where revenue comes from' },
 ];
 
 const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -187,6 +189,7 @@ export default function RevenueTrendWidget({
     peakHoursData,
     peakHoursLoading = false,
     peakHoursError = null,
+    productRevenue, productLoading, productError, onRetryRevenue, displayMode,
 }) {
     const [selectedDay, setSelectedDay] = useState(null);
     const rawPoints = data?.points || [];
@@ -250,21 +253,32 @@ export default function RevenueTrendWidget({
 
     return (
         <SectionFrame
-            title="Revenue Trend"
-            subtitle={subtitle}
+            title={activeView === 'sources' ? 'Revenue sources' : 'Subscription collections'}
+            subtitle={activeView === 'sources' ? 'One cash basis across subscriptions, unlocks, content, gifts and passes.' : subtitle}
             className="overflow-hidden"
+            headerClassName="flex-wrap [&>div:first-child]:min-w-[200px]"
             contentClassName="min-h-[500px]"
             action={(
                 <div className="flex flex-wrap justify-end gap-2">
-                    <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5" role="tablist" aria-label="Revenue trend view">
+                    <div className="cash-tablist rounded-md border border-slate-300 bg-white p-0.5" role="tablist" aria-label="Revenue trend view">
                         {VIEWS.map((item) => (
                             <button
                                 key={item.key}
                                 type="button"
                                 role="tab"
+                                id={`revenue-tab-${item.key}`}
+                                aria-controls={`revenue-panel-${item.key}`}
+                                tabIndex={activeView === item.key ? 0 : -1}
                                 aria-selected={activeView === item.key}
+                                onKeyDown={(event) => {
+                                    const index = VIEWS.findIndex((v) => v.key === activeView);
+                                    const next = event.key === 'ArrowRight' ? (index + 1) % VIEWS.length : event.key === 'ArrowLeft' ? (index + VIEWS.length - 1) % VIEWS.length : event.key === 'Home' ? 0 : event.key === 'End' ? VIEWS.length - 1 : null;
+                                    if (next === null) return;
+                                    event.preventDefault(); onViewChange?.(VIEWS[next].key);
+                                    document.getElementById(`revenue-tab-${VIEWS[next].key}`)?.focus();
+                                }}
                                 onClick={() => onViewChange?.(item.key)}
-                                className={`rounded px-2.5 py-1.5 text-xs font-semibold transition ${activeView === item.key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                                className={`cash-tab rounded px-2.5 py-1.5 text-xs font-semibold ${activeView === item.key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
                             >
                                 {item.label}
                             </button>
@@ -306,16 +320,17 @@ export default function RevenueTrendWidget({
                 </div>
             )}
         >
-            {activeView === 'peak' ? (
-                <PeakHoursHeatmap
-                    data={peakHoursData}
-                    isLoading={peakHoursLoading}
-                    errorMessage={peakHoursError}
-                    currency={peakHoursData?.target_currency || currency}
-                />
-            ) : activeView === 'mix' ? (
+            <div id="revenue-panel-sources" role="tabpanel" aria-labelledby="revenue-tab-sources" hidden={activeView !== 'sources'} className="cash-panel">
+                <ProductRevenueView data={productRevenue} loading={productLoading} error={productError} onRetry={onRetryRevenue} displayMode={displayMode} />
+            </div>
+            <div id="revenue-panel-peak" role="tabpanel" aria-labelledby="revenue-tab-peak" hidden={activeView !== 'peak'} className="cash-panel">
+                <PeakHoursHeatmap data={peakHoursData} isLoading={peakHoursLoading} errorMessage={peakHoursError} currency={peakHoursData?.target_currency || currency} />
+            </div>
+            <div id="revenue-panel-mix" role="tabpanel" aria-labelledby="revenue-tab-mix" hidden={activeView !== 'mix'} className="cash-panel">
                 <CustomerMixView mix={customerMix} currency={currency} />
-            ) : isLoading ? (
+            </div>
+            <div id="revenue-panel-trend" role="tabpanel" aria-labelledby="revenue-tab-trend" hidden={activeView !== 'trend'} className="cash-panel">
+            {isLoading ? (
                 <div className="h-72 animate-pulse rounded-lg bg-slate-100" />
             ) : errorMessage ? (
                 <EmptyState message={errorMessage} />
@@ -376,6 +391,7 @@ export default function RevenueTrendWidget({
                     </div>
                 </div>
             )}
+            </div>
         </SectionFrame>
     );
 }

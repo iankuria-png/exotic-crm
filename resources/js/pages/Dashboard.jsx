@@ -1118,11 +1118,20 @@ export default function Dashboard() {
         return window.localStorage.getItem(CEO_VIEW_MODE_STORAGE_KEY) || 'ceo';
     });
 
+    const [ceoHasMounted, setCeoHasMounted] = useState(ceoViewMode !== 'admin');
+    const dashboardScroll = useRef({ ceo: 0, admin: 0 });
+
     const setDashboardViewMode = (mode) => {
+        const main = document.querySelector('main');
+        dashboardScroll.current[ceoViewMode] = main?.scrollTop || 0;
+        if (mode === 'ceo') setCeoHasMounted(true);
         setCeoViewMode(mode);
         if (typeof window !== 'undefined') {
             window.localStorage.setItem(CEO_VIEW_MODE_STORAGE_KEY, mode);
         }
+        requestAnimationFrame(() => {
+            if (main) main.scrollTop = dashboardScroll.current[mode] || 0;
+        });
     };
 
     if (isLoading && !user) {
@@ -1142,13 +1151,11 @@ export default function Dashboard() {
         return <SalesDashboardView user={user} navigate={navigate} />;
     }
 
-    if (user?.is_ceo && ceoViewMode !== 'admin') {
-        return <CeoDashboard user={user} onSwitchAdminView={() => setDashboardViewMode('admin')} />;
-    }
-
-    if (user?.is_ceo && ceoViewMode === 'admin') {
+    if (user?.is_ceo) {
         return (
-            <div className="space-y-4">
+            <>
+            {ceoHasMounted && <div hidden={ceoViewMode === 'admin'}><CeoDashboard user={user} onSwitchAdminView={() => setDashboardViewMode('admin')} /></div>}
+            {ceoViewMode === 'admin' && <div className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Admin view</p>
@@ -1164,7 +1171,8 @@ export default function Dashboard() {
                 </div>
                 {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} /> : null}
                 <OperationsDashboard user={user} />
-            </div>
+            </div>}
+            </>
         );
     }
 
