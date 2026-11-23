@@ -40,6 +40,24 @@ class ContactParser
         return null;
     }
 
+    /**
+     * A number found in free text counts as a phone only when written like one: with a
+     * leading +, an international 00, a local 0, or the market's own country code.
+     */
+    public static function plausibleTextPhone(?string $raw, string $prefix): ?string
+    {
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return null;
+        }
+        $digits = (string) preg_replace('/\D/', '', $raw);
+        if (str_starts_with($raw, '+') || str_starts_with($digits, '00') || str_starts_with($digits, '0')) {
+            return $raw;
+        }
+
+        return $prefix !== '' && str_starts_with($digits, $prefix) && strlen($digits) <= 13 ? $raw : null;
+    }
+
     public static function emailFromText(string $text): ?string
     {
         return preg_match('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i', $text, $m) ? $m[0] : null;
@@ -59,7 +77,7 @@ class ContactParser
             $digits = substr($digits, 2);
         }
         if (str_starts_with($digits, '0')) {
-            $digits = $prefix . substr($digits, 1);
+            $digits = $prefix.substr($digits, 1);
         }
 
         return preg_match('/^\d{10,15}$/', $digits) ? $digits : null;

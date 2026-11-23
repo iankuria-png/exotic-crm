@@ -71,6 +71,34 @@ return [
         ],
     ],
 
+    'premiumpress_es10' => [
+        'label' => 'PremiumPress directory (ES10 theme)',
+        'family' => 'WordPress · PremiumPress ES10 (AddisGirls / NewEden style)',
+        'match' => [
+            'tech' => ['theme:es10'],
+            'selectors' => ['div.list-info-pop-wrap'],
+        ],
+        'rules' => [
+            'row_selector' => 'div.list-info-pop-wrap',
+            'name_selector' => '.fs-4',
+            'phone_selector' => 'a[href^="tel:"]',
+            'whatsapp_selector' => 'a[href*="wa.me"], a[href*="whatsapp.com"]',
+            'link_selector' => 'a[href*="/listing/"]',
+            'city_selector' => '.fs-sm',
+            'age_selector' => '.list-info-pop li',
+            'image_selector' => 'figure img',
+        ],
+        'pagination' => [
+            'next_selector' => 'a.next, a[rel="next"], link[rel="next"]',
+            'pattern' => '{base}page/{n}/',
+        ],
+        'profile' => [
+            'phone_selector' => 'a[href^="tel:"]',
+            'whatsapp_selector' => 'a[href*="wa.me"], a[href*="whatsapp.com"]',
+            'name_selector' => 'h1',
+        ],
+    ],
+
     'schema_person_cards' => [
         'label' => 'Schema.org Person cards',
         'family' => 'Any CMS using itemtype="Person" listings',

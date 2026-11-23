@@ -66,7 +66,8 @@ class ListingExtractor
             $whatsappRaw = ContactParser::phoneFromHref((string) $waNode->getAttribute('href'));
         }
         if (! $phoneRaw && ! $whatsappRaw) {
-            $phoneRaw = ContactParser::phoneFromText($text);
+            // Free text is noisy (ids, timestamps, prices): only accept phone-shaped numbers.
+            $phoneRaw = ContactParser::plausibleTextPhone(ContactParser::phoneFromText($text), $phonePrefix);
         }
 
         $emailNode = $this->pick($doc, $card, $rules['email_selector'] ?? 'a[href^="mailto:"]');

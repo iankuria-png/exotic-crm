@@ -112,6 +112,16 @@ class SiteProbeService
             ? $this->blockerDetector->detect($result, $doc, $robots, $stats, $tech, true)
             : $preliminary;
 
+        // Phones on profile pages are expected when the site is set to open them.
+        if ($crawl['follow_profiles'] && $crawl['max_profiles'] > 0) {
+            foreach ($blockers as &$blocker) {
+                if ($blocker['key'] === 'phones_hidden') {
+                    $blocker = ['key' => 'phones_on_profiles', 'severity' => 'info', 'title' => 'Phones are read from profile pages',
+                        'detail' => sprintf('Runs open up to %d profile pages to collect phone numbers.', $crawl['max_profiles']), 'overrides' => []];
+                }
+            }
+            unset($blocker);
+        }
         $verdict = BlockerDetector::verdict($blockers, $stats['rows']);
         $available = [
             'render_worker' => $this->drivers->renderWorkerAvailable(),

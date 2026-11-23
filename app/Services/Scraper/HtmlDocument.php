@@ -27,8 +27,8 @@ class HtmlDocument
         $dom = new DOMDocument('1.0', 'UTF-8');
         libxml_use_internal_errors(true);
         $source = $html !== '' ? $html : '<html><body></body></html>';
-        if (!preg_match('/<meta[^>]+charset/i', substr($source, 0, 4096))) {
-            $source = '<?xml encoding="UTF-8">' . $source;
+        if (! preg_match('/<meta[^>]+charset/i', substr($source, 0, 4096))) {
+            $source = '<?xml encoding="UTF-8">'.$source;
         }
         $dom->loadHTML($source, LIBXML_NOWARNING | LIBXML_NOERROR | LIBXML_COMPACT);
         libxml_clear_errors();
@@ -45,11 +45,11 @@ class HtmlDocument
         }
 
         try {
-            self::$converter ??= new CssSelectorConverter();
+            self::$converter ??= new CssSelectorConverter;
             $expr = self::$converter->toXPath($selector);
             $list = $this->xpath->query($expr, $context);
         } catch (\Throwable $exception) {
-            $this->lastSelectorError = 'Invalid selector "' . $selector . '": ' . mb_substr($exception->getMessage(), 0, 120);
+            $this->lastSelectorError = 'Invalid selector "'.$selector.'": '.mb_substr($exception->getMessage(), 0, 120);
 
             return [];
         }
@@ -81,11 +81,21 @@ class HtmlDocument
 
     public static function textOf(?DOMNode $node): string
     {
-        if (!$node) {
+        if (! $node) {
             return '';
         }
+        $raw = (string) $node->textContent;
+        // Inline <style>/<script>/<svg> (icon CSS, JSON) is not visible text.
+        if (! $node instanceof \DOMText && $node->ownerDocument && preg_match('/[{};]/', $raw)) {
+            $parts = [];
+            $texts = (new DOMXPath($node->ownerDocument))->query('.//text()[not(ancestor::style) and not(ancestor::script) and not(ancestor::noscript) and not(ancestor::svg) and not(ancestor::template)]', $node);
+            foreach ($texts ?: [] as $t) {
+                $parts[] = $t->nodeValue;
+            }
+            $raw = implode(' ', $parts);
+        }
 
-        return trim((string) preg_replace('/\s+/u', ' ', (string) $node->textContent));
+        return trim((string) preg_replace('/\s+/u', ' ', $raw));
     }
 
     public function bodyText(): string
@@ -95,7 +105,7 @@ class HtmlDocument
             $text = '';
             if ($clone) {
                 foreach ($this->xpath->query('.//text()[not(ancestor::script) and not(ancestor::style) and not(ancestor::noscript)]', $clone) ?: [] as $t) {
-                    $text .= ' ' . $t->nodeValue;
+                    $text .= ' '.$t->nodeValue;
                 }
             }
             $this->text = trim((string) preg_replace('/\s+/u', ' ', $text));
@@ -126,9 +136,9 @@ class HtmlDocument
     {
         $tag = strtolower($element->tagName);
         $classes = array_values(array_filter(preg_split('/\s+/', trim((string) $element->getAttribute('class'))) ?: [], static function (string $class): bool {
-            return $class !== '' && preg_match('/^[A-Za-z_][A-Za-z0-9_-]{1,40}$/', $class) && !preg_match('/\d{3,}|^(active|current|odd|even|first|last|clearfix|col-|row$)/i', $class);
+            return $class !== '' && preg_match('/^[A-Za-z_][A-Za-z0-9_-]{1,40}$/', $class) && ! preg_match('/\d{3,}|^(active|current|odd|even|first|last|clearfix|col-|row$)/i', $class);
         }));
 
-        return $classes ? $tag . '.' . implode('.', array_slice($classes, 0, 2)) : $tag;
+        return $classes ? $tag.'.'.implode('.', array_slice($classes, 0, 2)) : $tag;
     }
 }

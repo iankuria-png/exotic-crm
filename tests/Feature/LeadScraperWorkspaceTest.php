@@ -223,6 +223,56 @@ class LeadScraperWorkspaceTest extends TestCase
         $this->assertArrayNotHasKey('locations', (array) $site->fresh()->crawl_settings);
     }
 
+    public function test_age_gate_es10_template_clean_text_and_phone_sanity(): void
+    {
+        [$platform] = $this->actingManager();
+        $es10Card = fn (int $i, string $extra = '') => '<div ppt-box class="list-info-pop-wrap hide-mobile"><figure><a href="https://es10.test/listing/girl-'.$i.'/"><div class="text-white fs-4 text-600">Girl '.$i.' <span class="text-online">•</span></div><div class="fs-sm text-white">Addis Ababa</div><div class="list-info-pop"><ul><li><span>Age</span> 2'.$i.'</li></ul></div></a></figure>'.$extra.'</div>';
+        Http::fake([
+            'https://gate.test/robots.txt' => Http::response('', 404),
+            'https://gate.test/accueil' => Http::response('', 302, ['location' => 'https://gate.test/verification']),
+            'https://gate.test/verification' => Http::response('<html><body><form method="post"><select name="dob_year"></select><button name="isAdult" value="yes">Enter</button></form></body></html>', 200, self::HTML),
+            'https://es10.test/robots.txt' => Http::response('', 404),
+            'https://es10.test/' => Http::response('<html><head><link rel="stylesheet" href="https://es10.test/wp-content/themes/ES10/style.css"></head><body>'
+                .$es10Card(1, '<p>Listed 1792233107844</p>').$es10Card(2, '<p>Call 0912 345 678</p>').$es10Card(3).'</body></html>', 200, self::HTML),
+            'https://svg.test/robots.txt' => Http::response('', 404),
+            'https://svg.test/' => Http::response('<html><body>'.implode('', array_map(fn ($i) => '<article class="ad"><a href="/p/'.$i.'"><span class="ttl">Name '.$i.'</span><svg><style>.st0{fill:#fff;}</style></svg></a><a href="tel:+25191000000'.$i.'">Call</a></article>', [1, 2, 3])).'</body></html>', 200, self::HTML),
+        ]);
+
+        $gate = $this->postJson('/api/crm/scraper/probe', ['url' => 'https://gate.test/accueil', 'platform_id' => $platform->id])->assertOk()->json('profile');
+        $this->assertSame('blocked', $gate['verdict']);
+        $this->assertSame(['age_gate'], array_column($gate['blockers'], 'key'));
+
+        $es10 = $this->postJson('/api/crm/scraper/probe', ['url' => 'https://es10.test/', 'platform_id' => $platform->id])->assertOk()->json('profile');
+        $this->assertSame('premiumpress_es10', $es10['template']['key']);
+        $this->assertSame(['Girl 1', 'Girl 2', 'Girl 3'], array_column($es10['sample'], 'name'));
+        $this->assertSame([21, 22, 23], array_column($es10['sample'], 'age'));
+        $this->assertNull($es10['sample'][0]['phone'], 'A 13-digit id in text is not a phone.');
+        $this->assertSame('254912345678', $es10['sample'][1]['phone'], 'A local 0-prefixed number in text is.');
+
+        $svg = $this->postJson('/api/crm/scraper/probe', ['url' => 'https://svg.test/', 'platform_id' => $platform->id])->assertOk()->json('profile');
+        $this->assertSame('Name 1', $svg['sample'][0]['name']);
+        $this->assertStringNotContainsString('fill', (string) $svg['sample'][0]['name']);
+    }
+
+    public function test_probe_treats_hidden_phones_as_expected_when_profiles_are_opened(): void
+    {
+        [$platform] = $this->actingManager();
+        Http::fake([
+            'https://escortwp.test/robots.txt' => Http::response('', 404),
+            'https://escortwp.test/escorts/kenya/nairobi/' => Http::response($this->fixture('escortwp-nophones.html'), 200, self::HTML),
+        ]);
+        $url = 'https://escortwp.test/escorts/kenya/nairobi/';
+
+        $plain = $this->postJson('/api/crm/scraper/probe', ['url' => $url, 'platform_id' => $platform->id])->assertOk()->json('profile');
+        $this->assertSame('needs_config', $plain['verdict']);
+        $this->assertSame('phones_hidden', $plain['blockers'][0]['key']);
+
+        $following = $this->postJson('/api/crm/scraper/probe', ['url' => $url, 'platform_id' => $platform->id, 'crawl_settings' => ['follow_profiles' => true, 'max_profiles' => 40]])->assertOk()->json('profile');
+        $this->assertSame('ready', $following['verdict']);
+        $this->assertSame('phones_on_profiles', $following['blockers'][0]['key']);
+        $this->assertSame('info', $following['blockers'][0]['severity']);
+    }
+
     public function test_multi_page_dry_run_then_selective_import(): void
     {
         [$platform, $user] = $this->actingManager();
