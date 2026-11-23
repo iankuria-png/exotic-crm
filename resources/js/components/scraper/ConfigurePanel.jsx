@@ -10,6 +10,7 @@ const LIST_FIELDS = [
     ['whatsapp_selector', 'WhatsApp', 'wa.me / whatsapp.com link'],
     ['link_selector', 'Profile link', 'Link to the profile page'],
     ['city_selector', 'City / area', 'Inside the card'],
+    ['city_text', 'City text after', 'e.g. escort from — or a /regex/'],
     ['age_selector', 'Age', 'Inside the card'],
     ['image_selector', 'Photo', 'img element'],
     ['email_selector', 'Email', 'mailto: link'],

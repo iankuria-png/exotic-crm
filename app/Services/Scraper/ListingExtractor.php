@@ -65,7 +65,7 @@ class ListingExtractor
         if ($waNode) {
             $whatsappRaw = ContactParser::phoneFromHref((string) $waNode->getAttribute('href'));
         }
-        if (!$phoneRaw && !$whatsappRaw) {
+        if (! $phoneRaw && ! $whatsappRaw) {
             $phoneRaw = ContactParser::phoneFromText($text);
         }
 
@@ -74,7 +74,7 @@ class ListingExtractor
 
         $link = null;
         $linkNode = $this->pick($doc, $card, $rules['link_selector'] ?? '');
-        if (!$linkNode) {
+        if (! $linkNode) {
             foreach ($doc->select('a[href]', $card) as $anchor) {
                 $href = (string) $anchor->getAttribute('href');
                 if (UrlTools::resolve($pageUrl, $href)) {
@@ -82,7 +82,7 @@ class ListingExtractor
                     break;
                 }
             }
-            if (!$linkNode && strtolower($card->tagName) === 'a') {
+            if (! $linkNode && strtolower($card->tagName) === 'a') {
                 $linkNode = $card;
             }
         }
@@ -93,21 +93,27 @@ class ListingExtractor
 
         $nameNode = $this->pick($doc, $card, $rules['name_selector'] ?? '');
         $name = $nameNode ? (HtmlDocument::textOf($nameNode) ?: $nameNode->getAttribute('title')) : null;
-        if (!$name) {
+        if (! $name) {
             $heading = $doc->first('h1, h2, h3, h4, h5, h6, [itemprop="name"]', $card);
             $name = $heading ? HtmlDocument::textOf($heading) : null;
         }
-        if (!$name && $linkNode) {
+        if (! $name && $linkNode) {
             $name = $linkNode->getAttribute('title') ?: HtmlDocument::textOf($linkNode);
         }
-        if (!$name) {
+        if (! $name) {
             $img = $doc->first('img[alt]', $card);
             $name = $img ? $img->getAttribute('alt') : null;
         }
 
         $cityNode = $this->pick($doc, $card, $rules['city_selector'] ?? '');
         $city = $cityNode ? HtmlDocument::textOf($cityNode) : null;
-        if (!$city && !empty($rules['city_from_url']) && $link && @preg_match((string) $rules['city_from_url'], $link, $m)) {
+        if (trim((string) ($rules['city_text'] ?? '')) !== '') {
+            $city = self::cityFromText($city ?? $text, (string) $rules['city_text']);
+        } elseif ($city !== null && mb_strlen($city) > 60) {
+            // A description rather than a place ("… escort from Westlands Nairobi"): keep the place.
+            $city = self::cityFromText($city, 'from');
+        }
+        if (! $city && ! empty($rules['city_from_url']) && $link && @preg_match((string) $rules['city_from_url'], $link, $m)) {
             $city = ucwords(str_replace('-', ' ', (string) ($m[1] ?? '')));
         }
 
@@ -119,7 +125,7 @@ class ListingExtractor
         if ($imgNode) {
             foreach (['data-original-url', 'data-lazy-src', 'data-src', 'src'] as $attr) {
                 $value = trim((string) $imgNode->getAttribute($attr));
-                if ($value !== '' && !str_starts_with($value, 'data:')) {
+                if ($value !== '' && ! str_starts_with($value, 'data:')) {
                     $image = UrlTools::resolve($pageUrl, $value);
                     break;
                 }
@@ -148,7 +154,7 @@ class ListingExtractor
     public function extractProfile(HtmlDocument $doc, array $profileRules, string $profileUrl, string $phonePrefix): array
     {
         $root = $doc->first('main, article, #content, .content, body') ?? $doc->first('body');
-        if (!$root) {
+        if (! $root) {
             return [];
         }
         $rules = $profileRules + ['phone_selector' => 'a[href^="tel:"]', 'whatsapp_selector' => 'a[href*="wa.me"], a[href*="whatsapp.com"]', 'name_selector' => 'h1'];
@@ -156,6 +162,37 @@ class ListingExtractor
         $row['profile_url'] = $profileUrl;
 
         return $row;
+    }
+
+    /**
+     * City from free text. `$rule` is either a /regex/ (first capture group, or the whole
+     * match) or a plain marker such as "escort from" — the text after its last occurrence.
+     */
+    public static function cityFromText(?string $text, string $rule): ?string
+    {
+        $text = trim((string) $text);
+        $rule = trim($rule);
+        if ($text === '' || $rule === '') {
+            return null;
+        }
+
+        $delimiter = $rule[0];
+        if (in_array($delimiter, ['/', '~', '#', '@'], true) && strrpos($rule, $delimiter) > 1) {
+            if (@preg_match($rule, $text, $m) !== 1) {
+                return null;
+            }
+            $value = $m[1] ?? $m[0];
+        } else {
+            $pos = mb_strripos($text, $rule);
+            if ($pos === false) {
+                return null;
+            }
+            $value = mb_substr($text, $pos + mb_strlen($rule));
+        }
+
+        $value = trim((string) preg_replace('/\s+/u', ' ', $value), " \t\n\r\0\x0B.,;:-");
+
+        return $value !== '' ? mb_substr($value, 0, 120) : null;
     }
 
     private function pick(HtmlDocument $doc, DOMElement $card, ?string $selector): ?DOMElement

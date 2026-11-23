@@ -6,7 +6,7 @@ class TemplateLibrary
 {
     public const RULE_KEYS = [
         'row_selector', 'name_selector', 'phone_selector', 'whatsapp_selector', 'email_selector',
-        'link_selector', 'city_selector', 'age_selector', 'image_selector', 'city_from_url',
+        'link_selector', 'city_selector', 'city_text', 'age_selector', 'image_selector', 'city_from_url',
     ];
 
     public function all(): array
@@ -38,7 +38,7 @@ class TemplateLibrary
     /**
      * Best template for the page with a 0–100 confidence and what matched.
      *
-     * @param array<int, array{key: string}> $tech
+     * @param  array<int, array{key: string}>  $tech
      * @return array{key: string, label: string, confidence: int, matched_by: array<int, string>, rows: int}|null
      */
     public function match(HtmlDocument $doc, array $tech): ?array
@@ -51,7 +51,7 @@ class TemplateLibrary
             $score = 0;
             foreach ((array) ($template['match']['tech'] ?? []) as $techKey) {
                 if (in_array($techKey, $techKeys, true)) {
-                    $matchedBy[] = 'technology: ' . $techKey;
+                    $matchedBy[] = 'technology: '.$techKey;
                     $score += 40;
                 }
             }

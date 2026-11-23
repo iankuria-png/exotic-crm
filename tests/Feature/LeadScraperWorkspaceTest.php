@@ -138,6 +138,34 @@ class LeadScraperWorkspaceTest extends TestCase
         $this->assertSame('https://laravel-dir.test/escorts?page=2', $profile['pagination']['next_url']);
     }
 
+    public function test_city_text_rule_reads_place_from_card_description(): void
+    {
+        [$platform] = $this->actingManager();
+        Http::fake([
+            'https://wp-dir.test/robots.txt' => Http::response('', 404),
+            'https://wp-dir.test/' => Http::response($this->fixture('wp-profile-preview.html'), 200, self::HTML),
+        ]);
+        $rules = [
+            'row_selector' => 'div.profile-preview', 'name_selector' => 'h5 a', 'phone_selector' => 'a[href^="tel:"]',
+            'link_selector' => 'h5 a', 'age_selector' => '.profile-text p', 'city_selector' => '.profile-text p',
+        ];
+
+        $marker = $this->postJson('/api/crm/scraper/probe', ['url' => 'https://wp-dir.test/', 'platform_id' => $platform->id, 'parser_rules' => $rules + ['city_text' => 'escort from']])
+            ->assertOk()->json('profile.sample');
+        $this->assertSame(['Westlands Nairobi', 'South B Nairobi in Sana Sana', 'Kisumu Kisumu in Kisumu Town'], array_column($marker, 'city'));
+        $this->assertSame([21, 22, 23], array_column($marker, 'age'));
+        $this->assertSame('Girl 1', $marker[0]['name']);
+
+        $regex = $this->postJson('/api/crm/scraper/probe', ['url' => 'https://wp-dir.test/', 'platform_id' => $platform->id, 'parser_rules' => $rules + ['city_text' => '/from (.+?)(?: in .*)?$/u']])
+            ->assertOk()->json('profile.sample');
+        $this->assertSame(['Westlands Nairobi', 'South B Nairobi', 'Kisumu Kisumu'], array_column($regex, 'city'));
+
+        // Without a rule, a long description is still trimmed to the place after "from".
+        $auto = $this->postJson('/api/crm/scraper/probe', ['url' => 'https://wp-dir.test/', 'platform_id' => $platform->id, 'parser_rules' => $rules])
+            ->assertOk()->json('profile.sample');
+        $this->assertSame('South B Nairobi in Sana Sana', $auto[1]['city']);
+    }
+
     public function test_multi_page_dry_run_then_selective_import(): void
     {
         [$platform, $user] = $this->actingManager();
@@ -317,14 +345,14 @@ class LeadScraperWorkspaceTest extends TestCase
 
     private function fixture(string $name): string
     {
-        return (string) file_get_contents(base_path('tests/Fixtures/scraper/' . $name));
+        return (string) file_get_contents(base_path('tests/Fixtures/scraper/'.$name));
     }
 
     private function createUser(string $role, array $marketIds): User
     {
         return User::query()->create([
-            'name' => ucfirst($role) . ' ' . Str::random(5),
-            'email' => Str::random(8) . '@example.test',
+            'name' => ucfirst($role).' '.Str::random(5),
+            'email' => Str::random(8).'@example.test',
             'password' => bcrypt('password'),
             'role' => $role,
             'status' => 'active',
@@ -336,7 +364,7 @@ class LeadScraperWorkspaceTest extends TestCase
     {
         return Platform::query()->create([
             'name' => $name,
-            'domain' => Str::slug($name) . '-' . Str::random(6) . '.test',
+            'domain' => Str::slug($name).'-'.Str::random(6).'.test',
             'country' => $name,
             'currency_code' => 'KES',
             'is_active' => true,

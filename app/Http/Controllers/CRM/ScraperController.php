@@ -36,7 +36,7 @@ class ScraperController extends Controller
 {
     private const RULE_FIELDS = [
         'row_selector', 'name_selector', 'phone_selector', 'whatsapp_selector', 'email_selector',
-        'link_selector', 'city_selector', 'age_selector', 'image_selector', 'city_from_url',
+        'link_selector', 'city_selector', 'city_text', 'age_selector', 'image_selector', 'city_from_url',
     ];
 
     public function __construct(
@@ -48,8 +48,7 @@ class ScraperController extends Controller
         private readonly ScraperSourceService $legacy,
         private readonly LeadImporter $importer,
         private readonly UrlSafety $urlSafety,
-    ) {
-    }
+    ) {}
 
     public function overview(Request $request)
     {
@@ -79,7 +78,7 @@ class ScraperController extends Controller
             'library' => array_map(fn (array $preset) => $preset + ['added' => in_array(UrlTools::host($preset['source_url']), $existingUrls, true)], $this->legacy->competitorPresets()),
             'templates' => $this->templates->summaries(),
             'drivers' => array_values($this->drivers->describe()),
-            'overrides' => (new OverrideCatalog())->describe(array_keys(OverrideCatalog::OPTIONS)),
+            'overrides' => (new OverrideCatalog)->describe(array_keys(OverrideCatalog::OPTIONS)),
             'defaults' => CrawlSettings::normalize([]),
             'limits' => config('scraper.limits'),
             'dedupe_modes' => ScraperSourceService::DEDUPE_MODES,
@@ -305,7 +304,7 @@ class ScraperController extends Controller
             'indexes.*' => 'integer|min:0',
             'reason' => 'nullable|string|max:500',
         ]);
-        if ($scraperRun->mode !== 'dry_run' || !in_array($scraperRun->status, ['success', 'partial'], true)) {
+        if ($scraperRun->mode !== 'dry_run' || ! in_array($scraperRun->status, ['success', 'partial'], true)) {
             return response()->json(['message' => 'Only a finished preview run can be imported.'], 422);
         }
 
@@ -315,19 +314,20 @@ class ScraperController extends Controller
         $duplicates = 0;
         $errors = [];
         foreach ($candidates as $i => &$candidate) {
-            if ($indexes !== null && !isset($indexes[$i])) {
+            if ($indexes !== null && ! isset($indexes[$i])) {
                 continue;
             }
             if (in_array($candidate['status'] ?? null, ['created', 'existing'], true)) {
                 continue;
             }
             $row = $candidate + ['phone' => null, 'email' => null, 'profile_url' => null, 'name' => null];
-            if (!$this->importer->importable($row)) {
+            if (! $this->importer->importable($row)) {
                 continue;
             }
             if ($this->importer->exists($source, $row)) {
                 $candidate['status'] = 'existing';
                 $duplicates++;
+
                 continue;
             }
             try {
@@ -384,9 +384,9 @@ class ScraperController extends Controller
         ]);
 
         $endpoint = url('/api/crm/scraper/captures/receive');
-        $bookmarklet = 'javascript:(function(){var f=document.createElement("form");f.method="POST";f.action=' . json_encode($endpoint) . ';f.target="_blank";f.acceptCharset="UTF-8";'
-            . 'var a={token:' . json_encode($token) . ',url:location.href,title:document.title,html:"<!doctype html>"+document.documentElement.outerHTML};'
-            . 'for(var k in a){var i=document.createElement("input");i.type="hidden";i.name=k;i.value=a[k];f.appendChild(i);}document.body.appendChild(f);f.submit();f.remove();})();';
+        $bookmarklet = 'javascript:(function(){var f=document.createElement("form");f.method="POST";f.action='.json_encode($endpoint).';f.target="_blank";f.acceptCharset="UTF-8";'
+            .'var a={token:'.json_encode($token).',url:location.href,title:document.title,html:"<!doctype html>"+document.documentElement.outerHTML};'
+            .'for(var k in a){var i=document.createElement("input");i.type="hidden";i.name=k;i.value=a[k];f.appendChild(i);}document.body.appendChild(f);f.submit();f.remove();})();';
 
         return response()->json([
             'capture' => $this->serializeCapture($capture),
@@ -406,14 +406,14 @@ class ScraperController extends Controller
         $url = trim((string) $request->input('url', ''));
 
         $capture = $token !== '' ? ScraperCapture::query()->where('token_hash', hash('sha256', $token))->first() : null;
-        if (!$capture || $capture->status !== 'pending' || $capture->expires_at->isPast()) {
+        if (! $capture || $capture->status !== 'pending' || $capture->expires_at->isPast()) {
             return $this->capturePage('This capture link has expired or was already used. Start a new capture from the CRM.', false, 410);
         }
         if ($html === '' || strlen($html) > (int) config('scraper.capture.max_bytes')) {
             return $this->capturePage('The page was empty or too large to capture.', false, 422);
         }
-        if (!preg_match('#^https?://#i', $url) || ($capture->expected_host && !str_ends_with(UrlTools::host($url), $capture->expected_host) && !str_ends_with($capture->expected_host, UrlTools::host($url)))) {
-            return $this->capturePage('This page is not on ' . $capture->expected_host . '. Open the site\'s listing page and try again.', false, 422);
+        if (! preg_match('#^https?://#i', $url) || ($capture->expected_host && ! str_ends_with(UrlTools::host($url), $capture->expected_host) && ! str_ends_with($capture->expected_host, UrlTools::host($url)))) {
+            return $this->capturePage('This page is not on '.$capture->expected_host.'. Open the site\'s listing page and try again.', false, 422);
         }
 
         $this->storeCaptureHtml($capture, $html, $url, 'bookmarklet');
@@ -433,7 +433,7 @@ class ScraperController extends Controller
         if ($request->hasFile('file')) {
             $html = (string) file_get_contents($request->file('file')->getRealPath());
         }
-        if (trim($html) === '' || !preg_match('/<(html|body|div|ul|li|a)\b/i', $html)) {
+        if (trim($html) === '' || ! preg_match('/<(html|body|div|ul|li|a)\b/i', $html)) {
             return response()->json(['message' => 'That does not look like a web page. Save the page as HTML or copy its source.'], 422);
         }
         if (strlen($html) > (int) config('scraper.capture.max_bytes')) {
@@ -491,10 +491,10 @@ class ScraperController extends Controller
         $color = $ok ? '#047857' : '#b91c1c';
         $icon = $ok ? '✓' : '!';
         $html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lead Scraper capture</title></head>'
-            . '<body style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f8fafc;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">'
-            . '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:28px 32px;max-width:420px;text-align:center">'
-            . '<div style="width:44px;height:44px;border-radius:50%;background:' . $color . ';color:#fff;font-size:24px;line-height:44px;margin:0 auto 12px">' . $icon . '</div>'
-            . '<p style="color:#0f172a;font-size:15px;margin:0">' . e($message) . '</p></div></body></html>';
+            .'<body style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f8fafc;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">'
+            .'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:28px 32px;max-width:420px;text-align:center">'
+            .'<div style="width:44px;height:44px;border-radius:50%;background:'.$color.';color:#fff;font-size:24px;line-height:44px;margin:0 auto 12px">'.$icon.'</div>'
+            .'<p style="color:#0f172a;font-size:15px;margin:0">'.e($message).'</p></div></body></html>';
 
         return response($html, $status)->header('Content-Type', 'text/html; charset=utf-8');
     }
@@ -506,7 +506,7 @@ class ScraperController extends Controller
         return [
             'platform_id' => [$creating ? 'required' : 'prohibited', 'integer', 'exists:platforms,id'],
             'name' => 'nullable|string|max:255',
-            'source_url' => $req . '|url|max:500',
+            'source_url' => $req.'|url|max:500',
             'template_key' => ['nullable', 'string', Rule::in(array_keys($this->templates->all()))],
             'fetch_driver' => ['nullable', Rule::in(FetchDriverRegistry::KEYS)],
             'dedupe_mode' => ['nullable', Rule::in(ScraperSourceService::DEDUPE_MODES)],
@@ -549,7 +549,7 @@ class ScraperController extends Controller
 
     private function authorizeSource(User $user, ?ScraperSource $source): void
     {
-        abort_if(!$source, 404);
+        abort_if(! $source, 404);
         $this->markets->ensureUserCanAccessPlatform($user, (int) $source->platform_id);
     }
 
@@ -578,7 +578,7 @@ class ScraperController extends Controller
             'latest_run' => $latest ? $this->serializeRun($latest, false) : null,
         ];
 
-        if (!$detail) {
+        if (! $detail) {
             return $base;
         }
 
