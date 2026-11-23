@@ -1,0 +1,15 @@
+{
+  "name": "exotic-crm-render-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20.12" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "dependencies": {
+    "ipaddr.js": "2.3.0",
+    "playwright": "1.58.2"
+  }
+}

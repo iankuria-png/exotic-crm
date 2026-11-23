@@ -21,6 +21,9 @@ class ScraperRun extends Model
         'duplicate_count',
         'skipped_count',
         'error_count',
+        'pages_fetched',
+        'progress',
+        'cancel_requested_at',
         'preview',
         'result',
         'started_at',
@@ -30,6 +33,8 @@ class ScraperRun extends Model
     protected $casts = [
         'preview' => 'array',
         'result' => 'array',
+        'progress' => 'array',
+        'cancel_requested_at' => 'datetime',
         'started_at' => 'datetime',
         'completed_at' => 'datetime',
     ];

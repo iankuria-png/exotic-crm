@@ -15,6 +15,12 @@ class ScraperSource extends Model
         'source_url',
         'parser_profile',
         'parser_rules',
+        'template_key',
+        'fetch_driver',
+        'crawl_settings',
+        'site_profile',
+        'health_status',
+        'last_probed_at',
         'fetch_schedule',
         'dedupe_mode',
         'is_active',
@@ -30,6 +36,9 @@ class ScraperSource extends Model
 
     protected $casts = [
         'parser_rules' => 'array',
+        'crawl_settings' => 'array',
+        'site_profile' => 'array',
+        'last_probed_at' => 'datetime',
         'is_active' => 'boolean',
         'compliance_ack_robots' => 'boolean',
         'compliance_ack_tos' => 'boolean',
@@ -55,5 +64,10 @@ class ScraperSource extends Model
     public function runs()
     {
         return $this->hasMany(ScraperRun::class);
+    }
+
+    public function captures()
+    {
+        return $this->hasMany(ScraperCapture::class);
     }
 }

@@ -53,6 +53,7 @@ use App\Http\Controllers\CRM\Kyc\QueueController as KycQueueController;
 use App\Http\Controllers\CRM\Kyc\ReviewController as KycReviewController;
 use App\Http\Controllers\CRM\Kyc\SettingsController as KycSettingsController;
 use App\Http\Controllers\CRM\LeadController;
+use App\Http\Controllers\CRM\ScraperController;
 use App\Http\Controllers\CRM\LifecycleRestoreController;
 use App\Http\Controllers\CRM\LifecycleSmsController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
@@ -205,6 +206,8 @@ Route::middleware('whatsapp.sidecar.hmac')->group(function () {
 // outages started. `image-proxy` is a named limiter (see AppServiceProvider)
 // combining a per-IP allowance with a global ceiling.
 Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:image-proxy');
+// Browser-capture bookmarklet posts here from the staff member's own tab; single-use token, no session.
+Route::post('/crm/scraper/captures/receive', [\App\Http\Controllers\CRM\ScraperController::class, 'receiveCapture'])->middleware('throttle:20,1');
 
 // Stateless MCP transport. McpAuthenticate records pre-auth refusals itself.
 Route::post('/mcp', McpController::class)->middleware(['mcp.size', 'mcp.auth']);
@@ -739,6 +742,23 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('/leads/scraper/preview', [LeadController::class, 'scrapePreview']);
         Route::post('/leads/scraper/preview/{previewId}/commit', [LeadController::class, 'commitScrapePreview']);
         Route::delete('/leads/scraper/preview/{previewId}', [LeadController::class, 'dismissScrapePreview']);
+
+        // Lead Scraper workspace
+        Route::get('/scraper/overview', [ScraperController::class, 'overview']);
+        Route::post('/scraper/probe', [ScraperController::class, 'probe'])->middleware('throttle:30,1');
+        Route::post('/scraper/sites', [ScraperController::class, 'store']);
+        Route::get('/scraper/sites/{scraperSource}', [ScraperController::class, 'show']);
+        Route::patch('/scraper/sites/{scraperSource}', [ScraperController::class, 'update']);
+        Route::post('/scraper/sites/{scraperSource}/probe', [ScraperController::class, 'probeSite'])->middleware('throttle:30,1');
+        Route::get('/scraper/sites/{scraperSource}/runs', [ScraperController::class, 'runs']);
+        Route::post('/scraper/sites/{scraperSource}/runs', [ScraperController::class, 'startRun']);
+        Route::get('/scraper/sites/{scraperSource}/captures', [ScraperController::class, 'captures']);
+        Route::post('/scraper/sites/{scraperSource}/captures', [ScraperController::class, 'createCapture']);
+        Route::post('/scraper/sites/{scraperSource}/captures/upload', [ScraperController::class, 'uploadCapture']);
+        Route::get('/scraper/captures/{scraperCapture}', [ScraperController::class, 'showCapture']);
+        Route::get('/scraper/runs/{scraperRun}', [ScraperController::class, 'showRun']);
+        Route::post('/scraper/runs/{scraperRun}/cancel', [ScraperController::class, 'cancelRun']);
+        Route::post('/scraper/runs/{scraperRun}/import', [ScraperController::class, 'importRun']);
         Route::post('/leads/upload-csv', [LeadController::class, 'uploadCsv']);
         Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
         Route::post('/leads/import', [LeadController::class, 'import']);

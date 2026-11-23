@@ -906,10 +906,10 @@ export default function Leads() {
                         </button>
                         <button
                             type="button"
-                            onClick={() => setShowScrapeModal(true)}
+                            onClick={() => navigate('/leads/scraper')}
                             className="crm-btn-secondary"
                         >
-                            Run scrape
+                            Lead Scraper
                         </button>
                         <button
                             type="button"

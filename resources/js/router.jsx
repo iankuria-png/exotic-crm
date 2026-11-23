@@ -13,6 +13,7 @@ import Monetization from './pages/Monetization';
 import WebVisitors from './pages/WebVisitors';
 import SendLove from './pages/SendLove';
 import Leads from './pages/Leads';
+import LeadScraper from './pages/LeadScraper';
 import Conversations from './pages/Conversations';
 import Campaigns from './pages/Campaigns';
 import Stories from './pages/Stories';
@@ -149,6 +150,7 @@ export default function AppRouter() {
                 <Route path="monetization" element={<Monetization />} />
                 <Route path="send-love" element={<SendLove />} />
                 <Route path="leads" element={<Leads />} />
+                <Route path="leads/scraper" element={<LeadScraper />} />
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />
                 <Route path="banner-ads" element={<BannerAds />} />

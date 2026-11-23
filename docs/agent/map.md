@@ -5,6 +5,7 @@ Read only the relevant row. Relative paths are rooted in this repository.
 | Topic | Source |
 |---|---|
 | Monetize market rollout | `docs/agent/tasks/monetized-content.md`; `docs/monetize-market-rollout-2026-10-09.md` |
+| Lead scraper (probe, templates, render worker) | `docs/agent/tasks/lead-scraper-intelligence-2026-11-23.md`, `docs/agent/tasks/lead-scraper-render-worker-2026-11-23.md` |
 | Current task | `docs/agent/state.md`, selected `docs/agent/tasks/` record |
 | API / permissions | `routes/api.php`, `app/Http/Controllers/CRM/`; inspect middleware for the route |
 | Payments / legacy constraints | `app/Billing/`, `app/Services/`, `config/billing.php`, `app/Http/Controllers/API/` |
