@@ -5,7 +5,6 @@ namespace App\Services\Scraper;
 use App\Models\ScraperSource;
 use App\Services\Scraper\Fetch\FetchDriverRegistry;
 use App\Services\Scraper\Fetch\FetchRequest;
-use App\Services\Scraper\Fetch\FetchResult;
 use App\Services\Scraper\Fetch\UrlSafety;
 
 /**
@@ -28,11 +27,10 @@ class SiteProbeService
         private readonly Paginator $paginator,
         private readonly SitemapReader $sitemaps,
         private readonly OverrideCatalog $overrides,
-    ) {
-    }
+    ) {}
 
     /**
-     * @param array{driver?: string, template_key?: ?string, parser_rules?: array, crawl_settings?: array, source_id?: ?int} $options
+     * @param  array{driver?: string, template_key?: ?string, parser_rules?: array, crawl_settings?: array, source_id?: ?int}  $options
      */
     public function probe(string $url, string $phonePrefix, array $options = []): array
     {
@@ -73,10 +71,10 @@ class SiteProbeService
         $templateKey = $options['template_key'] ?? null;
         if ($doc) {
             $match = $this->templates->match($doc, $tech);
-            if (!$match || $match['rows'] < 3) {
+            if (! $match || $match['rows'] < 3) {
                 $detected = $this->autoDetector->detect($doc, $result->finalUrl);
                 // A stale template that matches one or two cards loses to a clear auto-detected layout.
-                if ($match && $detected && !$templateKey && $detected['rows'] > $match['rows'] + 2) {
+                if ($match && $detected && ! $templateKey && $detected['rows'] > $match['rows'] + 2) {
                     $match = null;
                 } elseif ($match) {
                     $detected = null;
@@ -152,6 +150,8 @@ class SiteProbeService
             'effective_rules' => $rules,
             'pagination' => $pagination,
             'counts' => $stats,
+            'locations' => LocationFilter::facets(array_column($extraction['rows'], 'city')),
+            'with_location' => count(array_filter($extraction['rows'], fn ($r) => ($r['city'] ?? null) !== null)),
             'extraction_errors' => $extraction['errors'],
             'sample' => array_slice($extraction['rows'], 0, 8),
         ], $startedAt);
@@ -196,9 +196,9 @@ class SiteProbeService
         if ($stats['rows'] > 0) {
             $parts[] = sprintf('%d with phone', $stats['phones']);
         }
-        if (!empty($pagination['estimated_pages']) && $pagination['estimated_pages'] > 1) {
+        if (! empty($pagination['estimated_pages']) && $pagination['estimated_pages'] > 1) {
             $parts[] = sprintf('~%d pages', $pagination['estimated_pages']);
-        } elseif (!empty($pagination['next_url'])) {
+        } elseif (! empty($pagination['next_url'])) {
             $parts[] = 'more pages';
         }
 
@@ -212,13 +212,13 @@ class SiteProbeService
             'title' => null, 'tech' => [], 'blockers' => [], 'robots' => null, 'sitemap' => null,
             'template' => null, 'detected_rules' => null, 'effective_rules' => [], 'pagination' => null,
             'counts' => ['rows' => 0, 'phones' => 0, 'whatsapp' => 0, 'links' => 0, 'names' => 0],
-            'extraction_errors' => [], 'sample' => [],
+            'extraction_errors' => [], 'sample' => [], 'locations' => [], 'with_location' => 0,
         ];
         if ($profile['headline'] === null && $profile['blockers'] !== []) {
             $profile['headline'] = $profile['blockers'][0]['title'];
         }
         array_walk_recursive($profile, static function (&$value): void {
-            if (is_string($value) && !mb_check_encoding($value, 'UTF-8')) {
+            if (is_string($value) && ! mb_check_encoding($value, 'UTF-8')) {
                 $value = mb_scrub($value, 'UTF-8');
             }
         });

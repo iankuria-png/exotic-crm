@@ -4,7 +4,6 @@ namespace App\Services\Scraper;
 
 use App\Models\ScraperRun;
 use App\Models\ScraperSource;
-use App\Models\User;
 use App\Services\Scraper\Fetch\FetchDriverRegistry;
 use App\Services\Scraper\Fetch\FetchRequest;
 use App\Services\Scraper\Fetch\FetchResult;
@@ -54,21 +53,21 @@ class ScrapeRunner
 
         $run->forceFill(['status' => 'running', 'started_at' => $run->started_at ?? now()])->save();
 
-        if (!$source || !$actor) {
+        if (! $source || ! $actor) {
             return $this->finish($run, $source, 'error', 'The site or the person who started the run no longer exists.', []);
         }
-        if (!$source->is_active) {
+        if (! $source->is_active) {
             return $this->finish($run, $source, 'blocked', 'This site is paused. Activate it to run.', []);
         }
-        if (!$source->compliance_ack_robots || !$source->compliance_ack_tos) {
+        if (! $source->compliance_ack_robots || ! $source->compliance_ack_tos) {
             return $this->finish($run, $source, 'blocked', 'Confirm the robots.txt and terms checks for this site first.', []);
         }
 
         $settings = CrawlSettings::normalize((array) ($source->crawl_settings ?? []));
         $driverKey = (string) ($source->fetch_driver ?: 'http');
         $driver = $this->drivers->get($driverKey);
-        if (!$driver->isAvailable()) {
-            return $this->finish($run, $source, 'blocked', 'The "' . $driverKey . '" fetch method is not available.', []);
+        if (! $driver->isAvailable()) {
+            return $this->finish($run, $source, 'blocked', 'The "'.$driverKey.'" fetch method is not available.', []);
         }
         $prefix = preg_replace('/\D/', '', (string) ($source->platform?->phone_prefix ?? '')) ?: '254';
         $rules = $this->rulesFor($source);
@@ -85,7 +84,21 @@ class ScrapeRunner
         $errors = 0;
         $stopReason = null;
 
-        $progress = function (string $phase, array $extra = []) use ($run, &$candidates, &$pagesFetched, $settings) {
+        // Location filter: the run's own choice, else the site's default.
+        $filters = is_array($run->filters) && array_key_exists('locations', $run->filters)
+            ? $run->filters
+            : ['locations' => $settings['locations'], 'include_unknown_location' => $settings['include_unknown_location']];
+        $filters = ['locations' => CrawlSettings::locations($filters['locations'] ?? []), 'include_unknown_location' => (bool) ($filters['include_unknown_location'] ?? false)];
+        $location = LocationFilter::fromSettings($filters);
+        if ($location->active()) {
+            $this->event('info', 'Only keeping profiles in: '.implode(', ', $filters['locations']).($filters['include_unknown_location'] ? ' (plus profiles with no location)' : '').'.');
+        }
+        $seenAll = [];
+        $allCities = [];
+        $outside = 0;
+        $pendingUnknown = [];
+
+        $progress = function (string $phase, array $extra = []) use ($run, &$candidates, &$pagesFetched, &$outside, $settings) {
             $run->forceFill([
                 'pages_fetched' => $pagesFetched,
                 'discovered_count' => count($candidates),
@@ -95,6 +108,7 @@ class ScrapeRunner
                     'pages_fetched' => $pagesFetched,
                     'candidates' => count($candidates),
                     'with_phone' => count(array_filter($candidates, fn ($c) => $c['phone'] !== null)),
+                    'outside_location' => $outside,
                     'events' => $this->events,
                     'updated_at' => now()->toIso8601String(),
                 ], $extra),
@@ -103,7 +117,7 @@ class ScrapeRunner
 
         $add = function (array $row, string $origin) use (&$candidates, $source, $maxCandidates): bool {
             $key = $this->importer->key($source, $row);
-            if ($key === '' || !$this->importer->importable($row)) {
+            if ($key === '' || ! $this->importer->importable($row)) {
                 return false;
             }
             if (isset($candidates[$key])) {
@@ -128,10 +142,10 @@ class ScrapeRunner
         $profileQueue = [];
         if ($settings['route'] === 'sitemap') {
             $located = $this->sitemaps->locate($source->source_url, $this->robots->evaluate($source->source_url)['sitemaps'] ?? []);
-            if (!$located['found']) {
+            if (! $located['found']) {
                 return $this->finish($run, $source, 'blocked', 'No sitemap was found for this site.', []);
             }
-            $this->event('info', 'Reading sitemap ' . $located['sitemap_url']);
+            $this->event('info', 'Reading sitemap '.$located['sitemap_url']);
             $fromSitemap = $this->sitemaps->profileUrls((string) $located['sitemap_url'], $settings['profile_url_pattern'], max(1, $settings['max_profiles'] ?: 50));
             foreach ($fromSitemap['urls'] as $url) {
                 $profileQueue[$url] = null;
@@ -158,8 +172,8 @@ class ScrapeRunner
                 $visited[$url] = true;
 
                 $robots = $driverKey === 'capture' ? ['allowed' => true] : $this->robots->evaluate($url);
-                if (!($robots['allowed'] ?? true)) {
-                    $this->event('warning', 'robots.txt disallows ' . $url . '; stopping.');
+                if (! ($robots['allowed'] ?? true)) {
+                    $this->event('warning', 'robots.txt disallows '.$url.'; stopping.');
                     $stopReason = 'robots';
                     break;
                 }
@@ -170,7 +184,7 @@ class ScrapeRunner
                 $result = $driver->fetch($request($url));
                 $pagesFetched++;
 
-                if (!$result->ok()) {
+                if (! $result->ok()) {
                     $errors++;
                     $block = $this->explain($result);
                     $this->event($page === 1 ? 'error' : 'warning', sprintf('Page %d: %s', $page, $block));
@@ -184,18 +198,39 @@ class ScrapeRunner
                 $doc = new HtmlDocument($result->html, $result->finalUrl);
                 $extraction = $this->extractor->extract($doc, $rules, $result->finalUrl, $prefix);
                 $new = 0;
+                $newAny = 0;
                 foreach ($extraction['rows'] as $row) {
-                    if ($add($row, 'page ' . $page)) {
+                    $key = $this->importer->key($source, $row);
+                    $firstSight = $key !== '' && ! isset($seenAll[$key]);
+                    if ($firstSight) {
+                        $seenAll[$key] = true;
+                        $allCities[] = $row['city'];
+                        $newAny++;
+                    }
+                    if (! $location->matches($row['city'])) {
+                        // No city on the card: the profile page may say where they are.
+                        if ($row['city'] === null && $settings['follow_profiles'] && $row['profile_url'] && $key !== '') {
+                            $pendingUnknown[$key] ??= $row + ['found_on' => 'page '.$page];
+                            $profileQueue[$row['profile_url']] ??= $key;
+                        } elseif ($firstSight) {
+                            $outside++;
+                        }
+
+                        continue;
+                    }
+                    if ($add($row, 'page '.$page)) {
                         $new++;
                     }
-                    if ($settings['follow_profiles'] && $row['profile_url'] && (!$settings['follow_only_missing_phone'] || $row['phone'] === null)) {
-                        $profileQueue[$row['profile_url']] ??= $this->importer->key($source, $row);
+                    if ($settings['follow_profiles'] && $row['profile_url'] && (! $settings['follow_only_missing_phone'] || $row['phone'] === null)) {
+                        $profileQueue[$row['profile_url']] ??= $key;
                     }
                 }
-                $this->event('info', sprintf('Page %d: %d cards, %d new, %d with phone.', $page, $extraction['stats']['rows'], $new, $extraction['stats']['phones']));
+                $this->event('info', $location->active()
+                    ? sprintf('Page %d: %d cards, %d new, %d in the chosen location.', $page, $extraction['stats']['rows'], $newAny, $new)
+                    : sprintf('Page %d: %d cards, %d new, %d with phone.', $page, $extraction['stats']['rows'], $new, $extraction['stats']['phones']));
                 $progress('listing', ['current_url' => $result->finalUrl, 'page' => $page, 'estimated_pages' => $this->paginator->estimateTotalPages($doc)]);
 
-                if ($new === 0 && $settings['stop_when_no_new'] && $page > 1) {
+                if ($newAny === 0 && $settings['stop_when_no_new'] && $page > 1) {
                     $this->event('info', 'No new profiles on this page; stopping.');
                     $stopReason = 'no_new';
                     break;
@@ -206,7 +241,7 @@ class ScrapeRunner
                 }
 
                 $next = $this->paginator->next($doc, $paginationRules, $result->finalUrl, $source->source_url, $page);
-                if (!$next) {
+                if (! $next) {
                     $stopReason = 'last_page';
                     break;
                 }
@@ -232,16 +267,17 @@ class ScrapeRunner
                     $stopReason = 'time_budget';
                     break;
                 }
-                if ($driverKey !== 'capture' && !($this->robots->evaluate($profileUrl)['allowed'] ?? true)) {
+                if ($driverKey !== 'capture' && ! ($this->robots->evaluate($profileUrl)['allowed'] ?? true)) {
                     continue;
                 }
                 ($this->sleeper)($delay);
                 $result = $driver->fetch($request($profileUrl));
                 $pagesFetched++;
                 $done++;
-                if (!$result->ok()) {
+                if (! $result->ok()) {
                     $errors++;
-                    $this->event('warning', 'Profile ' . $this->shortUrl($profileUrl) . ': ' . $this->explain($result));
+                    $this->event('warning', 'Profile '.$this->shortUrl($profileUrl).': '.$this->explain($result));
+
                     continue;
                 }
                 $row = $this->extractor->extractProfile(new HtmlDocument($result->html, $result->finalUrl), $profileRules, $profileUrl, $prefix);
@@ -253,12 +289,30 @@ class ScrapeRunner
                     }
                     // Re-key when the profile supplied the phone used for dedupe.
                     $newKey = $this->importer->key($source, $candidates[$candidateKey]);
-                    if ($newKey !== $candidateKey && $newKey !== '' && !isset($candidates[$newKey])) {
+                    if ($newKey !== $candidateKey && $newKey !== '' && ! isset($candidates[$newKey])) {
                         $candidates[$newKey] = $candidates[$candidateKey];
                         unset($candidates[$candidateKey]);
                     }
+                } elseif ($candidateKey !== null && isset($pendingUnknown[$candidateKey])) {
+                    $merged = $pendingUnknown[$candidateKey];
+                    foreach ($row as $field => $value) {
+                        if ($value !== null && ($merged[$field] ?? null) === null) {
+                            $merged[$field] = $value;
+                        }
+                    }
+                    unset($pendingUnknown[$candidateKey]);
+                    if ($location->matches($merged['city'])) {
+                        $add($merged, (string) ($merged['found_on'] ?? 'profile'));
+                    } else {
+                        $outside++;
+                    }
                 } else {
-                    $add($row, 'profile');
+                    $allCities[] = $row['city'];
+                    if ($location->matches($row['city'])) {
+                        $add($row, 'profile');
+                    } else {
+                        $outside++;
+                    }
                 }
                 if ($done % 5 === 0) {
                     $progress('profiles', ['profiles_total' => count($queue), 'profiles_done' => $done, 'current_url' => $profileUrl]);
@@ -266,6 +320,9 @@ class ScrapeRunner
             }
             $progress('profiles', ['profiles_total' => count($queue), 'profiles_done' => $done]);
         }
+
+        // Profiles whose location never became known stay out of a filtered run.
+        $outside += count($pendingUnknown);
 
         // ---- Phase 3: dedupe against CRM, import if requested ----
         $created = 0;
@@ -276,10 +333,12 @@ class ScrapeRunner
             if ($exists) {
                 $duplicates++;
                 $candidate['status'] = 'existing';
+
                 continue;
             }
             if ($run->mode !== 'import') {
                 $candidate['status'] = 'new';
+
                 continue;
             }
             try {
@@ -309,6 +368,9 @@ class ScrapeRunner
             'duplicates' => $duplicates,
             'skipped' => $skipped,
             'stop_reason' => $stopReason,
+            'outside_location' => $outside,
+            'filters' => $filters,
+            'locations' => LocationFilter::facets($allCities),
         ]);
     }
 
@@ -340,6 +402,9 @@ class ScrapeRunner
             'pages_fetched' => $pagesFetched,
             'errors' => $errors,
             'stop_reason' => $extra['stop_reason'] ?? null,
+            'outside_location' => (int) ($extra['outside_location'] ?? 0),
+            'filters' => $extra['filters'] ?? $run->filters,
+            'locations' => $extra['locations'] ?? [],
             'dry_run' => $run->mode !== 'import',
         ];
 
@@ -377,7 +442,7 @@ class ScrapeRunner
         $doc = $result->html !== '' ? new HtmlDocument($result->html, $result->finalUrl) : null;
         $blockers = $this->blockerDetector->detect($result, $doc, null, ['rows' => 1, 'phones' => 1, 'links' => 1], $this->fingerprinter->detect($result, $doc));
 
-        return $blockers[0]['title'] ?? ('HTTP ' . $result->status);
+        return $blockers[0]['title'] ?? ('HTTP '.$result->status);
     }
 
     private function cancelled(ScraperRun $run): bool
@@ -395,6 +460,6 @@ class ScrapeRunner
 
     private function shortUrl(string $url): string
     {
-        return UrlTools::host($url) . (string) parse_url($url, PHP_URL_PATH);
+        return UrlTools::host($url).(string) parse_url($url, PHP_URL_PATH);
     }
 }

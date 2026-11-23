@@ -18,7 +18,7 @@ const SEVERITY = {
  * "At a glance" view of a probe: verdict, technology, blockers with overrides,
  * robots/sitemap/template/pagination facts and the first extracted rows.
  */
-export default function ProbeSummary({ profile, onOverride, overrideBusy = null, canManage = true, compact = false }) {
+export default function ProbeSummary({ profile, onOverride, overrideBusy = null, canManage = true, compact = false, onPickLocation = null, defaultLocations = [] }) {
     const [showAllTech, setShowAllTech] = useState(false);
     if (!profile) return null;
 
@@ -125,6 +125,38 @@ export default function ProbeSummary({ profile, onOverride, overrideBusy = null,
                     <Fact label="Fetched with">{profile.driver === 'capture' ? 'Browser capture' : profile.driver === 'render_worker' ? 'Render worker' : 'Direct'}</Fact>
                 </dl>
             </div>
+
+            {/* Where the profiles are */}
+            {(profile.locations || []).length > 0 ? (
+                <section className="rounded-lg border border-slate-200 p-3" aria-label="Where the profiles are">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <h4 className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Where the profiles are</h4>
+                        <span className="text-xs text-slate-500">
+                            {profile.with_location ?? 0} of {counts.rows} list a location{onPickLocation ? ' · pick a place to collect only there' : ''}
+                        </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                        {profile.locations.slice(0, 16).map((l) => {
+                            const isDefault = (defaultLocations || []).some((d) => d.toLowerCase() === l.label.toLowerCase());
+                            const chip = (
+                                <>
+                                    <span aria-hidden="true">📍</span>{l.label}
+                                    <span className={`tabular-nums ${isDefault ? 'text-teal-100' : 'text-slate-400'}`}>{l.count}</span>
+                                </>
+                            );
+                            const tone = isDefault ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-200 bg-white text-slate-700';
+                            return onPickLocation ? (
+                                <button key={l.label} type="button" onClick={() => onPickLocation(l.label)} title={`Collect only profiles in ${l.label}`}
+                                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition hover:border-teal-600 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 ${tone}`}>
+                                    {chip}
+                                </button>
+                            ) : (
+                                <span key={l.label} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${tone}`}>{chip}</span>
+                            );
+                        })}
+                    </div>
+                </section>
+            ) : null}
 
             {/* Sample rows */}
             {(profile.sample || []).length > 0 ? (

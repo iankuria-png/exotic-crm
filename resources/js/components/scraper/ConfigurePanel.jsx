@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import api from '../../services/api';
 import { Spinner, errorMessage } from './scraperUi';
+import LocationPicker, { mergeLocationSuggestions } from './LocationPicker';
 
 const LIST_FIELDS = [
     ['row_selector', 'Profile card', 'Repeated element that holds one profile'],
@@ -37,6 +38,8 @@ function blankForm(site) {
             profile_rules: { ...(crawl.profile_rules || {}) },
             headers: [...(crawl.headers || [])],
             cookies: [...(crawl.cookies || [])],
+            locations: [...(crawl.locations || [])],
+            include_unknown_location: !!crawl.include_unknown_location,
         },
         dedupe_mode: site.dedupe_mode || 'phone_or_email',
         is_active: !!site.is_active,
@@ -177,6 +180,22 @@ export default function ConfigurePanel({ site, meta, canManage, onSaved, focus, 
             <Section id="cfg-headers" title="Cookies and headers" hint="E.g. the cookie a site sets after its age notice. Sent with every request.">
                 <PairList label="Cookie" rows={form.crawl_settings.cookies} disabled={disabled} onChange={(rows) => setCrawl({ cookies: rows })} />
                 <div className="mt-3"><PairList label="Header" rows={form.crawl_settings.headers} disabled={disabled} onChange={(rows) => setCrawl({ headers: rows })} /></div>
+            </Section>
+
+            <Section id="cfg-locations" title="Default places" hint="Runs start with these places selected; you can change them each time. Leave empty to collect from everywhere.">
+                <LocationPicker
+                    value={form.crawl_settings.locations || []}
+                    onChange={(locations) => setCrawl({ locations })}
+                    suggestions={mergeLocationSuggestions(site.site_profile?.locations || [], site.latest_run?.result?.locations || [])}
+                    disabled={disabled}
+                    label="Default places"
+                />
+                {(form.crawl_settings.locations || []).length ? (
+                    <label className="mt-2 inline-flex items-center gap-2 text-sm text-slate-700">
+                        <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-teal-700" checked={!!form.crawl_settings.include_unknown_location} disabled={disabled} onChange={(e) => setCrawl({ include_unknown_location: e.target.checked })} />
+                        Also keep profiles that don’t list a location
+                    </label>
+                ) : null}
             </Section>
 
             <Section id="cfg-import" title="Importing">

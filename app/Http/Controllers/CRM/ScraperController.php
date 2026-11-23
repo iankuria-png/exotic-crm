@@ -247,7 +247,27 @@ class ScraperController extends Controller
         $validated = $request->validate([
             'mode' => ['required', Rule::in(['dry_run', 'import'])],
             'reason' => 'nullable|string|max:500',
+            'locations' => 'nullable|array|max:20',
+            'locations.*' => 'string|max:80',
+            'include_unknown_location' => 'nullable|boolean',
+            'save_as_default' => 'nullable|boolean',
         ]);
+
+        // Location filter for this run: explicit choice, else the site's saved default.
+        $crawl = CrawlSettings::normalize((array) ($scraperSource->crawl_settings ?? []));
+        $filters = array_key_exists('locations', $validated)
+            ? ['locations' => CrawlSettings::locations($validated['locations'] ?? []), 'include_unknown_location' => (bool) ($validated['include_unknown_location'] ?? false)]
+            : ['locations' => $crawl['locations'], 'include_unknown_location' => $crawl['include_unknown_location']];
+
+        if ($request->boolean('save_as_default')) {
+            $this->markets->ensureManager($request->user(), 'Only admin or sub-admin users can change a site\'s default location.');
+            $before = $this->auditState($scraperSource);
+            $scraperSource->forceFill([
+                'crawl_settings' => CrawlSettings::normalize(array_merge($crawl, $filters)),
+                'updated_by' => $request->user()->id,
+            ])->save();
+            $this->audit->fromRequest($request, (int) $scraperSource->platform_id, CrmAuditAction::SCRAPER_SOURCE_UPDATE, 'scraper_source', (int) $scraperSource->id, $before, $this->auditState($scraperSource), 'Saved default location from run options');
+        }
 
         $active = $scraperSource->runs()->whereIn('status', ['queued', 'running'])->where('created_at', '>=', now()->subHour())->first();
         if ($active) {
@@ -261,6 +281,7 @@ class ScraperController extends Controller
             'mode' => $validated['mode'],
             'status' => 'queued',
             'reason' => $validated['reason'] ?? null,
+            'filters' => $filters,
             'progress' => ['phase' => 'queued', 'events' => []],
         ]);
 
@@ -268,6 +289,7 @@ class ScraperController extends Controller
             'run_id' => $run->id,
             'mode' => $run->mode,
             'fetch_driver' => $scraperSource->fetch_driver,
+            'locations' => $filters['locations'],
         ], $validated['reason'] ?? 'Lead Scraper run');
 
         RunScraperSourceJob::dispatch((int) $run->id);
@@ -571,6 +593,7 @@ class ScraperController extends Controller
             'template_key' => $s->template_key,
             'template_label' => $s->template_key ? ($this->templates->get($s->template_key)['label'] ?? $s->template_key) : ($profile['template']['label'] ?? null),
             'fetch_driver' => $s->fetch_driver ?: 'http',
+            'default_locations' => CrawlSettings::locations(((array) ($s->crawl_settings ?? []))['locations'] ?? []),
             'last_probed_at' => optional($s->last_probed_at)->toIso8601String(),
             'last_run_at' => optional($s->last_run_at)->toIso8601String(),
             'last_run_status' => $s->last_run_status,
@@ -602,6 +625,7 @@ class ScraperController extends Controller
             'status' => $r->status,
             'reason' => $r->reason,
             'progress' => $r->progress,
+            'filters' => $r->filters,
             'result' => $r->result,
             'pages_fetched' => (int) ($r->pages_fetched ?? 0),
             'discovered_count' => (int) $r->discovered_count,

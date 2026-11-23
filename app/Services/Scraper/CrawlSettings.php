@@ -19,7 +19,7 @@ class CrawlSettings
         $headers = [];
         foreach ((array) ($input['headers'] ?? []) as $row) {
             $name = trim((string) ($row['name'] ?? ''));
-            if ($name !== '' && preg_match('/^[A-Za-z0-9-]{1,60}$/', $name) && !in_array(strtolower($name), ['host', 'user-agent', 'content-length', 'cookie'], true)) {
+            if ($name !== '' && preg_match('/^[A-Za-z0-9-]{1,60}$/', $name) && ! in_array(strtolower($name), ['host', 'user-agent', 'content-length', 'cookie'], true)) {
                 $headers[] = ['name' => $name, 'value' => mb_substr((string) ($row['value'] ?? ''), 0, 500)];
             }
         }
@@ -51,6 +51,8 @@ class CrawlSettings
             $pattern = '';
         }
 
+        $locations = self::locations($input['locations'] ?? []);
+
         return [
             'route' => in_array($input['route'] ?? 'listing', self::ROUTES, true) ? (string) ($input['route'] ?? 'listing') : 'listing',
             'max_pages' => $clamp($input['max_pages'] ?? $defaults['max_pages'] ?? 5, 1, $limits['max_pages'] ?? 25),
@@ -64,7 +66,31 @@ class CrawlSettings
             'profile_url_pattern' => $pattern !== '' ? $pattern : null,
             'headers' => $headers,
             'cookies' => $cookies,
+            'locations' => $locations,
+            'include_unknown_location' => (bool) ($input['include_unknown_location'] ?? false),
         ];
+    }
+
+    /**
+     * Up to 20 distinct place names, trimmed to 80 characters.
+     *
+     * @return array<int, string>
+     */
+    public static function locations(mixed $input): array
+    {
+        $out = [];
+        foreach ((array) $input as $value) {
+            $value = trim((string) preg_replace('/\s+/u', ' ', (string) $value));
+            if ($value === '' || mb_strlen($value) > 80) {
+                continue;
+            }
+            $key = LocationFilter::normalize($value);
+            if ($key !== '' && ! isset($out[$key])) {
+                $out[$key] = $value;
+            }
+        }
+
+        return array_slice(array_values($out), 0, 20);
     }
 
     public static function headerMap(array $settings): array

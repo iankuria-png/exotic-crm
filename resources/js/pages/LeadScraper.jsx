@@ -10,6 +10,7 @@ import AddSiteDrawer from '../components/scraper/AddSiteDrawer';
 import CapturePanel from '../components/scraper/CapturePanel';
 import ConfigurePanel from '../components/scraper/ConfigurePanel';
 import RunsPanel from '../components/scraper/RunsPanel';
+import RunDialog from '../components/scraper/RunDialog';
 import { HEALTH, HealthChip, RunChip, Spinner, TechChip, errorMessage, timeAgo } from '../components/scraper/scraperUi';
 
 const TABS = [['overview', 'Overview'], ['configure', 'Configure'], ['runs', 'Runs & results']];
@@ -26,6 +27,7 @@ export default function LeadScraper() {
     const [captureOpen, setCaptureOpen] = useState(false);
     const [configFocus, setConfigFocus] = useState(null);
     const [selectedRunId, setSelectedRunId] = useState(null);
+    const [runDialog, setRunDialog] = useState({ open: false, mode: 'dry_run', locations: null });
 
     const selectedId = params.get('site') ? Number(params.get('site')) : null;
     const tab = params.get('tab') || 'overview';
@@ -68,13 +70,16 @@ export default function LeadScraper() {
     });
 
     const startRun = useMutation({
-        mutationFn: ({ id, mode }) => api.post(`/crm/scraper/sites/${id}/runs`, { mode }).then((r) => r.data.run),
-        onSuccess: (run) => {
+        mutationFn: ({ id, ...payload }) => api.post(`/crm/scraper/sites/${id}/runs`, payload).then((r) => r.data.run),
+        onSuccess: (run, variables) => {
+            setRunDialog((d) => ({ ...d, open: false }));
+            if (variables.save_as_default) qc.invalidateQueries({ queryKey: ['scraper-site', run.scraper_source_id] });
             setSelectedRunId(run.id);
             setQuery({ tab: 'runs' });
             qc.invalidateQueries({ queryKey: ['scraper-runs', run.scraper_source_id] });
             qc.invalidateQueries({ queryKey: ['scraper-overview'] });
-            toast.success(run.mode === 'import' ? 'Run started: new profiles become leads.' : 'Preview started.');
+            const where = run.filters?.locations?.length ? ` in ${run.filters.locations.join(', ')}` : '';
+            toast.success(run.mode === 'import' ? `Run started: new profiles${where} become leads.` : `Preview started${where}.`);
         },
         onError: (e) => toast.error(errorMessage(e, 'Could not start the run.')),
     });
@@ -193,6 +198,7 @@ export default function LeadScraper() {
                                             {['queued', 'running'].includes(s.latest_run?.status) ? <span className="flex items-center gap-1 text-[11px] font-semibold text-sky-700"><Spinner className="h-3 w-3" />Running</span> : null}
                                         </div>
                                         <p className="crm-mono mt-0.5 truncate pl-4 text-[11px] text-slate-500">{s.host}{s.platform ? ` · ${s.platform.name}` : ''}</p>
+                                        {s.default_locations?.length ? <p className="mt-0.5 truncate pl-4 text-[11px] font-medium text-teal-700">📍 {s.default_locations.join(', ')}</p> : null}
                                         <p className="mt-1 truncate pl-4 text-xs text-slate-600">
                                             <span className="sr-only">{(HEALTH[s.health_status] || HEALTH.unknown).label}: </span>
                                             {s.headline || 'Not checked yet'}
@@ -226,6 +232,11 @@ export default function LeadScraper() {
                                                 <HealthChip status={site.health_status} />
                                                 {!site.is_active ? <span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-500">Paused</span> : null}
                                                 {activeRun ? <RunChip status={activeRun.status} /> : null}
+                                                {site.default_locations?.length ? (
+                                                    <span title="Default places for runs" className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-800">
+                                                        📍 {site.default_locations.slice(0, 2).join(', ')}{site.default_locations.length > 2 ? ` +${site.default_locations.length - 2}` : ''}
+                                                    </span>
+                                                ) : null}
                                             </div>
                                             <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
                                                 <a href={site.source_url} target="_blank" rel="noreferrer noopener" className="crm-mono truncate text-teal-700 hover:underline">{site.source_url.replace(/^https?:\/\//, '')} ↗</a>
@@ -239,10 +250,10 @@ export default function LeadScraper() {
                                             <button type="button" className="crm-btn-secondary disabled:opacity-60" disabled={recheck.isPending} onClick={() => recheck.mutate(site.id)}>
                                                 {recheck.isPending ? <><Spinner className="mr-2 h-4 w-4" />Checking…</> : 'Re-check'}
                                             </button>
-                                            <button type="button" className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50" disabled={!ready || running || startRun.isPending} title={!ready ? 'Activate the site and confirm the robots/terms checks first' : undefined} onClick={() => startRun.mutate({ id: site.id, mode: 'dry_run' })}>
+                                            <button type="button" className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50" disabled={!ready || running || startRun.isPending} title={!ready ? 'Activate the site and confirm the robots/terms checks first' : undefined} onClick={() => setRunDialog({ open: true, mode: 'dry_run', locations: null })}>
                                                 Preview run
                                             </button>
-                                            <button type="button" className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50" disabled={!ready || running || startRun.isPending} title={!ready ? 'Activate the site and confirm the robots/terms checks first' : 'Collect and create leads for every new profile'} onClick={() => startRun.mutate({ id: site.id, mode: 'import' })}>
+                                            <button type="button" className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50" disabled={!ready || running || startRun.isPending} title={!ready ? 'Activate the site and confirm the robots/terms checks first' : 'Collect and create leads for every new profile'} onClick={() => setRunDialog({ open: true, mode: 'import', locations: null })}>
                                                 Run &amp; import
                                             </button>
                                         </div>
@@ -265,7 +276,9 @@ export default function LeadScraper() {
                                     ) : null}
                                     {tab === 'overview' ? (
                                         site.site_profile ? (
-                                            <ProbeSummary profile={site.site_profile} onOverride={applyOverride} overrideBusy={overrideBusy} canManage={canManage} />
+                                            <ProbeSummary profile={site.site_profile} onOverride={applyOverride} overrideBusy={overrideBusy} canManage={canManage}
+                                                onPickLocation={ready && !running ? (place) => setRunDialog({ open: true, mode: 'dry_run', locations: [place] }) : null}
+                                                defaultLocations={site.default_locations} />
                                         ) : (
                                             <div className="rounded-xl border border-dashed border-slate-300 px-6 py-10 text-center">
                                                 <p className="text-sm font-semibold text-slate-900">Not checked yet</p>
@@ -291,6 +304,16 @@ export default function LeadScraper() {
                 defaultPlatformId={market}
                 toast={toast}
                 onCreated={(s) => { setAddOpen(false); refresh(s); setQuery({ site: s.id, tab: 'overview' }); }}
+            />
+            <RunDialog
+                open={runDialog.open}
+                site={site}
+                initialMode={runDialog.mode}
+                initialLocations={runDialog.locations}
+                canManage={canManage}
+                busy={startRun.isPending}
+                onClose={() => setRunDialog((d) => ({ ...d, open: false }))}
+                onStart={(payload) => startRun.mutate({ id: site.id, ...payload })}
             />
             <CapturePanel site={site} open={captureOpen} onClose={() => setCaptureOpen(false)} onReceived={onCaptureReceived} toast={toast} />
         </div>

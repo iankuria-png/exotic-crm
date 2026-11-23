@@ -73,6 +73,7 @@ export default function RunsPanel({ site, selectedRunId, onSelectRun, toast }) {
                             <p className="mt-0.5 truncate text-xs text-slate-500">
                                 {timeAgo(r.created_at)} · {r.discovered_count} found{r.created_count ? ` · ${r.created_count} imported` : ''}
                             </p>
+                            <p className="mt-0.5 truncate text-[11px] font-medium text-teal-700">{r.filters?.locations?.length ? `📍 ${r.filters.locations.join(', ')}` : <span className="font-normal text-slate-400">All locations</span>}</p>
                         </button>
                     </li>
                 ))}
@@ -107,6 +108,7 @@ function LiveProgress({ run, onCancel, cancelling }) {
             <div className="h-2 overflow-hidden rounded-full bg-sky-100" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
                 <div className="h-full rounded-full bg-sky-600 transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${Math.max(pct, run.status === 'queued' ? 2 : 6)}%` }} />
             </div>
+            {run.filters?.locations?.length ? <WhereChips filters={run.filters} outside={p.outside_location} /> : null}
             <dl className="grid grid-cols-3 gap-3">
                 <Metric label="Profiles found" value={p.candidates ?? 0} />
                 <Metric label="With phone" value={p.with_phone ?? 0} />
@@ -185,6 +187,7 @@ function RunResults({ run, toast }) {
                     <span className="text-sm font-semibold text-slate-900">{run.mode === 'import' ? 'Import run' : 'Preview run'} #{run.id}</span>
                     <span className="text-xs text-slate-500">· {run.initiated_by?.name || 'Someone'} · {timeAgo(run.completed_at || run.created_at)}</span>
                 </div>
+                {run.filters?.locations?.length ? <div className="mt-2"><WhereChips filters={run.filters} outside={r.outside_location} /></div> : null}
                 <p className="mt-1 text-sm text-slate-700">
                     {run.reason || r.message}
                     {r.stop_reason && STOP_REASON[r.stop_reason] ? ` Stopped because it ${STOP_REASON[r.stop_reason]}.` : ''}
@@ -196,6 +199,12 @@ function RunResults({ run, toast }) {
                     <Metric label="Already in CRM" value={counts.existing} />
                     <Metric label="Imported" value={counts.created} />
                 </dl>
+                {run.status === 'empty' && r.outside_location ? (
+                    <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                        {r.outside_location} profiles were found, but none in {run.filters.locations.join(', ')}.
+                        {(r.locations || []).length ? ` Places on this site include ${r.locations.slice(0, 5).map((l) => l.label).join(', ')}.` : ''}
+                    </p>
+                ) : null}
                 {(run.progress?.events || []).length ? <details className="mt-3"><summary className="cursor-pointer text-xs font-semibold text-slate-600">Run log</summary><EventLog events={run.progress.events} /></details> : null}
             </div>
 
@@ -271,6 +280,17 @@ function RunResults({ run, toast }) {
                 </div>
             ) : null}
         </section>
+    );
+}
+
+function WhereChips({ filters, outside }) {
+    return (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-semibold text-slate-500">Only in</span>
+            {filters.locations.map((l) => <span key={l} className="rounded-full bg-teal-700 px-2 py-0.5 font-semibold text-white">📍 {l}</span>)}
+            {filters.include_unknown_location ? <span className="text-slate-500">+ profiles with no location</span> : null}
+            {outside ? <span className="text-slate-500">· {outside} elsewhere skipped</span> : null}
+        </div>
     );
 }
 

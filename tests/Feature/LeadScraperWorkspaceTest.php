@@ -166,6 +166,63 @@ class LeadScraperWorkspaceTest extends TestCase
         $this->assertSame('South B Nairobi in Sana Sana', $auto[1]['city']);
     }
 
+    public function test_location_filter_limits_runs_and_can_be_saved_as_site_default(): void
+    {
+        [$platform, $user] = $this->actingManager();
+        Http::fake([
+            'https://wp-dir.test/robots.txt' => Http::response('', 404),
+            'https://wp-dir.test/' => Http::response($this->fixture('wp-profile-preview.html'), 200, self::HTML),
+        ]);
+        $site = $this->createSite($platform, $user, [
+            'source_url' => 'https://wp-dir.test/',
+            'template_key' => null,
+            'parser_rules' => ['row_selector' => 'div.profile-preview', 'name_selector' => 'h5 a', 'link_selector' => 'h5 a', 'city_selector' => '.profile-text p', 'city_text' => 'escort from'],
+            'crawl_settings' => ['max_pages' => 1, 'delay_ms' => 0],
+        ]);
+
+        // Probe offers places with counts.
+        $facets = $this->postJson("/api/crm/scraper/sites/{$site->id}/probe")->assertOk()->json('profile.locations');
+        $labels = array_column($facets, 'label');
+        $this->assertContains('Nairobi', $labels);
+        $this->assertContains('South B', $labels);
+        $this->assertContains('Kisumu', $labels);
+
+        // Only Westlands + Kisumu, case-insensitive, and saved as the default.
+        $run = $this->postJson("/api/crm/scraper/sites/{$site->id}/runs", ['mode' => 'dry_run', 'locations' => ['westlands', 'KISUMU'], 'save_as_default' => true])
+            ->assertStatus(202)->json('run');
+        $run = ScraperRun::query()->findOrFail($run['id']);
+        $this->assertSame(['Girl 1', 'Girl 3'], array_column($run->preview, 'name'));
+        $this->assertSame(1, $run->result['outside_location']);
+        $this->assertSame(['westlands', 'KISUMU'], $run->filters['locations']);
+        $this->assertSame(['westlands', 'KISUMU'], $site->fresh()->crawl_settings['locations']);
+
+        // A later run without a choice uses the site default; import creates only matching leads.
+        $this->postJson("/api/crm/scraper/sites/{$site->id}/runs", ['mode' => 'import'])->assertStatus(202);
+        $this->assertSame(['Girl 1', 'Girl 3'], Lead::query()->orderBy('name')->pluck('name')->all());
+
+        // An explicit empty list means "everywhere" for that run.
+        $all = $this->postJson("/api/crm/scraper/sites/{$site->id}/runs", ['mode' => 'dry_run', 'locations' => []])->assertStatus(202)->json('run');
+        $this->assertCount(3, ScraperRun::query()->findOrFail($all['id'])->preview);
+    }
+
+    public function test_location_filter_reports_when_nothing_matches_and_sales_cannot_save_default(): void
+    {
+        [$platform, $user] = $this->actingManager();
+        $this->fakeEscortWpSite();
+        $site = $this->createSite($platform, $user, ['crawl_settings' => ['max_pages' => 1, 'delay_ms' => 0]]);
+
+        $run = $this->postJson("/api/crm/scraper/sites/{$site->id}/runs", ['mode' => 'dry_run', 'locations' => ['Mombasa']])->assertStatus(202)->json('run');
+        $run = ScraperRun::query()->findOrFail($run['id']);
+        $this->assertSame('empty', $run->status);
+        $this->assertSame(6, $run->result['outside_location']);
+        $this->assertContains('Westlands', array_column($run->result['locations'], 'label'));
+
+        $sales = $this->createUser('sales', [$platform->id]);
+        Sanctum::actingAs($sales);
+        $this->postJson("/api/crm/scraper/sites/{$site->id}/runs", ['mode' => 'dry_run', 'locations' => ['Nairobi'], 'save_as_default' => true])->assertForbidden();
+        $this->assertArrayNotHasKey('locations', (array) $site->fresh()->crawl_settings);
+    }
+
     public function test_multi_page_dry_run_then_selective_import(): void
     {
         [$platform, $user] = $this->actingManager();
