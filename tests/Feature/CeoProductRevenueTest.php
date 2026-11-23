@@ -49,6 +49,93 @@ class CeoProductRevenueTest extends TestCase
         $payment->update(['wallet_transaction_id' => $id]);
     }
 
+    public function test_collections_product_series_reconcile_cash_counts_and_peak_hours(): void
+    {
+        $platform = Platform::factory()->create(['country' => 'Kenya', 'currency_code' => 'USD']);
+        foreach ([['subscription', 20], ['visitor_contact_unlock', 7], ['premium_content_sale', 3], ['send_love', 2], ['tour_pass', 1]] as [$purpose, $amount]) {
+            $payment = $this->payment($platform, ['purpose' => $purpose, 'amount' => $amount, 'subscription_lifecycle' => $purpose === 'subscription' ? 'renewal' : null]);
+            if (in_array($purpose, ['premium_content_sale', 'send_love'])) {
+                $this->ledger($payment, 'credit');
+            }
+        }
+        $this->payment($platform, ['amount' => 10]);
+        $this->payment($platform, ['source' => 'wallet', 'purpose' => 'monetize_pass', 'amount' => 4]);
+        foreach (['all' => 43, 'subscription' => 30, 'contact_unlock' => 7, 'premium_content_sale' => 3, 'send_love' => 2, 'passes' => 1] as $product => $amount) {
+            $data = $this->getJson('/api/crm/dashboard/ceo/product-revenue?analysis=1&analysis_view=peak&product='.$product)->assertOk()->json();
+            $analysis = $data['collections'];
+            $this->assertEquals($amount, $analysis['selected']['normalized_total']);
+            $this->assertEquals($amount, collect($analysis['trend']['points'])->sum('value'));
+            $this->assertEquals($amount, collect($analysis['peak_hours']['cells'])->sum('value'));
+            $this->assertEquals($amount, collect($analysis['peak_hours']['weekdays'])->sum('value'));
+            $this->assertEquals($analysis['selected']['payments_count'], collect($analysis['trend']['points'])->sum('payments_count'));
+            $this->assertCount(168, $analysis['peak_hours']['cells']);
+            $this->assertEquals($amount, collect($analysis['peak_hours']['cells'])->firstWhere(fn ($c) => $c['dow'] === 0 && $c['hour'] === 11)['value']);
+            $this->assertEquals(43, $data['selected']['normalized_total']); // panel choice never changes the headline universe
+        }
+        $this->assertEquals(4, $analysis['wallet_funded']['normalized_total']);
+        $this->getJson('/api/crm/dashboard/ceo/product-revenue')->assertJsonMissingPath('collections');
+    }
+
+    public function test_collections_preserve_null_fx_and_prior_alignment_and_dense_hour_frame(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+        $this->payment($platform, ['purpose' => 'send_love', 'amount' => 8, 'completed_at' => '2026-11-23 08:00:00']);
+        $this->payment($platform, ['purpose' => 'send_love', 'amount' => 4, 'currency' => 'KES', 'completed_at' => '2026-11-22 08:00:00']);
+        $data = $this->getJson('/api/crm/dashboard/ceo/product-revenue?analysis=1&product=send_love&horizon=today')->assertOk()->json('collections');
+        $this->assertCount(24, $data['trend']['points']);
+        $this->assertEquals(8, $data['trend']['points'][11]['value']);
+        $this->assertNull($data['trend']['points'][11]['prior_value']);
+        $this->assertEquals(1, $data['trend']['points'][11]['prior_payments_count']);
+        $this->assertTrue($data['trend']['points'][12]['future']);
+        $this->assertNull($data['trend']['points'][12]['value']);
+        $this->assertNull($data['trend']['points'][12]['prior_value']);
+        $this->assertEquals(8, $data['selected']['normalized_total']);
+        $this->assertNull($data['prior']['normalized_total']);
+        $this->assertNull($data['change_percent']);
+        $this->assertNull($data['peak_hours']);
+        $this->payment($platform, ['purpose' => 'send_love', 'amount' => 5, 'currency' => 'KES']);
+        $missing = $this->getJson('/api/crm/dashboard/ceo/product-revenue?analysis=1&product=send_love&horizon=today&analysis_view=peak')->assertOk()->json('collections');
+        $this->assertNull($missing['selected']['normalized_total']);
+        $this->assertNull($missing['average_ticket']);
+        $this->assertEquals(['KES' => 5, 'USD' => 8], $missing['selected']['native']);
+        $this->assertNull($missing['trend']['points'][11]['value']);
+        $this->assertNull(collect($missing['peak_hours']['cells'])->firstWhere(fn ($c) => $c['dow'] === 0 && $c['hour'] === 11)['value']);
+    }
+
+    public function test_collections_use_receipt_cents_in_every_partition(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'KES']);
+        DB::table('reporting_fx_rates')->insert(['provider' => 'manual', 'source_currency' => 'KES', 'target_currency' => 'USD', 'rate_date' => '2026-11-23', 'rate' => 0.005, 'created_at' => now(), 'updated_at' => now()]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->payment($platform, ['purpose' => 'premium_content_sale', 'currency' => 'KES', 'amount' => 1]);
+        }
+        $data = $this->getJson('/api/crm/dashboard/ceo/product-revenue?analysis=1&product=premium_content_sale&analysis_view=peak')->assertOk()->json('collections');
+        $this->assertEquals(0.05, $data['selected']['normalized_total']);
+        $this->assertEquals(0.05, collect($data['trend']['points'])->sum('value'));
+        $this->assertEquals(0.05, collect($data['peak_hours']['cells'])->sum('value'));
+        $this->assertEquals(5, $data['selected']['native']['KES']);
+    }
+
+    public function test_collections_custom_buckets_and_product_validation_keep_scope_and_count_partitions(): void
+    {
+        $platform = Platform::factory()->create(['currency_code' => 'USD']);
+        $other = Platform::factory()->create(['currency_code' => 'USD']);
+        $this->payment($platform, ['amount' => 10, 'completed_at' => '2026-11-02 09:00:00']);
+        $this->payment($platform, ['amount' => 20, 'completed_at' => '2026-11-15 09:00:00']);
+        $this->payment($platform, ['amount' => 5, 'completed_at' => '2026-10-13 09:00:00']);
+        $this->payment($other, ['amount' => 999, 'completed_at' => '2026-11-02 09:00:00']);
+        foreach (['day', 'week', 'month'] as $bucket) {
+            $data = $this->getJson('/api/crm/dashboard/ceo/product-revenue?analysis=1&product=subscription&horizon=custom&from=2026-11-01&to=2026-11-20&bucket='.$bucket.'&platform_id='.$platform->id)->assertOk()->json('collections');
+            $this->assertEquals(30, collect($data['trend']['points'])->sum('value'));
+            $this->assertEquals(5, collect($data['trend']['points'])->sum('prior_value'));
+            $this->assertEquals(2, collect($data['trend']['points'])->sum('payments_count'));
+            $this->assertSame($bucket, $data['trend']['bucket']);
+        }
+        foreach (['product=bad', 'bucket=bad', 'analysis_view=bad', 'analysis=bad'] as $invalid) {
+            $this->getJson('/api/crm/dashboard/ceo/product-revenue?analysis=1&'.$invalid)->assertUnprocessable();
+        }
+    }
+
     public function test_external_content_and_gift_credits_are_cash_and_later_wallet_spending_is_not(): void
     {
         $platform = Platform::factory()->create(['country' => 'Kenya', 'currency_code' => 'USD']);
@@ -129,9 +216,11 @@ class CeoProductRevenueTest extends TestCase
         $this->assertNull($data['products'][0]['share_percent']);
         DB::table('reporting_fx_rates')->insert(['provider' => 'manual', 'source_currency' => 'RWF', 'target_currency' => 'KES', 'rate_date' => '2026-11-23', 'rate' => 0.123456, 'created_at' => now(), 'updated_at' => now()]);
         DB::table('reporting_fx_rates')->insert(['provider' => 'manual', 'source_currency' => 'USD', 'target_currency' => 'KES', 'rate_date' => '2026-11-23', 'rate' => 130, 'created_at' => now(), 'updated_at' => now()]);
-        $kes = $this->getJson('/api/crm/dashboard/ceo/product-revenue?reporting_currency=KES')->assertOk()->json();
+        $kes = $this->getJson('/api/crm/dashboard/ceo/product-revenue?reporting_currency=KES&analysis=1&analysis_view=peak')->assertOk()->json();
         $this->assertSame('KES', $kes['selected']['normalized_currency']);
         $this->assertEquals(2612.35, $kes['selected']['normalized_total']);
+        $this->assertSame('Rwanda', $kes['collections']['peak_hours']['weekdays'][0]['top_country']['country']);
+        $this->assertEquals(2612.35, $kes['collections']['peak_hours']['weekdays'][0]['top_country']['value']);
         $this->assertEquals($kes['selected']['normalized_total'], collect($kes['products'])->sum('normalized_total'));
         $this->assertEquals($kes['selected']['normalized_total'], collect($kes['markets'][0]['platforms'])->sum('normalized_total'));
     }

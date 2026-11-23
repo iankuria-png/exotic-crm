@@ -99,7 +99,7 @@ function StatTile({ label, value, note }) {
     );
 }
 
-function WeekdayRevenueModal({ weekday, cells, currency, window, onClose }) {
+function WeekdayRevenueModal({ weekday, cells, currency, window, onClose, cashBasis = false }) {
     const closeButtonRef = useRef(null);
     const dayCells = cells.filter((cell) => Number(cell.dow) === Number(weekday?.dow));
     const maxRevenue = Math.max(...dayCells.map((cell) => Number(cell.value || 0)), 0);
@@ -113,14 +113,16 @@ function WeekdayRevenueModal({ weekday, cells, currency, window, onClose }) {
     const gapDates = Array.isArray(weekday?.gap_dates) ? weekday.gap_dates : [];
 
     useEffect(() => {
+        const previousFocus = document.activeElement;
         closeButtonRef.current?.focus();
         const handleKeyDown = (event) => {
             if (event.key === 'Escape') onClose();
+            if (cashBasis && event.key === 'Tab') { event.preventDefault(); closeButtonRef.current?.focus(); }
         };
         document.addEventListener('keydown', handleKeyDown);
 
-        return () => document.removeEventListener('keydown', handleKeyDown);
-    }, [onClose]);
+        return () => { document.removeEventListener('keydown', handleKeyDown); if (cashBasis) previousFocus?.focus?.(); };
+    }, [onClose, cashBasis]);
 
     if (!weekday) return null;
 
@@ -154,7 +156,7 @@ function WeekdayRevenueModal({ weekday, cells, currency, window, onClose }) {
                 </div>
 
                 <div className="max-h-[calc(92vh-104px)] overflow-y-auto p-5">
-                    <div className="grid gap-3 md:grid-cols-4">
+                    <div className={`grid gap-3 ${cashBasis ? 'md:grid-cols-3' : 'md:grid-cols-4'}`}>
                         <StatTile
                             label="Revenue"
                             value={formatCurrency(Number(weekday.value || 0), currency)}
@@ -170,14 +172,17 @@ function WeekdayRevenueModal({ weekday, cells, currency, window, onClose }) {
                             value={formatCurrency(Number(weekday.average_ticket || 0), currency)}
                             note="Revenue per payment"
                         />
+                        {!cashBasis && (
                         <div className={`rounded-lg border px-4 py-3 ${trendTone(weekday.trend_direction)}`}>
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] opacity-75">Trend</p>
                             <p className="mt-1 text-lg font-semibold capitalize">{weekday.trend_direction || 'baseline'}</p>
                             <p className="mt-1 text-xs font-semibold">{trendCopy(weekday.trend_direction, weekday.delta_percent)}</p>
                         </div>
+                        )}
                     </div>
 
-                    <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                    <div className={`mt-4 grid gap-3 ${cashBasis ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
+                        {!cashBasis && (
                         <div className="rounded-lg border border-slate-200 bg-white p-4">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Best sales member</p>
                             {topAgent ? (
@@ -190,6 +195,8 @@ function WeekdayRevenueModal({ weekday, cells, currency, window, onClose }) {
                                 <p className="mt-2 text-sm text-slate-500">No assigned sales revenue on this weekday.</p>
                             )}
                         </div>
+
+                        )}
 
                         <div className="rounded-lg border border-slate-200 bg-white p-4">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Best country</p>
@@ -218,7 +225,7 @@ function WeekdayRevenueModal({ weekday, cells, currency, window, onClose }) {
                                     ))}
                                 </div>
                             ) : (
-                                <p className="mt-1 text-sm text-slate-500">No zero-revenue {weekday.label.toLowerCase()}s in this window.</p>
+                                <p className="mt-1 text-sm text-slate-500">{cashBasis ? (Number(weekday.occurrences || 0) === 0 ? `No ${weekday.label.toLowerCase()}s fall in this reporting period.` : `Cash payments were recorded on every ${weekday.label.toLowerCase()} in scope.`) : `No zero-revenue ${weekday.label.toLowerCase()}s in this window.`}</p>
                             )}
                         </div>
                     </div>
@@ -227,7 +234,7 @@ function WeekdayRevenueModal({ weekday, cells, currency, window, onClose }) {
                         <div className="flex flex-wrap items-end justify-between gap-3">
                             <div>
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{weekday.label} hour rhythm</p>
-                                <p className="mt-1 text-sm text-slate-500">Baseline revenue: {formatCurrency(baselineValue, currency)}</p>
+                                {!cashBasis && <p className="mt-1 text-sm text-slate-500">Baseline revenue: {formatCurrency(baselineValue, currency)}</p>}
                             </div>
                             <div className="flex flex-wrap gap-2">
                                 {topHours.length ? topHours.map((cell) => (
@@ -268,10 +275,11 @@ function WeekdayRevenueModal({ weekday, cells, currency, window, onClose }) {
     );
 }
 
-export default function PeakHoursHeatmap({ data, isLoading, errorMessage, currency = 'USD' }) {
+export default function PeakHoursHeatmap({ data, isLoading, errorMessage, currency = 'USD', cashBasis = false, scopeKey }) {
     const [metric, setMetric] = useState('revenue');
     const [hovered, setHovered] = useState(null);
     const [selectedWeekday, setSelectedWeekday] = useState(null);
+    useEffect(() => { setSelectedWeekday(null); setHovered(null); }, [scopeKey]);
 
     const cells = Array.isArray(data?.cells) ? data.cells : [];
     const weekdays = Array.isArray(data?.weekdays) ? data.weekdays : [];
@@ -339,7 +347,7 @@ export default function PeakHoursHeatmap({ data, isLoading, errorMessage, curren
             <div className="flex flex-col gap-3 rounded-lg border border-teal-100 bg-teal-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <div className="flex items-center gap-2">
-                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">Sales by hour</p>
+                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">{cashBasis ? 'Collections by hour' : 'Sales by hour'}</p>
                         <div className="inline-flex rounded-md border border-teal-200 bg-white p-0.5" role="tablist" aria-label="Peak-hours metric">
                             {METRICS.map((item) => (
                                 <button
@@ -430,7 +438,7 @@ export default function PeakHoursHeatmap({ data, isLoading, errorMessage, curren
                             {hovered.payments > 0 ? ` · Avg ${formatCurrency(hovered.revenue / hovered.payments, currency)}` : ''}
                         </p>
                         {hovered.revenue === 0 && hovered.payments > 0 ? (
-                            <p className="mt-1 text-[11px] font-medium text-teal-700">Activity with no collected revenue (e.g. free trials).</p>
+                            <p className="mt-1 text-[11px] font-medium text-teal-700">{cashBasis ? 'Cash payments rounded below a reporting-currency cent.' : 'Activity with no collected revenue (e.g. free trials).'}</p>
                         ) : null}
                     </div>
                 ) : null}
@@ -457,7 +465,8 @@ export default function PeakHoursHeatmap({ data, isLoading, errorMessage, curren
 
             {selectedWeekday ? (
                 <WeekdayRevenueModal
-                    weekday={selectedWeekday}
+                    weekday={cashBasis ? weekdayMap.get(selectedWeekday.dow) || selectedWeekday : selectedWeekday}
+                    cashBasis={cashBasis}
                     cells={cells}
                     currency={currency}
                     window={data?.window}

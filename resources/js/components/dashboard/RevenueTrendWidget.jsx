@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
     Area,
     AreaChart,
@@ -10,7 +10,8 @@ import {
     XAxis,
     YAxis,
 } from 'recharts';
-import ProductRevenueView from './ProductRevenueView';
+import ProductRevenueView, { cashMoney, CashState } from './ProductRevenueView';
+import { RevenueProductSelector, RevenueCollectionSummary, RevenueChartOptions, collectionWindowLabel } from './RevenueCollectionsControls';
 import SectionFrame from '../SectionFrame';
 import { formatCurrency } from '../../utils/currency';
 import CustomerMixView from './CustomerMixView';
@@ -49,15 +50,16 @@ function EmptyState({ message }) {
 function valueForMetric(point, metric, prefix = '') {
     const key = prefix ? `${prefix}_${metric}` : metric;
     if (metric === 'revenue') {
-        return Number(prefix ? point.prior_value : point.value || 0);
+        const value = prefix ? point.prior_value : point.value;
+        return value == null ? null : Number(value);
     }
 
-    return Number(point[key] || 0);
+    return point[key] == null ? null : Number(point[key]);
 }
 
 function formatMetricValue(value, metric, currency) {
     if (metric === 'revenue' || metric === 'average_ticket') {
-        return formatCurrency(value || 0, currency);
+        return value == null ? 'FX unavailable' : formatCurrency(value, currency);
     }
 
     return Number(value || 0).toLocaleString();
@@ -155,7 +157,7 @@ function weekdayDot(selectedWeekday) {
 }
 
 function TrendTooltip({ active, payload, label, currency, metric }) {
-    if (!active || !payload?.length) return null;
+    if (!active || !payload?.length || payload[0]?.payload?.future) return null;
     const point = payload[0]?.payload || {};
     const current = valueForMetric(point, metric);
     const prior = valueForMetric(point, metric, 'prior');
@@ -166,7 +168,7 @@ function TrendTooltip({ active, payload, label, currency, metric }) {
             <p className="mt-1 text-sm font-semibold text-slate-900">Current: {formatMetricValue(current, metric, currency)}</p>
             <p className="text-sm font-medium text-slate-500">Prior: {formatMetricValue(prior, metric, currency)}</p>
             <p className="mt-2 text-xs text-slate-500">
-                {Number(point.payments_count || 0).toLocaleString()} payments · Avg {formatCurrency(point.average_ticket || 0, currency)}
+                {Number(point.payments_count || 0).toLocaleString()} payments · Avg {formatMetricValue(point.average_ticket, 'average_ticket', currency)}
             </p>
         </div>
     );
@@ -190,8 +192,18 @@ export default function RevenueTrendWidget({
     peakHoursLoading = false,
     peakHoursError = null,
     productRevenue, productLoading, productError, onRetryRevenue, displayMode,
+    collections, product = 'all', onProductChange, asOf, onRetryCollections,
 }) {
     const [selectedDay, setSelectedDay] = useState(null);
+    const [optionsOpen, setOptionsOpen] = useState(false);
+    const optionsButton = useRef(null);
+    const [reducedMotion, setReducedMotion] = useState(() => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    useEffect(() => {
+        const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const update = () => setReducedMotion(query.matches);
+        query.addEventListener('change', update);
+        return () => query.removeEventListener('change', update);
+    }, []);
     const rawPoints = data?.points || [];
     const activeBucket = data?.bucket || 'auto';
     const isHourly = activeBucket === 'hour';
@@ -206,12 +218,12 @@ export default function RevenueTrendWidget({
             ...point,
             weekday,
             is_selected_day: selectedDay === point.label,
-            revenue: isFuture ? null : Number(point.value || 0),
-            prior_revenue: Number(point.prior_value || 0),
+            revenue: isFuture || point.value == null ? null : Number(point.value),
+            prior_revenue: isFuture || point.prior_value == null ? null : Number(point.prior_value),
             payments: isFuture ? null : Number(point.payments_count || 0),
-            prior_payments: Number(point.prior_payments_count || 0),
-            average_ticket: isFuture ? null : Number(point.average_ticket || 0),
-            prior_average_ticket: Number(point.prior_average_ticket || 0),
+            prior_payments: isFuture ? null : Number(point.prior_payments_count || 0),
+            average_ticket: isFuture || point.average_ticket == null ? null : Number(point.average_ticket),
+            prior_average_ticket: isFuture || point.prior_average_ticket == null ? null : Number(point.prior_average_ticket),
         };
     });
     const selectedWeekday = selectedDay ? weekdayKey(selectedDay) : null;
@@ -221,26 +233,20 @@ export default function RevenueTrendWidget({
             : points.filter((point) => point.weekday === selectedWeekday)
     ), [points, selectedWeekday]);
     const weekdaySelectionEnabled = activeBucket === 'day';
-    const hasData = points.some((point) => Number(valueForMetric(point, metric) || 0) > 0 || Number(valueForMetric(point, metric, 'prior') || 0) > 0);
+    const hasData = points.some((point) => Number(point.payments_count || 0) > 0 || Number(point.prior_payments_count || 0) > 0);
     const currentKey = metric === 'revenue' ? 'revenue' : metric;
     const priorKey = `prior_${currentKey}`;
-    const activeMetric = METRICS.find((item) => item.key === metric)?.label || 'Revenue';
     const activeView = VIEWS.find((item) => item.key === view)?.key || 'trend';
-    const tzLabel = data?.window?.timezone || 'East Africa';
-    const priorToggleLabel = isHourly ? 'Prior day' : 'Prior window';
-    const subtitle = activeView === 'trend'
-        ? (isHourly
-            ? `${activeMetric} by hour (${tzLabel}) — ${data?.window?.is_today ? 'today' : 'selected day'} vs the full prior day.`
-            : `${activeMetric} by ${data?.bucket || 'auto'} bucket, with optional prior-window overlay.`)
-        : activeView === 'peak'
-            ? 'Sales concentration by East Africa hour, normalized to the reporting currency.'
-            : 'New vs existing customer revenue, with unmatched revenue separated.';
+    const productView = activeView === 'trend' || activeView === 'peak';
+    const chartMeasure = metric === 'payments' ? 'Payments' : `${metric === 'average_ticket' ? 'Avg ticket' : 'Revenue'} · ${currency}`;
+    const chartGrouping = isHourly ? 'Hourly' : BUCKETS.find((item) => item.key === activeBucket)?.label || activeBucket;
+    const closeOptions = () => { setOptionsOpen(false); optionsButton.current?.focus(); };
 
     useEffect(() => {
-        if (!weekdaySelectionEnabled && selectedDay !== null) {
+        if (data && !weekdaySelectionEnabled && selectedDay !== null) {
             setSelectedDay(null);
         }
-    }, [selectedDay, weekdaySelectionEnabled]);
+    }, [data, selectedDay, weekdaySelectionEnabled]);
 
     const handleChartClick = (state) => {
         if (!weekdaySelectionEnabled) return;
@@ -253,13 +259,27 @@ export default function RevenueTrendWidget({
 
     return (
         <SectionFrame
-            title={activeView === 'sources' ? 'Revenue sources' : 'Subscription collections'}
-            subtitle={activeView === 'sources' ? 'One cash basis across subscriptions, unlocks, content, gifts and passes.' : subtitle}
+            title="Revenue collections"
+            subtitle="Follow cash received across your products."
             className="overflow-hidden"
-            headerClassName="flex-wrap [&>div:first-child]:min-w-[200px]"
-            contentClassName="min-h-[500px]"
-            action={(
-                <div className="flex flex-wrap justify-end gap-2">
+            headerClassName="flex-wrap [&>div:first-child]:min-w-[160px]"
+            contentClassName="collections-content"
+            action={activeView === 'trend' ? (
+                <button type="button" className="collections-options-button" ref={optionsButton}
+                    aria-expanded={optionsOpen} aria-controls="revenue-chart-options" onClick={() => setOptionsOpen(!optionsOpen)}>
+                    Chart options <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="m3 4 3 3 3-3" stroke="currentColor" strokeWidth="1.5" /></svg>
+                </button>
+            ) : null}
+        >
+            {productView && <>
+                <RevenueProductSelector value={product} onChange={onProductChange} />
+                <RevenueCollectionSummary collections={collections} loading={isLoading} error={errorMessage} product={product} displayMode={displayMode} currency={currency} />
+                {!isLoading && !errorMessage && collections?.wallet_funded?.payments_count > 0 && collections?.selected?.payments_count === 0 && <p className="collections-wallet-note">
+                    {cashMoney(collections.wallet_funded, displayMode)} of wallet-funded service used an existing balance and is excluded from new cash.
+                </p>}
+            </>}
+            {activeView === 'mix' && <p className="collections-context"><strong>Subscription customer mix.</strong> New and existing customer shares use subscription revenue. Other products are not segmented by customer lifecycle here.</p>}
+            <div className="collections-view-rail">
                     <div className="cash-tablist rounded-md border border-slate-300 bg-white p-0.5" role="tablist" aria-label="Revenue trend view">
                         {VIEWS.map((item) => (
                             <button
@@ -284,47 +304,21 @@ export default function RevenueTrendWidget({
                             </button>
                         ))}
                     </div>
-                    {activeView === 'trend' ? <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5" role="group" aria-label="Trend metric">
-                        {METRICS.map((item) => (
-                            <button
-                                key={item.key}
-                                type="button"
-                                onClick={() => onMetricChange(item.key)}
-                                className={`rounded px-2.5 py-1.5 text-xs font-semibold transition ${metric === item.key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
-                            >
-                                {item.label}
-                            </button>
-                        ))}
-                    </div> : null}
-                    {activeView === 'trend' && !isHourly ? <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5" role="group" aria-label="Trend bucket">
-                        {BUCKETS.map((item) => (
-                            <button
-                                key={item.key}
-                                type="button"
-                                onClick={() => onBucketChange(item.key)}
-                                className={`rounded px-2.5 py-1.5 text-xs font-semibold transition ${bucket === item.key ? 'bg-teal-700 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
-                            >
-                                {item.label}
-                            </button>
-                        ))}
-                    </div> : null}
-                    {activeView === 'trend' ? <button
-                        type="button"
-                        onClick={() => onShowComparisonChange(!showComparison)}
-                        className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
-                            showComparison ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
-                        }`}
-                    >
-                        {priorToggleLabel}
-                    </button> : null}
-                </div>
-            )}
-        >
+
+                {productView && <span className="collections-chart-note">{data?.window?.from && data?.window?.to ? `${collectionWindowLabel(data.window)} · ` : ''}{activeView === 'trend' ? `${chartMeasure} · ${chartGrouping} · ` : ''}EAT</span>}
+            </div>
+            {activeView === 'trend' && <RevenueChartOptions open={optionsOpen} metric={metric} onMetricChange={onMetricChange} metrics={METRICS}
+                bucket={bucket} onBucketChange={onBucketChange} buckets={BUCKETS} showComparison={showComparison}
+                onComparisonChange={onShowComparisonChange} hourly={isHourly} onClose={closeOptions} />}
             <div id="revenue-panel-sources" role="tabpanel" aria-labelledby="revenue-tab-sources" hidden={activeView !== 'sources'} className="cash-panel">
                 <ProductRevenueView data={productRevenue} loading={productLoading} error={productError} onRetry={onRetryRevenue} displayMode={displayMode} />
             </div>
             <div id="revenue-panel-peak" role="tabpanel" aria-labelledby="revenue-tab-peak" hidden={activeView !== 'peak'} className="cash-panel">
-                <PeakHoursHeatmap data={peakHoursData} isLoading={peakHoursLoading} errorMessage={peakHoursError} currency={peakHoursData?.target_currency || currency} />
+                {peakHoursLoading || peakHoursError ? <CashState loading={peakHoursLoading} error={peakHoursError} onRetry={onRetryCollections} />
+                    : collections?.selected?.fx_coverage?.complete === false ? <div className="cash-warning">Peak revenue needs complete FX coverage. Original money and payment counts are retained above; no missing amounts are shown as zero.</div>
+                        : collections?.selected?.payments_count === 0 ? <EmptyState message="No external cash payments for this product in the selected period." />
+                            : <PeakHoursHeatmap data={peakHoursData} currency={currency} cashBasis scopeKey={`${product}:${data?.window?.from}:${data?.window?.to}`} />}
+
             </div>
             <div id="revenue-panel-mix" role="tabpanel" aria-labelledby="revenue-tab-mix" hidden={activeView !== 'mix'} className="cash-panel">
                 <CustomerMixView mix={customerMix} currency={currency} />
@@ -333,11 +327,12 @@ export default function RevenueTrendWidget({
             {isLoading ? (
                 <div className="h-72 animate-pulse rounded-lg bg-slate-100" />
             ) : errorMessage ? (
-                <EmptyState message={errorMessage} />
+                <CashState error={errorMessage} onRetry={onRetryCollections} />
             ) : !hasData ? (
-                <EmptyState message="No collected revenue in this window yet." />
+                <EmptyState message="No external cash payments for this product in the selected period." />
             ) : (
                 <div>
+                    {(collections?.selected?.fx_coverage?.complete === false || collections?.prior?.fx_coverage?.complete === false) && <p className="cash-warning">Some current or prior payments have no cached FX. Missing amounts appear as gaps; payment counts and original money remain available.</p>}
                     {weekdaySelectionEnabled ? (
                         <div className="mb-3 flex flex-col gap-2 px-1 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
                             <span>
@@ -356,7 +351,7 @@ export default function RevenueTrendWidget({
                             ) : null}
                         </div>
                     ) : null}
-                    <div className="h-80">
+                    <div className="collections-chart">
                         <ResponsiveContainer width="100%" height="100%">
                             <AreaChart
                                 data={points}
@@ -382,9 +377,9 @@ export default function RevenueTrendWidget({
                                 <XAxis dataKey="label" tick={<DayAxisTick />} tickLine={false} axisLine={false} minTickGap={24} height={36} interval="preserveStartEnd" />
                                 <YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} width={72} tickFormatter={(value) => metric === 'payments' ? Number(value || 0).toLocaleString() : formatCurrency(value, currency).replace(`${currency} `, '')} />
                                 <Tooltip content={<TrendTooltip currency={currency} metric={metric} />} />
-                                <Area type="monotone" dataKey={currentKey} stroke="#0f766e" strokeWidth={2.5} fill="url(#ceoRevenueTrend)" name="Current" dot={weekdaySelectionEnabled ? weekdayDot(selectedWeekday) : false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff', fill: '#0f766e' }} />
+                                <Area isAnimationActive={!reducedMotion} animationDuration={240} type="monotone" dataKey={currentKey} stroke="#0f766e" strokeWidth={2.5} fill="url(#ceoRevenueTrend)" name="Current" dot={weekdaySelectionEnabled ? weekdayDot(selectedWeekday) : false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#ffffff', fill: '#0f766e' }} />
                                 {showComparison ? (
-                                    <Line type="monotone" dataKey={priorKey} stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} name="Prior" />
+                                    <Line isAnimationActive={!reducedMotion} animationDuration={240} type="monotone" dataKey={priorKey} stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} name="Prior" />
                                 ) : null}
                             </AreaChart>
                         </ResponsiveContainer>
@@ -392,6 +387,11 @@ export default function RevenueTrendWidget({
                 </div>
             )}
             </div>
+            {productView && <details className="collections-basis"><summary>How collections are measured</summary>
+                <p>External cash from successful payments, counted once. Wallet spending, top-ups, refunds and ambiguous receipts do not create new cash. Content and gifts include externally paid proceeds credits. Cash timing uses completed, confirmed, then created time; calendar boundaries use Africa/Nairobi. Comparison uses the same elapsed interval in the prior period.</p>
+                {collections?.wallet_funded?.payments_count > 0 && <p>Excluded wallet-funded service: {cashMoney(collections.wallet_funded, displayMode)}. This uses an existing balance and does not create new cash.</p>}
+                <p>Chart values use cached {currency} rates and per-payment cents. Original money remains available when FX is missing. These are provisional CRM records, not provider settlement certification.{asOf ? ` As of ${new Date(asOf).toLocaleString('en-GB', { timeZone: 'Africa/Nairobi' })} EAT.` : ''}</p>
+            </details>}
         </SectionFrame>
     );
 }

@@ -84,6 +84,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const [movementBucket, setMovementBucket] = useState('day');
     const [trendComparison, setTrendComparison] = useState(true);
     const [trendView, setTrendView] = useState('trend');
+    const [revenueProduct, setRevenueProduct] = useState('all');
     const [recentLimit, setRecentLimit] = useState(10);
     const [recentChannel, setRecentChannel] = useState('all');
     const [recentAgentId, setRecentAgentId] = useState('all');
@@ -140,16 +141,17 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         staleTime: 45_000,
     });
 
-    const trendQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'revenue-trend', queryParams, trendBucket],
-        queryFn: () => api.get('/crm/dashboard/ceo/revenue-trend', {
-            params: {
-                ...queryParams,
-                ...(trendBucket !== 'auto' ? { bucket: trendBucket } : {}),
-            },
+    const collectionsQuery = useQuery({
+        queryKey: ['ceo-dashboard', 'collections', queryParams, revenueProduct, trendBucket, trendView === 'peak' ? 'peak' : 'trend'],
+        queryFn: ({ signal }) => api.get('/crm/dashboard/ceo/product-revenue', {
+            signal,
+            params: { ...queryParams, analysis: 1, product: revenueProduct, bucket: trendBucket, analysis_view: trendView === 'peak' ? 'peak' : 'trend' },
         }).then((response) => response.data),
+        enabled: trendView === 'trend' || trendView === 'peak',
         staleTime: 45_000,
+        refetchInterval: 60_000,
     });
+    const collections = collectionsQuery.data?.collections;
 
     const movementQuery = useQuery({
         queryKey: ['ceo-dashboard', 'profile-movement', queryParams, movementBucket],
@@ -163,13 +165,6 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         }).then((response) => response.data),
         enabled: Boolean(summaryQuery.data?.window?.from && summaryQuery.data?.window?.to),
         staleTime: 45_000,
-    });
-
-    const peakHoursQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'peak-hours', queryParams],
-        queryFn: () => api.get('/crm/dashboard/ceo/peak-hours', { params: queryParams }).then((response) => response.data),
-        enabled: trendView === 'peak',
-        staleTime: 60_000,
     });
 
     const recentPaymentsQuery = useQuery({
@@ -217,7 +212,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const selectedMarket = summaryQuery.data?.selected_market
         || marketOptions.find((market) => Number(market.id || market.platform_id) === Number(platformFilter))
         || null;
-    const window = summaryQuery.data?.window || trendQuery.data?.window;
+    const window = summaryQuery.data?.window || collections?.trend?.window;
     const normalizationMeta = summaryQuery.data?.metrics?.collected_revenue?.value?.normalization_meta;
     const aiInsightContext = useMemo(() => ({
         ...(window?.from ? { from: window.from } : {}),
@@ -415,10 +410,15 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
             />
 
             <RevenueTrendWidget
-                data={trendQuery.data}
-                isLoading={trendQuery.isLoading}
-                errorMessage={trendQuery.isError ? apiError(trendQuery.error, 'Revenue trend could not be loaded.') : null}
-                currency={trendQuery.data?.window?.target_currency || reporting.targetCurrency}
+                data={collections?.trend}
+                collections={collections}
+                product={revenueProduct}
+                onProductChange={setRevenueProduct}
+                asOf={collectionsQuery.data?.as_of}
+                onRetryCollections={() => collectionsQuery.refetch()}
+                isLoading={collectionsQuery.isLoading}
+                errorMessage={collectionsQuery.isError ? apiError(collectionsQuery.error, 'Revenue collections could not be loaded.') : null}
+                currency={collections?.selected?.normalized_currency || reporting.targetCurrency}
                 metric={trendMetric}
                 onMetricChange={setTrendMetric}
                 bucket={trendBucket}
@@ -433,9 +433,9 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 productError={productError}
                 onRetryRevenue={() => productRevenueQuery.refetch()}
                 displayMode={reporting.displayMode}
-                peakHoursData={peakHoursQuery.data}
-                peakHoursLoading={peakHoursQuery.isLoading}
-                peakHoursError={peakHoursQuery.isError ? apiError(peakHoursQuery.error, 'Peak-hours data could not be loaded.') : null}
+                peakHoursData={collections?.peak_hours}
+                peakHoursLoading={collectionsQuery.isLoading}
+                peakHoursError={collectionsQuery.isError ? apiError(collectionsQuery.error, 'Peak-hours data could not be loaded.') : null}
             />
 
             <MarketRevenuePieWidget

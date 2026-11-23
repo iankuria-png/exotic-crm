@@ -1,0 +1,54 @@
+.collections-content { min-width: 0; }
+.collections-product-choice { margin-bottom: 24px; }
+.collections-product-radio { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; border: 1px solid #dce6e2; border-radius: 8px; background: #f7faf8; }
+.collections-product-radio button { flex: 1 1 auto; min-height: 40px; padding: 8px 14px; border: 1px solid transparent; border-radius: 5px; font-size: 12px; font-weight: 500; white-space: nowrap; color: #52625e; transition: background-color 120ms, color 120ms, border-color 120ms; cursor: pointer; }
+.collections-product-radio button:hover { background: #edf4f0; color: #174b3e; }
+.collections-product-radio button[aria-checked="true"] { border-color: #b7d5cb; background: white; color: #126354; box-shadow: 0 1px 3px #123b2d0a; }
+.collections-product-radio button:focus-visible,.collections-product-mobile select:focus-visible,.collections-options-button:focus-visible,.collections-options button:focus-visible { outline: 2px solid #0f766e; outline-offset: 3px; }
+.collections-product-mobile { display: none; }
+.collections-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; min-height: 104px; padding: 0 2px 24px; }
+.collections-kicker { display: flex; flex-wrap: wrap; gap: 5px; font-size: 12px; color: #52625e; font-weight: 500; }
+.collections-kicker span { font-weight: 400; color: #64748b; }
+.collections-value { margin: 5px 0; color: #173f35; font-size: clamp(26px, 3vw, 36px); font-weight: 600; line-height: 1.2; letter-spacing: -.04em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.collections-summary-meta { font-size: 12px; line-height: 1.6; color: #64748b; }
+.collections-summary-comparison { font-size: 11px; line-height: 1.8; text-align: right; color: #64748b; font-variant-numeric: tabular-nums; }
+.collections-summary-comparison .cash-change { font-size: 15px; }
+.collections-summary-pending { display: block; color: #64748b; font-size: 13px; line-height: 2; }
+.collections-view-rail { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 0 0 16px; margin-bottom: 18px; border-bottom: 1px solid #e4ece9; }
+.collections-view-rail .cash-tablist { border: 0; padding: 0; gap: 4px; background: white; }
+.collections-view-rail .cash-tab { min-height: 36px; border-radius: 5px; padding: 7px 11px; }
+.collections-chart-note { font-size: 11px; color: #64748b; }
+.collections-options-button { display: flex; align-items: center; gap: 10px; min-height: 38px; border: 1px solid #ccd9d3; border-radius: 6px; padding: 7px 12px; background: white; color: #475569; font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.collections-options-button[aria-expanded="true"] { color: #126354; background: #edf6f1; border-color: #adcfc1; }
+.collections-options-button svg { transition: transform 140ms; }
+.collections-options-button[aria-expanded="true"] svg { transform: rotate(180deg); }
+.collections-options { display: flex; flex-wrap: wrap; gap: 16px 28px; padding: 16px; margin: -2px 0 18px; background: #f7faf8; border: 1px solid #dce6e2; border-radius: 6px; }
+.collections-options[hidden] { display: none; }
+.collections-options p { font-size: 10px; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 7px; }
+.collections-option-segments { display: flex; flex-wrap: wrap; gap: 3px; }
+.collections-option-segments button,.collections-prior-toggle { min-height: 34px; font-size: 12px; padding: 7px 10px; border: 1px solid #d6e0da; border-radius: 4px; background: white; color: #475569; cursor: pointer; }
+.collections-option-segments button[aria-pressed="true"],.collections-prior-toggle[aria-pressed="true"] { border-color: #1e6a57; background: #1e6a57; color: white; }
+.collections-prior-toggle { display: flex; align-items: center; gap: 8px; }
+.collections-chart { height: 320px; min-width: 0; }
+.collections-basis { margin-top: 20px; padding-top: 14px; border-top: 1px solid #e4ece9; font-size: 11px; line-height: 1.8; color: #64748b; }
+.collections-basis summary { cursor: pointer; color: #126354; text-decoration: underline; text-underline-offset: 3px; }
+.collections-basis p { margin-top: 10px; max-width: 90ch; }
+.collections-context { font-size: 12px; color: #52625e; padding: 0 0 18px; line-height: 1.7; }
+.collections-context strong { color: #173f35; font-weight: 500; }
+.collections-wallet-note { margin: -8px 0 18px; padding: 10px 12px; border-left: 2px solid #9eb9ad; background: #f7faf8; font-size: 12px; line-height: 1.7; color: #52625e; }
+@media (max-width: 639px) {
+    .collections-product-radio { display: none; }
+    .collections-product-mobile { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid #c8dbd2; border-radius: 6px; background: #f7faf8; }
+    .collections-product-mobile span { font-size: 11px; color: #64748b; }
+    .collections-product-mobile select { flex: 1; min-width: 0; min-height: 30px; background: transparent; font-size: 13px; font-weight: 500; color: #174b3e; }
+    .collections-summary { align-items: flex-start; }
+    .collections-summary-comparison { text-align: left; }
+    .collections-summary-comparison .cash-change { font-size: 13px; }
+    .collections-chart { height: 270px; }
+    .collections-options { padding: 12px; gap: 16px; }
+    .collections-view-rail .cash-tab { font-size: 11px; padding: 7px 9px; }
+    .collections-chart-note { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .collections-product-radio button,.collections-options-button svg { transition: none; }
+}

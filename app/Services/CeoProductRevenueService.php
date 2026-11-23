@@ -32,6 +32,10 @@ final class CeoProductRevenueService
         $asOf = CarbonImmutable::now('Africa/Nairobi');
         $request->validate([
             'platform_id' => 'nullable|integer|min:1|exists:platforms,id',
+            'analysis' => 'nullable|boolean',
+            'product' => 'nullable|in:all,subscription,contact_unlock,premium_content_sale,send_love,passes',
+            'bucket' => 'nullable|in:auto,day,week,month',
+            'analysis_view' => 'nullable|in:trend,peak',
             'horizon' => 'nullable|in:today,day,7d,30d,90d,ytd,custom',
             'date' => 'nullable|date_format:Y-m-d|before_or_equal:'.$asOf->toDateString(),
             'from' => 'required_if:horizon,custom|date_format:Y-m-d',
@@ -134,6 +138,7 @@ final class CeoProductRevenueService
             'today' => $this->money($periods['today'], $target), 'week' => $this->money($periods['week'], $target), 'month' => $this->money($periods['month'], $target),
             'period_windows' => collect($intervals)->map(fn ($b) => $this->window(...$b))->all(),
             'products' => $products, 'markets' => $countries,
+            ...($request->boolean('analysis') ? ['collections' => $this->collections($request, $cash, $included->where('funding', 'wallet_redemption'), $intervals, $requestedEnd, $target)] : []),
             'coverage' => [
                 'ambiguous_receipts' => $this->money($within($rows->where('disposition', 'ambiguous_receipt'), $intervals['selected']), $target),
                 'unknown_funding' => $this->money($within($included->where('funding', 'unknown'), $intervals['selected']), $target),
@@ -142,6 +147,20 @@ final class CeoProductRevenueService
                 'missing_reference_count' => $selected->filter(fn ($r) => ! $r->receipt_key)->count(),
             ],
         ];
+    }
+
+    private function collections(Request $request, Collection $cash, Collection $wallet, array $intervals, CarbonImmutable $end, string $currency): array
+    {
+        $product = $request->query('product', 'all');
+        $definition = self::PRODUCTS[$product] ?? ['All products', null];
+        if ($definition[1] !== null) {
+            $cash = $cash->whereIn('category', $definition[1]);
+            $wallet = $wallet->whereIn('category', $definition[1]);
+        }
+
+        return app(CeoRevenueCollectionsPresenter::class)->present($cash, $wallet, $intervals, $end, $currency,
+            $product, $product === 'subscription' ? 'Subscriptions' : $definition[0],
+            $request->query('bucket', 'auto'), $request->query('analysis_view', 'trend') === 'peak');
     }
 
     private function bounds(Request $request, CarbonImmutable $now): array

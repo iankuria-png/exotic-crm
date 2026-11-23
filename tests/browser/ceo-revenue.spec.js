@@ -30,6 +30,22 @@ async function setup(page, state = 'ready') {
             if (url.searchParams.has('platform_id')) { body.selected = money(25000); body.markets = [markets[0]]; }
             if (state === 'empty') { body.selected = money(0, 0); body.products = body.products.map((p) => ({ ...p, ...money(0, 0), share_percent: null, change_percent: null })); body.markets = []; }
             if (state === 'fx') { body.selected.normalized_total = null; body.selected.fx_coverage = { complete: false }; body.selected.native = { KES: 10000 }; body.products = body.products.map((p) => ({ ...p, normalized_total: null, share_percent: null })); }
+            if (url.searchParams.get('analysis') === '1') {
+                const key = url.searchParams.get('product') || 'all';
+                const selectedProduct = key === 'all' ? { ...body.selected, label: 'All products' } : body.products.find((p) => p.key === key);
+                const selected = structuredClone(selectedProduct);
+                const prior = money(selected.normalized_total == null ? 15 : Math.round(selected.normalized_total / 1.1 * 100) / 100, selected.payments_count);
+                if (state === 'prior-fx') { prior.normalized_total = null; prior.fx_coverage = { complete: false }; prior.native = { KES: 1234 }; }
+                const bucket = url.searchParams.get('bucket') === 'auto' ? 'day' : url.searchParams.get('bucket');
+                const first = selected.normalized_total == null ? null : Math.round(selected.normalized_total * .4 * 100) / 100;
+                const second = first == null ? null : Math.round((selected.normalized_total - first) * 100) / 100;
+                const counts = [Math.floor(selected.payments_count / 2), selected.payments_count - Math.floor(selected.payments_count / 2)];
+                const points = [first, second].map((value, index) => ({ label: ['2026-11-22', '2026-11-23'][index], value, payments_count: counts[index], prior_value: prior.normalized_total == null ? null : prior.normalized_total / 2, prior_payments_count: counts[index], average_ticket: value == null ? null : counts[index] > 0 ? Math.round(value / counts[index] * 100) / 100 : 0, prior_average_ticket: prior.normalized_total == null ? null : 1 }));
+                const peak = { window: { from: '2026-10-25', to: '2026-11-23' }, timezone: 'Africa/Nairobi', target_currency: 'USD', cells: Array.from({ length: 168 }, (_, i) => ({ dow: Math.floor(i / 24), hour: i % 24, value: i === 11 ? selected.normalized_total : 0, payments_count: i === 11 ? selected.payments_count : 0 })), weekdays: [{ dow: 0, label: 'Monday', value: selected.normalized_total, payments_count: selected.payments_count, average_ticket: 1, occurrences: 5, active_days: 1, gap_count: 4, gap_dates: [] }] };
+                body.collections = { product: key, label: selectedProduct.label, selected, prior, average_ticket: selected.normalized_total == null ? null : selected.payments_count ? Math.round(selected.normalized_total / selected.payments_count * 100) / 100 : 0, change_percent: selected.normalized_total == null || prior.normalized_total == null ? null : 10, wallet_funded: selectedProduct.wallet_funded || money(4.44), trend: { bucket: bucket || 'day', window: { from: '2026-10-25', to: '2026-11-23', target_currency: 'USD', timezone: 'Africa/Nairobi' }, points }, peak_hours: peak };
+                if (state === 'slow' && key === 'send_love') await new Promise((r) => setTimeout(r, 1800));
+            }
+
         }
         if (path.endsWith('/ceo/revenue-trend')) body = { window: { target_currency: 'USD' }, bucket: url.searchParams.get('bucket') || 'day', points: [{ label: '2026-11-22', value: 700, prior_value: 650, payments_count: 50 }, { label: '2026-11-23', value: 900, prior_value: 700, payments_count: 60 }] };
         if (path.endsWith('/ceo/market-pie')) body = { total: 66674.4, markets: [], channels: [] };
@@ -84,12 +100,13 @@ for (const width of [1440, 1024, 768, 390, 320]) test(`actual dashboard cash, so
 test('source export, scope and retained controls survive sources and Admin roundtrip', async ({ page }) => {
     const { calls, errors } = await setup(page);
     await page.getByRole('tab', { name: 'Trend', exact: true }).click();
+    await page.getByRole('button', { name: 'Chart options', exact: true }).click();
     await page.getByRole('button', { name: 'Weekly', exact: true }).first().click();
     await page.getByRole('tab', { name: 'Where revenue comes from' }).click();
     const download = page.waitForEvent('download'); await page.getByRole('button', { name: /Export CSV/ }).click();
     expect((await download).suggestedFilename()).toBe('revenue-sources.csv');
     await page.getByRole('tab', { name: 'Trend', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Weekly', exact: true }).first()).toHaveClass(/bg-teal-700/);
+    await expect(page.getByRole('button', { name: 'Weekly', exact: true }).first()).toHaveAttribute('aria-pressed', 'true');
     await page.getByRole('tab', { name: 'Where revenue comes from' }).click();
     await page.getByRole('combobox', { name: 'Market scope', exact: true }).selectOption('1');
     await expect.poll(() => calls.some((c) => c.includes('product-revenue') && c.includes('platform_id=1'))).toBe(true);
@@ -120,4 +137,90 @@ for (const state of ['loading', 'error', 'empty', 'fx']) test(`actual dashboard 
     if (state === 'error') { await expect(panel.getByRole('alert')).toContainText('Revenue temporarily unavailable'); await expect(panel.getByRole('button', { name: 'Try again' })).toBeVisible(); }
     if (state === 'empty') await expect(panel).toContainText('No external cash payments');
     if (state === 'fx') { await expect(panel).toContainText('Some payments have no cached FX'); await expect(panel).toContainText('FX unavailable'); }
+});
+
+
+async function chooseProduct(page, label, key) {
+    const select = page.getByRole('combobox', { name: 'Revenue product', exact: true });
+    if (await select.isVisible()) await select.selectOption(key);
+    else await page.getByRole('radio', { name: label, exact: true }).click();
+}
+
+for (const width of [1440, 1024, 768, 390, 320]) test(`revenue products and progressive chart disclosure at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const { calls, errors } = await setup(page);
+    const section = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Revenue collections', exact: true }) }).first();
+    const options = page.getByRole('button', { name: 'Chart options', exact: true });
+    await expect(options).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('group', { name: 'Trend metric', exact: true })).toBeHidden();
+    await chooseProduct(page, 'Content sales', 'premium_content_sale');
+    await expect(section.locator('.collections-value')).toContainText('624.64');
+    await expect.poll(() => calls.some((c) => c.includes('analysis=1') && c.includes('product=premium_content_sale'))).toBe(true);
+    await options.click();
+    await page.getByRole('group', { name: 'Trend metric', exact: true }).getByRole('button', { name: 'Payments', exact: true }).click();
+    await page.getByRole('button', { name: 'Weekly', exact: true }).click();
+    await options.click();
+    await expect(page.getByRole('group', { name: 'Trend metric', exact: true })).toBeHidden();
+    await chooseProduct(page, 'Gifts', 'send_love');
+    await expect(section.locator('.collections-value')).toContainText('28.65');
+    await page.getByRole('tab', { name: 'Peak hours', exact: true }).click();
+    await expect(page.getByTestId('peak-hours-cell')).toHaveCount(168);
+    await page.getByRole('button', { name: 'Monday 11:00–12:00 revenue summary' }).click();
+    await expect(page.getByRole('dialog')).toContainText('28.65');
+    await expect(page.getByRole('dialog')).not.toContainText('Best sales member');
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await page.getByRole('tab', { name: 'Customer mix', exact: true }).click();
+    await expect(page.getByText('Subscription customer mix.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('radiogroup', { name: 'Revenue product' })).toHaveCount(0);
+    await page.getByRole('tab', { name: 'Trend', exact: true }).click();
+    await expect(section.locator('.collections-value')).toContainText('28.65');
+    await options.click();
+    await expect(page.getByRole('group', { name: 'Trend metric', exact: true }).getByRole('button', { name: 'Payments', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Weekly', exact: true }).press('Escape');
+    await expect(options).toBeFocused();
+    await chooseProduct(page, 'Passes', 'passes');
+    await expect(section).toContainText('4.44');
+    await expect(section.getByRole('tabpanel', { name: 'Trend', exact: true })).toContainText('No external cash payments');
+    await chooseProduct(page, 'Subscriptions', 'subscription');
+    await expect(section.locator('.collections-value')).toContainText('67,670.26');
+    await chooseProduct(page, 'Contact unlocks', 'contact_unlock');
+    await expect(section.locator('.collections-value')).toContainText('1,825.19');
+    await chooseProduct(page, 'All products', 'all');
+    await expect(section.locator('.collections-value')).toContainText('70,148.74');
+    if (width >= 640) {
+        const radio = page.getByRole('radio', { name: 'All products', exact: true });
+        await radio.focus(); await radio.press('End');
+        await expect(page.getByRole('radio', { name: 'Passes', exact: true })).toHaveAttribute('aria-checked', 'true');
+        await page.getByRole('radio', { name: 'Passes', exact: true }).press('Home');
+    }
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await expect(section.locator('.collections-value')).toContainText('70,148.74');
+    await options.click();
+    await page.getByRole('group', { name: 'Trend metric', exact: true }).getByRole('button', { name: 'Revenue', exact: true }).click();
+    await options.click();
+    await expect(section.locator('.collections-chart-note')).toContainText('Revenue · USD');
+    await section.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `output/playwright/ceo-revenue-collections/collections-${width}.png` });
+    expect(errors).toEqual([]);
+});
+
+test('product switching does not show stale cash and missing prior FX never becomes zero', async ({ page }) => {
+    await setup(page, 'slow');
+    await chooseProduct(page, 'Gifts', 'send_love');
+    await expect(page.locator('.collections-summary')).toContainText('Loading gifts');
+    await expect(page.locator('.collections-summary')).not.toContainText('70,148.74');
+    await expect(page.locator('.collections-value')).toContainText('28.65');
+    await chooseProduct(page, 'Content sales', 'premium_content_sale');
+    await expect(page.locator('.collections-value')).toContainText('624.64');
+});
+
+for (const fxState of ['prior-fx', 'fx']) test(`${fxState} and reduced motion keep cash gaps explicit`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await setup(page, fxState);
+    if (fxState === 'prior-fx') await expect(page.locator('.collections-summary-comparison')).toContainText('FX unavailable');
+    await expect(page.getByRole('tabpanel', { name: 'Trend', exact: true })).toContainText('Missing amounts appear as gaps');
+    await expect(page.locator('.collections-value')).toContainText(fxState === 'fx' ? 'FX unavailable' : '70,148.74');
+    await expect(page.locator('.collections-summary-comparison')).not.toContainText('+10.0%');
 });
