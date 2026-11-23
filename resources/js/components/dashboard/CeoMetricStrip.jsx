@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { cashMoney, CashChange, CashState, RevenueBasis } from './ProductRevenueView';
+import { cashMoney, CashChange, CashState } from './ProductRevenueView';
 import MetricCard from '../MetricCard';
 import { deltaTone, formatDelta, moneyFromBreakdown } from './ceoFormatters';
 
@@ -87,7 +87,6 @@ export default function CeoMetricStrip({ metrics = {}, reporting, isLoading, onO
                         <span className="block mt-1 text-[10px] text-slate-600">{productRevenue.selected?.payments_count?.toLocaleString()} cash payments · selected period</span>
                     </button>
                     <dl className="cash-card-periods">{[['today', 'Today'], ['week', 'This week'], ['month', 'This month']].map(([period, label]) => <div key={period}><dt>{label}</dt><dd>{cashMoney(productRevenue[period], reporting?.displayMode)}</dd></div>)}</dl>
-                    <div className="mt-3"><RevenueBasis data={productRevenue} /></div>
                 </>}
                 <div className="cash-card-footer"><Link to="/payments">View payments ↗</Link>{productRevenue && !productError && <button type="button" onClick={onOpenSources}>Sources →</button>}</div>
             </article>
