@@ -22,6 +22,7 @@ import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import AiInsightsPanel from '../components/ai/AiInsightsPanel';
 import useCeoReportingCurrency from '../hooks/useCeoReportingCurrency';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
+import useRevealOnce from '../hooks/useRevealOnce';
 import { useToast } from '../components/ToastProvider';
 import { marketLabel } from '../components/dashboard/ceoFormatters';
 
@@ -41,6 +42,23 @@ function defaultCustomRange() {
 
 function apiError(error, fallback) {
     return error?.response?.data?.message || fallback;
+}
+
+// The server answers heavy CEO requests from a short-lived cache. A response marked
+// "stale" is being recomputed in the background, so ask again shortly for the fresh one.
+const STALE_REFETCH_MS = 25_000;
+
+function getCeoData(url, params, signal) {
+    return api.get(url, { params, signal }).then((response) => ({
+        body: response.data,
+        stale: response.headers?.['x-dashboard-cache'] === 'stale',
+    }));
+}
+
+const selectBody = (result) => result?.body;
+
+function refetchWhenStale(interval) {
+    return (query) => (query.state.data?.stale ? STALE_REFETCH_MS : interval);
 }
 
 function compactWindowLabel(window) {
@@ -116,15 +134,33 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
 
     const summaryQuery = useQuery({
         queryKey: ['ceo-dashboard', 'summary', queryParams],
-        queryFn: () => api.get('/crm/dashboard/ceo/summary', { params: queryParams }).then((response) => response.data),
+        queryFn: ({ signal }) => getCeoData('/crm/dashboard/ceo/summary', queryParams, signal),
+        select: selectBody,
         staleTime: 45_000,
+        refetchInterval: refetchWhenStale(false),
     });
 
+    // One product-revenue request feeds the cards, markets and the collections chart. The
+    // analysis response is the card report plus collections, so a second call is not needed.
+    const [analysisView, setAnalysisView] = useState('trend');
+    useEffect(() => {
+        if (trendView === 'trend' || trendView === 'peak') {
+            setAnalysisView(trendView);
+        }
+    }, [trendView]);
+    const reportParamsKey = JSON.stringify(queryParams);
     const productRevenueQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'product-revenue', queryParams],
-        queryFn: () => api.get('/crm/dashboard/ceo/product-revenue', { params: queryParams }).then((response) => response.data),
+        queryKey: ['ceo-dashboard', 'product-revenue', queryParams, revenueProduct, trendBucket, analysisView],
+        queryFn: ({ signal }) => getCeoData('/crm/dashboard/ceo/product-revenue', {
+            ...queryParams, analysis: 1, product: revenueProduct, bucket: trendBucket, analysis_view: analysisView,
+        }, signal),
+        select: selectBody,
+        // Changing only the chart's product/grouping keeps the (identical) card figures on screen.
+        placeholderData: (previous, previousQuery) => (
+            previousQuery && JSON.stringify(previousQuery.queryKey[2]) === reportParamsKey ? previous : undefined
+        ),
         staleTime: 45_000,
-        refetchInterval: 60_000,
+        refetchInterval: refetchWhenStale(300_000),
     });
     const productError = productRevenueQuery.isError ? apiError(productRevenueQuery.error, 'Revenue could not be loaded. Try again.') : null;
     const openRevenueSources = () => {
@@ -135,23 +171,24 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         });
     };
 
+    // Below-the-fold sections request their data only when they are about to be seen.
+    const [marketSectionRef, marketSectionVisible] = useRevealOnce();
+    const [detailSectionRef, detailSectionVisible] = useRevealOnce();
+    const [movementSectionRef, movementSectionVisible] = useRevealOnce();
+    const [agentSectionRef, agentSectionVisible] = useRevealOnce();
+    const [insightSectionRef, insightSectionVisible] = useRevealOnce();
+
     const marketPieQuery = useQuery({
         queryKey: ['ceo-dashboard', 'market-pie', queryParams],
-        queryFn: () => api.get('/crm/dashboard/ceo/market-pie', { params: queryParams }).then((response) => response.data),
+        queryFn: ({ signal }) => getCeoData('/crm/dashboard/ceo/market-pie', queryParams, signal),
+        select: selectBody,
+        enabled: marketSectionVisible,
         staleTime: 45_000,
+        refetchInterval: refetchWhenStale(false),
     });
 
-    const collectionsQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'collections', queryParams, revenueProduct, trendBucket, trendView === 'peak' ? 'peak' : 'trend'],
-        queryFn: ({ signal }) => api.get('/crm/dashboard/ceo/product-revenue', {
-            signal,
-            params: { ...queryParams, analysis: 1, product: revenueProduct, bucket: trendBucket, analysis_view: trendView === 'peak' ? 'peak' : 'trend' },
-        }).then((response) => response.data),
-        enabled: trendView === 'trend' || trendView === 'peak',
-        staleTime: 45_000,
-        refetchInterval: 60_000,
-    });
-    const collections = collectionsQuery.data?.collections;
+    const collections = productRevenueQuery.isPlaceholderData ? undefined : productRevenueQuery.data?.collections;
+    const collectionsLoading = productRevenueQuery.isLoading || productRevenueQuery.isPlaceholderData;
 
     const movementQuery = useQuery({
         queryKey: ['ceo-dashboard', 'profile-movement', queryParams, movementBucket],
@@ -163,21 +200,21 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 bucket: movementBucket,
             },
         }).then((response) => response.data),
-        enabled: Boolean(summaryQuery.data?.window?.from && summaryQuery.data?.window?.to),
+        enabled: movementSectionVisible && Boolean(summaryQuery.data?.window?.from && summaryQuery.data?.window?.to),
         staleTime: 45_000,
     });
 
     const recentPaymentsQuery = useQuery({
         queryKey: ['ceo-dashboard', 'recent-payments', queryParams, recentLimit, recentChannel, recentAgentId],
-        queryFn: () => api.get('/crm/dashboard/ceo/recent-payments', {
-            params: {
-                ...queryParams,
-                limit: recentLimit,
-                channel: recentChannel,
-                ...(recentAgentId !== 'all' ? { agent_id: recentAgentId } : {}),
-            },
-        }).then((response) => response.data),
-        refetchInterval: typeof document === 'undefined' || document.visibilityState === 'visible' ? 60_000 : false,
+        queryFn: ({ signal }) => getCeoData('/crm/dashboard/ceo/recent-payments', {
+            ...queryParams,
+            limit: recentLimit,
+            channel: recentChannel,
+            ...(recentAgentId !== 'all' ? { agent_id: recentAgentId } : {}),
+        }, signal),
+        select: selectBody,
+        enabled: detailSectionVisible,
+        refetchInterval: refetchWhenStale(60_000),
         staleTime: 20_000,
     });
 
@@ -197,8 +234,11 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
 
     const agentPerformanceQuery = useQuery({
         queryKey: ['ceo-dashboard', 'agent-performance', queryParams],
-        queryFn: () => api.get('/crm/dashboard/ceo/agent-performance', { params: queryParams }).then((response) => response.data),
+        queryFn: ({ signal }) => getCeoData('/crm/dashboard/ceo/agent-performance', queryParams, signal),
+        select: selectBody,
+        enabled: agentSectionVisible,
         staleTime: 60_000,
+        refetchInterval: refetchWhenStale(false),
     });
 
     const marketHealthQuery = useQuery({
@@ -212,7 +252,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const selectedMarket = summaryQuery.data?.selected_market
         || marketOptions.find((market) => Number(market.id || market.platform_id) === Number(platformFilter))
         || null;
-    const window = summaryQuery.data?.window || collections?.trend?.window;
+    const window = summaryQuery.data?.window || productRevenueQuery.data?.collections?.trend?.window;
     const normalizationMeta = summaryQuery.data?.metrics?.collected_revenue?.value?.normalization_meta;
     const aiInsightContext = useMemo(() => ({
         ...(window?.from ? { from: window.from } : {}),
@@ -414,10 +454,10 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 collections={collections}
                 product={revenueProduct}
                 onProductChange={setRevenueProduct}
-                asOf={collectionsQuery.data?.as_of}
-                onRetryCollections={() => collectionsQuery.refetch()}
-                isLoading={collectionsQuery.isLoading}
-                errorMessage={collectionsQuery.isError ? apiError(collectionsQuery.error, 'Revenue collections could not be loaded.') : null}
+                asOf={productRevenueQuery.data?.as_of}
+                onRetryCollections={() => productRevenueQuery.refetch()}
+                isLoading={collectionsLoading}
+                errorMessage={productRevenueQuery.isError ? apiError(productRevenueQuery.error, 'Revenue collections could not be loaded.') : null}
                 currency={collections?.selected?.normalized_currency || reporting.targetCurrency}
                 metric={trendMetric}
                 onMetricChange={setTrendMetric}
@@ -434,21 +474,23 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onRetryRevenue={() => productRevenueQuery.refetch()}
                 displayMode={reporting.displayMode}
                 peakHoursData={collections?.peak_hours}
-                peakHoursLoading={collectionsQuery.isLoading}
-                peakHoursError={collectionsQuery.isError ? apiError(collectionsQuery.error, 'Peak-hours data could not be loaded.') : null}
+                peakHoursLoading={collectionsLoading}
+                peakHoursError={productRevenueQuery.isError ? apiError(productRevenueQuery.error, 'Peak-hours data could not be loaded.') : null}
             />
 
-            <MarketRevenuePieWidget
-                data={marketPieQuery.data}
-                reporting={reporting}
-                isLoading={marketPieQuery.isLoading}
-                errorMessage={marketPieQuery.isError ? apiError(marketPieQuery.error, 'Market revenue could not be loaded.') : null}
-                onSelectMarket={handleMarketScope}
-                selectedMarket={selectedMarket}
-                onClearMarket={() => handleMarketScope(null)}
-            />
+            <div ref={marketSectionRef}>
+                <MarketRevenuePieWidget
+                    data={marketPieQuery.data}
+                    reporting={reporting}
+                    isLoading={!marketSectionVisible || marketPieQuery.isLoading}
+                    errorMessage={marketPieQuery.isError ? apiError(marketPieQuery.error, 'Market revenue could not be loaded.') : null}
+                    onSelectMarket={handleMarketScope}
+                    selectedMarket={selectedMarket}
+                    onClearMarket={() => handleMarketScope(null)}
+                />
+            </div>
 
-            <section className="grid gap-4 xl:grid-cols-12">
+            <section ref={detailSectionRef} className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-7">
                     <CountryRevenueWidget
                         productRevenue={productRevenueQuery.data}
@@ -470,13 +512,14 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         toDate={window?.to || customRange.to}
                         reportingCurrency={reporting}
                         onOpenReport={() => navigate('/reports')}
+                        active={detailSectionVisible}
                     />
                 </div>
 
                 <div className="space-y-4 xl:col-span-5">
                     <RecentPaymentsWidget
                         data={recentPaymentsQuery.data}
-                        isLoading={recentPaymentsQuery.isLoading}
+                        isLoading={!detailSectionVisible || recentPaymentsQuery.isLoading}
                         errorMessage={recentPaymentsQuery.isError ? apiError(recentPaymentsQuery.error, 'Recent payments could not be loaded.') : null}
                         onOpenPayment={(paymentId) => navigate(`/payments?search=${paymentId}`)}
                         limit={recentLimit}
@@ -494,23 +537,27 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 </div>
             </section>
 
-            <ProfileMovementWidget
-                data={movementQuery.data}
-                summaryMetrics={summaryQuery.data?.metrics}
-                isLoading={movementQuery.isLoading}
-                errorMessage={movementQuery.isError ? apiError(movementQuery.error, 'Profile movement could not be loaded.') : null}
-                bucket={movementBucket}
-                onBucketChange={setMovementBucket}
-            />
+            <div ref={movementSectionRef}>
+                <ProfileMovementWidget
+                    data={movementQuery.data}
+                    summaryMetrics={summaryQuery.data?.metrics}
+                    isLoading={!movementQuery.data && (!movementSectionVisible || movementQuery.isLoading || summaryQuery.isLoading)}
+                    errorMessage={movementQuery.isError ? apiError(movementQuery.error, 'Profile movement could not be loaded.') : null}
+                    bucket={movementBucket}
+                    onBucketChange={setMovementBucket}
+                />
+            </div>
 
-            <AgentPerformanceWidget
-                data={agentPerformanceQuery.data}
-                reporting={reporting}
-                isLoading={agentPerformanceQuery.isLoading}
-                errorMessage={agentPerformanceQuery.isError ? apiError(agentPerformanceQuery.error, 'Agent performance could not be loaded.') : null}
-                focusedAgentId={focusedAgentId}
-                onOpenTeam={() => navigate('/team')}
-            />
+            <div ref={agentSectionRef}>
+                <AgentPerformanceWidget
+                    data={agentPerformanceQuery.data}
+                    reporting={reporting}
+                    isLoading={!agentSectionVisible || agentPerformanceQuery.isLoading}
+                    errorMessage={agentPerformanceQuery.isError ? apiError(agentPerformanceQuery.error, 'Agent performance could not be loaded.') : null}
+                    focusedAgentId={focusedAgentId}
+                    onOpenTeam={() => navigate('/team')}
+                />
+            </div>
 
             <MarketHealthWidget
                 data={marketHealthQuery.data}
@@ -522,7 +569,11 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 syncingId={syncMutation.isPending ? syncMutation.variables : null}
             />
 
-            {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} context={aiInsightContext} showHeadline /> : null}
+            {widgetConfig.ai_analyst ? (
+                <div ref={insightSectionRef}>
+                    {insightSectionVisible ? <AiInsightsPanel user={user} context={aiInsightContext} showHeadline /> : <div className="min-h-[160px]" aria-hidden="true" />}
+                </div>
+            ) : null}
 
             <ProfileEngagementWidget
                 platformFilter={engagementPlatform}

@@ -139,6 +139,18 @@ class Kernel extends ConsoleKernel
             ->runInBackground()
             ->sendOutputTo(storage_path('logs/crm_warm_forecast_baselines.log'));
 
+        // Keeps the CEO dashboard's default view (30d / USD flat) in its response cache so it
+        // opens instantly; the cache's 25-minute stale window outlives this 10-minute cadence.
+        $schedule->command('crm:warm-ceo-dashboard')
+            ->name('crm_warm_ceo_dashboard')
+            ->cron('3-59/10 * * * *')
+            ->timezone('Africa/Nairobi')
+            ->between('6:00', '23:30')
+            ->withoutOverlapping(15)
+            ->onOneServer()
+            ->runInBackground()
+            ->sendOutputTo(storage_path('logs/crm_warm_ceo_dashboard.log'));
+
         $schedule->command('crm:score-forecast-accuracy')
             ->name('crm_score_forecast_accuracy')
             ->hourlyAt(47)

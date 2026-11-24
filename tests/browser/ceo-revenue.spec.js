@@ -114,6 +114,8 @@ test('source export, scope and retained controls survive sources and Admin round
     await page.getByLabel('From', { exact: true }).fill('2026-11-01');
     await page.getByLabel('To', { exact: true }).fill('2026-11-20');
     await expect.poll(() => calls.some((c) => c.includes('product-revenue') && c.includes('from=2026-11-01') && c.includes('to=2026-11-20'))).toBe(true);
+    // Recent payments load once their section scrolls near the viewport.
+    await page.getByRole('combobox', { name: 'Payment agent', exact: true }).scrollIntoViewIfNeeded();
     await page.getByRole('combobox', { name: 'Payment agent', exact: true }).selectOption('7');
     await expect.poll(() => calls.some((c) => c.includes('recent-payments') && c.includes('agent_id=7'))).toBe(true);
     await page.getByRole('button', { name: 'Open forecast', exact: true }).click();
@@ -223,4 +225,27 @@ for (const fxState of ['prior-fx', 'fx']) test(`${fxState} and reduced motion ke
     await expect(page.getByRole('tabpanel', { name: 'Trend', exact: true })).toContainText('Missing amounts appear as gaps');
     await expect(page.locator('.collections-value')).toContainText(fxState === 'fx' ? 'FX unavailable' : '70,148.74');
     await expect(page.locator('.collections-summary-comparison')).not.toContainText('+10.0%');
+});
+
+test('first screen makes one revenue request and defers below-the-fold sections', async ({ page }) => {
+    const { calls, errors } = await setup(page);
+    const card = page.getByRole('article', { name: 'Collected revenue' });
+    await expect(card).toContainText('70,148.74');
+    await expect(page.locator('.collections-value')).toContainText('70,148.74');
+    await page.waitForTimeout(500);
+    const revenueCalls = calls.filter((c) => c.includes('/ceo/product-revenue'));
+    expect(revenueCalls).toHaveLength(1);
+    expect(revenueCalls[0]).toContain('analysis=1');
+    expect(calls.some((c) => c.includes('/ceo/agent-performance'))).toBe(false);
+    expect(calls.some((c) => c.includes('/reports/summary'))).toBe(false);
+    // Switching the chart's product keeps the cards' figures and adds one request.
+    await chooseProduct(page, 'Content sales', 'premium_content_sale');
+    await expect(page.locator('.collections-value')).toContainText('624.64');
+    await expect(card).toContainText('70,148.74');
+    await page.getByRole('heading', { name: 'Revenue by Package', exact: true }).scrollIntoViewIfNeeded();
+    await expect.poll(() => calls.some((c) => c.includes('/reports/summary'))).toBe(true);
+    await expect.poll(() => calls.some((c) => c.includes('/ceo/recent-payments'))).toBe(true);
+    await page.getByRole('heading', { name: 'Agent Portfolio Performance', exact: true }).scrollIntoViewIfNeeded();
+    await expect.poll(() => calls.some((c) => c.includes('/ceo/agent-performance'))).toBe(true);
+    expect(errors).toEqual([]);
 });

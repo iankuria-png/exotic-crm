@@ -65,6 +65,8 @@ export default function RevenueByPackageWidget({
     toDate,
     reportingCurrency,
     onOpenReport,
+    // The CEO dashboard defers this (heavy) report until the widget scrolls near the viewport.
+    active = true,
 }) {
     const sharedParams = useMemo(() => ({
         ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
@@ -73,11 +75,13 @@ export default function RevenueByPackageWidget({
         ...reportingCurrency.queryParams,
     }), [platformFilter, fromDate, toDate, reportingCurrency.queryParams]);
 
-    const { data, isLoading, error } = useQuery({
+    const { data, isLoading: queryLoading, error } = useQuery({
         queryKey: ['dashboard-revenue-by-package', sharedParams],
         queryFn: () => api.get('/crm/reports/summary', { params: sharedParams }).then((r) => r.data),
+        enabled: active,
         staleTime: 60_000,
     });
+    const isLoading = queryLoading || (!active && !data);
 
     const fallbackCurrency = data?.range_currency || 'KES';
     const isFlat = reportingCurrency.isFlat;
