@@ -138,8 +138,10 @@ class ClientLifecycleService
      * What locking this profile would do, without writing anything. Powers the
      * bulk preview and guards the write itself.
      *
-     * Actions: `lock` (public → Expired), `lock_private` (restricted, stays private),
-     * `republish` (offline recovery), `already_locked`, or `blocked`.
+     * Actions: `lock` (public → Expired), `republish` (offline → published Expired, the
+     * public Unlockable page), `already_locked`, or `blocked`. Every lock is public: an
+     * offline profile is published as a locked page whatever its payment history
+     * (Ian, 24 Nov 2026), including one that an earlier rule had locked privately.
      *
      * @return array{action: string, has_paid_plan: bool, code?: string, reason?: string}
      */
@@ -207,23 +209,6 @@ class ClientLifecycleService
             ));
         }
 
-        if ($client->profile_locked_at !== null && $client->isPubliclyRestricted()) {
-            return $base + ['action' => 'already_locked', 'reason' => 'Already locked by staff. The profile stays private.'];
-        }
-
-        // A private restriction can also be a previous attempt whose confirming sync failed.
-        // Retrying it must never fall through to the publishing recovery path.
-        if ($client->isPubliclyRestricted()) {
-            return $base + ['action' => 'lock_private'];
-        }
-
-        if (! $hasPaidPlan
-            && $client->first_activated_at === null
-            && $client->churned_at === null
-            && ! $client->deals()->exists()) {
-            return $base + ['action' => 'lock_private'];
-        }
-
         return $base + ['action' => 'republish'];
     }
 
@@ -266,7 +251,7 @@ class ClientLifecycleService
             $client,
             ClientLifecycleState::EXPIRED,
             [
-                'profile_status' => $plan['action'] === 'lock_private' ? 'private' : 'publish',
+                'profile_status' => 'publish',
                 'lifecycle_expired_at' => now(),
                 'lifecycle_archived_at' => null,
                 'lifecycle_archive_deferred_until' => null,
@@ -286,7 +271,6 @@ class ClientLifecycleService
                 'previous_lifecycle_state' => (string) ($client->lifecycle_state ?? ClientLifecycleState::ACTIVE),
             ], static fn ($value) => $value !== null),
             $actorId,
-            preservePrivate: $plan['action'] === 'lock_private',
         );
     }
 

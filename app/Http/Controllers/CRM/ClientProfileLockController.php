@@ -231,7 +231,7 @@ class ClientProfileLockController extends Controller
             $republished ? 'republished' : 'locked',
             match (true) {
                 $fresh->profile_status === 'private' => 'Locked. The profile stays private.',
-                $republished => 'Back online as a locked page. Contacts hidden.',
+                $republished => 'Published as a locked, Unlockable page. Contacts hidden.',
                 $plan['has_paid_plan'] => 'Locked. The paid plan keeps running.',
                 default => 'Locked. Still published, contacts hidden.',
             },

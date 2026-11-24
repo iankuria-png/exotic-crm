@@ -242,8 +242,8 @@ class ClientProfileLockTest extends TestCase
 
         $preview = $this->postJson('/api/crm/clients/bulk-lock/preview', ['client_ids' => $ids])->assertOk();
         $preview->assertJsonPath('summary.lock', 1)
-            ->assertJsonPath('summary.republish', 1)
-            ->assertJsonPath('summary.lock_private', 1)
+            ->assertJsonPath('summary.republish', 2)
+            ->assertJsonPath('summary.lock_private', 0)
             ->assertJsonPath('summary.already_locked', 1)
             ->assertJsonPath('summary.blocked', 2);
         $codes = collect($preview->json('rows'))->pluck('code', 'id');
@@ -262,102 +262,67 @@ class ClientProfileLockTest extends TestCase
         $this->assertSame(['publish', 'expired'], [$offline->fresh()->profile_status, $offline->fresh()->lifecycle_state]);
         $this->assertTrue($offline->fresh()->isProfileLocked());
         $this->assertSame('private', $highRisk->fresh()->profile_status);
-        $this->assertSame('private', $neverLive->fresh()->profile_status);
+        $this->assertSame(['publish', 'expired'], [$neverLive->fresh()->profile_status, $neverLive->fresh()->lifecycle_state]);
         $this->assertNull($alreadyExpired->fresh()->profile_locked_at);
     }
 
-    public function test_a_never_subscribed_private_profile_locks_syncs_and_unlocks_without_publishing(): void
+    public function test_a_never_subscribed_private_profile_is_published_as_an_unlockable_page(): void
     {
-        $client = $this->makeClient(['profile_status' => 'private', 'escort_expire' => null]);
+        // Lead Scraper profiles: created private, never paid. Every lock is public (24 Nov).
+        $client = $this->makeClient(['profile_status' => 'private', 'escort_expire' => null, 'notactive' => true]);
         $this->assertFalse($client->deals()->exists());
-        $this->assertNull($client->first_activated_at);
-        $this->assertNull($client->churned_at);
 
         $this->postJson('/api/crm/clients/bulk-lock/preview', ['client_ids' => [$client->id]])
-            ->assertOk()->assertJsonPath('summary.lock_private', 1)->assertJsonPath('rows.0.action', 'lock_private');
+            ->assertOk()->assertJsonPath('summary.republish', 1)->assertJsonPath('rows.0.action', 'republish');
         $this->postJson("/api/crm/clients/{$client->id}/lock", ['reason_code' => 'verification_required'])
-            ->assertOk()->assertJsonPath('result.message', 'Locked. The profile stays private.');
+            ->assertOk()->assertJsonPath('result.message', 'Published as a locked, Unlockable page. Contacts hidden.');
+
         $fresh = $client->fresh();
-        $this->assertSame(['private', 'expired'], [$fresh->profile_status, $fresh->lifecycle_state]);
+        $this->assertSame(['publish', 'expired'], [$fresh->profile_status, $fresh->lifecycle_state]);
         $this->assertTrue($fresh->isProfileLocked());
         $this->assertNull($fresh->first_activated_at);
         $this->assertFalse($fresh->deals()->exists());
-        $this->assertSame([], $this->lifecycleWrites);
-        $this->assertSame('private', $this->remote[(int) $client->wp_post_id]['post_status']);
-        $this->assertNull($this->remote[(int) $client->wp_post_id]['escort_expire']);
+        $this->assertSame([], $this->privateLockWrites);
+        $this->assertSame('expired', $this->lifecycleWrites[0]['state']);
+        $this->assertSame(['publish', 'expired'], [
+            $this->remote[(int) $client->wp_post_id]['post_status'],
+            $this->remote[(int) $client->wp_post_id]['crm_lifecycle_state'],
+        ]);
 
-        (new ClientSyncService($this->platform))->syncOne((int) $client->wp_post_id);
-        $this->assertTrue($client->fresh()->isProfileLocked());
-        $lockedAt = $client->fresh()->profile_locked_at->toISOString();
+        // Locking again is a no-op.
         $this->postJson("/api/crm/clients/{$client->id}/lock", ['reason_code' => 'policy_violation'])
             ->assertOk()->assertJsonPath('result.action', 'skipped');
-        $this->assertCount(1, $this->privateLockWrites);
-        $this->assertSame($lockedAt, $client->fresh()->profile_locked_at->toISOString());
-        $this->assertSame('verification_required', $client->fresh()->profile_lock_reason_code);
-        $this->assertDatabaseCount('timeline_events', 1);
-
-        $this->postJson("/api/crm/clients/{$client->id}/unlock")
-            ->assertOk()->assertJsonPath('outcome', 'stays_expired')
-            ->assertJsonPath('message', 'Lock lifted. The profile stays private and restricted until activation.');
-        $this->assertSame('private', $client->fresh()->profile_status);
-        $this->assertNull($client->fresh()->profile_locked_at);
-        $this->assertSame([], $this->lifecycleWrites);
+        $this->assertCount(1, $this->lifecycleWrites);
     }
 
-    public function test_an_old_plugin_or_changed_remote_status_never_falls_back_to_publishing(): void
+    public function test_a_profile_locked_privately_under_the_old_rule_is_published_when_locked_again(): void
     {
-        foreach ([404, 409] as $status) {
-            $client = $this->makeClient(['profile_status' => 'private']);
-            $this->privateLockFailure = $status;
-            $this->postJson("/api/crm/clients/{$client->id}/lock", ['reason_code' => 'verification_required'])
-                ->assertStatus(502);
-            $this->assertNull($client->fresh()->profile_locked_at);
-            $this->assertSame('private', $client->fresh()->profile_status);
-        }
-        $this->assertSame([], $this->lifecycleWrites);
-    }
-
-    public function test_a_bad_remote_acknowledgement_cannot_record_a_successful_lock(): void
-    {
-        foreach ([
-            ['ok' => false, 'post_id' => 1, 'post_status' => 'private', 'crm_lifecycle_state' => 'expired'],
-            ['ok' => true, 'post_id' => 0, 'post_status' => 'private', 'crm_lifecycle_state' => 'expired'],
-            ['ok' => true, 'post_status' => 'publish', 'crm_lifecycle_state' => 'expired'],
-        ] as $acknowledgement) {
-            $client = $this->makeClient(['profile_status' => 'private']);
-            $this->privateLockAcknowledgement = $acknowledgement;
-            $this->postJson("/api/crm/clients/{$client->id}/lock", ['reason_code' => 'verification_required'])
-                ->assertStatus(502);
-            $this->assertNull($client->fresh()->profile_locked_at);
-        }
-        $this->assertSame([], $this->lifecycleWrites);
-    }
-
-    public function test_private_lock_sync_failure_can_be_retried_without_publishing(): void
-    {
-        $client = $this->makeClient(['profile_status' => 'private']);
-        $this->failSync = true;
-        $this->postJson("/api/crm/clients/{$client->id}/lock", ['reason_code' => 'verification_required'])
-            ->assertStatus(502);
-        $this->assertSame('private', $this->remote[(int) $client->wp_post_id]['post_status']);
-        $this->assertSame('expired', $this->remote[(int) $client->wp_post_id]['crm_lifecycle_state']);
-        $this->assertNull($client->fresh()->profile_locked_at);
-
-        $this->failSync = false;
-        $this->postJson("/api/crm/clients/{$client->id}/lock", ['reason_code' => 'verification_required'])->assertOk();
-        $this->assertTrue($client->fresh()->isProfileLocked());
-        $this->assertSame('private', $client->fresh()->profile_status);
-        $this->assertSame([], $this->lifecycleWrites);
-    }
-
-    public function test_a_partially_synced_private_restriction_is_never_republished_on_retry(): void
-    {
+        // The 24 Nov Cameroon batch: private + Expired + staff lock, never paid.
         $client = $this->makeClient([
-            'profile_status' => 'private', 'lifecycle_state' => 'expired',
-            'first_activated_at' => now()->subYear(),
+            'profile_status' => 'private', 'lifecycle_state' => 'expired', 'notactive' => true,
+            'profile_locked_at' => now()->subHours(8), 'profile_lock_reason_code' => 'verification_required',
         ]);
-        $this->postJson("/api/crm/clients/{$client->id}/lock", ['reason_code' => 'verification_required'])->assertOk();
-        $this->assertSame('private', $client->fresh()->profile_status);
+
+        $this->postJson('/api/crm/clients/bulk-lock/preview', ['client_ids' => [$client->id]])
+            ->assertOk()->assertJsonPath('rows.0.action', 'republish');
+        $this->postJson('/api/crm/clients/bulk-lock', ['client_ids' => [$client->id], 'reason_code' => 'verification_required'])
+            ->assertOk()->assertJsonPath('summary.locked', 1)->assertJsonPath('results.0.action', 'republished');
+
+        $this->assertSame(['publish', 'expired'], [$client->fresh()->profile_status, $client->fresh()->lifecycle_state]);
+        $this->assertTrue($client->fresh()->isProfileLocked());
+        $this->assertSame('publish', $this->remote[(int) $client->wp_post_id]['post_status']);
+    }
+
+    public function test_safety_blocks_still_keep_risky_private_profiles_offline(): void
+    {
+        $highRisk = $this->makeClient(['profile_status' => 'private', 'is_high_risk' => true]);
+        $duplicate = $this->makeClient(['profile_status' => 'private']);
+        $duplicate->forceFill(['duplicate_of' => $highRisk->id])->save();
+
+        $rows = collect($this->postJson('/api/crm/clients/bulk-lock/preview', ['client_ids' => [$highRisk->id, $duplicate->id]])
+            ->assertOk()->json('rows'))->keyBy('id');
+        $this->assertSame(['blocked', 'high_risk'], [$rows[$highRisk->id]['action'], $rows[$highRisk->id]['code']]);
+        $this->assertSame(['blocked', 'duplicate'], [$rows[$duplicate->id]['action'], $rows[$duplicate->id]['code']]);
         $this->assertSame([], $this->lifecycleWrites);
     }
 

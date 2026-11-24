@@ -46,7 +46,7 @@ async function setup(page, { rows = [], detail = null, role = 'sales' } = {}) {
                 if (id === 3) return { action: 'already_locked', reason: 'Already locked by its lifecycle (Expired or Archived).' };
                 if (id === 4) return { action: 'blocked', code: 'high_risk', reason: 'High-risk profiles stay offline.' };
                 if (id === 2) return { action: 'republish' };
-                if (id === 6) return { action: 'lock_private' };
+                if (id === 6) return { action: 'republish' };
                 return { action: 'lock' };
             };
             const out = ids.map((id) => ({ id, name: `Advertiser ${id}`, city: 'Kilimani', has_paid_plan: id === 1, ...plan(id) }));
@@ -62,11 +62,11 @@ async function setup(page, { rows = [], detail = null, role = 'sales' } = {}) {
             state.lockCalls.push(payload);
             await new Promise((resolve) => setTimeout(resolve, 250));
             body = {
-                results: payload.client_ids.map((id) => ({ client_id: id, name: `Advertiser ${id}`, action: id === 2 ? 'republished' : 'locked', message: 'Locked.' })),
+                results: payload.client_ids.map((id) => ({ client_id: id, name: `Advertiser ${id}`, action: [2, 6].includes(id) ? 'republished' : 'locked', message: 'Locked.' })),
                 summary: { locked: payload.client_ids.length, skipped: 0, failed: 0 },
             };
             if (state.detail && payload.client_ids.includes(state.detail.id)) {
-                state.detail = { ...state.detail, lifecycle_state: 'expired', profile_locked_at: '2026-11-15T09:00:00Z', profile_lock_reason_code: payload.reason_code, profile_lock_reason_note: payload.note };
+                state.detail = { ...state.detail, profile_status: 'publish', lifecycle_state: 'expired', profile_locked_at: '2026-11-15T09:00:00Z', profile_lock_reason_code: payload.reason_code, profile_lock_reason_note: payload.note };
             }
         }
         if (state.detail && path === `/api/crm/clients/${state.detail.id}`) body = state.detail;
@@ -74,7 +74,7 @@ async function setup(page, { rows = [], detail = null, role = 'sales' } = {}) {
             state.unlockCalls.push(request.postDataJSON());
             const paid = Boolean(state.detail.active_deal);
             state.detail = { ...state.detail, lifecycle_state: paid ? 'active' : 'expired', profile_locked_at: null };
-            body = { message: paid ? 'Profile unlocked and live again on its paid plan.' : 'Lock lifted. The profile stays private and restricted until activation.', outcome: paid ? 'active' : 'stays_expired', client: state.detail };
+            body = { message: paid ? 'Profile unlocked and live again on its paid plan.' : 'Lock lifted. With no running plan it stays Expired until the client pays.', outcome: paid ? 'active' : 'stays_expired', client: state.detail };
         }
 
         await route.fulfill({ json: body });
@@ -99,7 +99,7 @@ for (const width of [1440, 390]) {
         const dialog = page.getByRole('dialog', { name: 'Lock 6 profiles' });
         await expect(dialog).toBeVisible();
         await expect(dialog.getByText('Will be locked')).toBeVisible();
-        await expect(dialog.getByText('Stays private, locked')).toBeVisible();
+        await expect(dialog.getByText('Goes public, locked')).toBeVisible();
         await expect(dialog.getByText(/1 has a running paid plan/)).toBeVisible();
         const submit = dialog.getByRole('button', { name: 'Lock 4 profiles' });
         await expect(submit).toBeDisabled();
@@ -129,7 +129,7 @@ test('client page locks a paid profile, shows the banner and unlocks it', async 
     await page.setViewportSize({ width: 1440, height: 1000 });
     const detail = client(1, {
         name: 'Patricia',
-        active_deal: { id: 9, status: 'active', plan_type: 'vip', expires_at: '2026-11-21T20:59:59Z', product: { name: 'VIP biweekly' } },
+        active_deal: { id: 9, status: 'active', plan_type: 'vip', expires_at: '2027-11-21T20:59:59Z', product: { name: 'VIP biweekly' } },
     });
     const state = await setup(page, { detail });
     await page.goto(fixture('/clients/1'));
@@ -164,27 +164,27 @@ test('marketing sees no lock entry points', async ({ page }) => {
 });
 
 for (const width of [1440, 390]) {
-    test(`never-subscribed private profile locks and unlocks while staying private at ${width}px`, async ({ page }) => {
+    test(`never-subscribed private profile is published locked as Unlockable at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 1000 });
         const state = await setup(page, { detail: client(6, { name: 'Private moderation fixture', profile_status: 'private', escort_expire: null }) });
         await page.goto(fixture('/clients/6'));
         await page.getByRole('button', { name: 'Lock profile', exact: true }).click();
         const dialog = page.getByRole('dialog', { name: 'Lock Private moderation fixture' });
-        await expect(dialog.getByText('The profile stays private. No subscription is needed to lock it.')).toBeVisible();
+        await expect(dialog.getByText('Offline now. Locking publishes it as an Unlockable page with contacts hidden.')).toBeVisible();
         await dialog.getByText('Verification needed').click();
-        await page.screenshot({ path: `${shots}/private-preview-${width}.png` });
+        await page.screenshot({ path: `${shots}/unlockable-preview-${width}.png` });
         await dialog.getByRole('button', { name: 'Lock profile', exact: true }).click();
         await expect(dialog).toBeHidden();
-        await expect(page.getByText(/Private profile, editing restricted/)).toBeVisible();
-        expect(state.detail.profile_status).toBe('private');
+        await expect(page.getByText(/Published for SEO, contacts hidden/)).toBeVisible();
+        expect(state.detail.profile_status).toBe('publish');
         expect(state.detail.active_deal).toBeNull();
         await page.getByRole('button', { name: 'Unlock profile', exact: true }).click();
         const unlock = page.getByRole('dialog', { name: 'Unlock Private moderation fixture' });
-        await expect(unlock.getByText('The profile stays private and restricted. Unlocking only lifts the staff hold.')).toBeVisible();
+        await expect(unlock.getByText(/No running paid plan, so it stays Expired/)).toBeVisible();
         await unlock.getByRole('button', { name: 'Unlock profile', exact: true }).click();
         await expect(unlock).toBeHidden();
         await expect(page.getByText(/Locked by staff/)).toHaveCount(0);
-        expect(state.detail.profile_status).toBe('private');
+        expect(state.detail.profile_status).toBe('publish');
         expect(state.detail.lifecycle_state).toBe('expired');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
     });

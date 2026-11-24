@@ -378,7 +378,7 @@ function LockPrompt({ count, existing = false, onLock, onLater }) {
                     <p className="text-sm font-semibold text-slate-900">
                         {existing ? `${count} of these leads are already clients. Lock their profiles?` : `Lock the ${count} ${noun}?`}
                     </p>
-                    <p className="mt-0.5 text-sm text-slate-600">They stay private. Locking also hides their contacts and stops the advertiser editing until someone unlocks them, a good fit while these scraped profiles are checked.</p>
+                    <p className="mt-0.5 text-sm text-slate-600">Locking publishes them as Unlockable pages: contacts hidden until a visitor unlocks them, and the advertiser can't edit until someone lifts the lock.</p>
                     <div className="mt-3 flex flex-wrap gap-2">
                         <button type="button" className="crm-btn-primary px-3 py-1.5" onClick={onLock}>Lock {count} {noun}…</button>
                         <button type="button" className="crm-btn-secondary px-3 py-1.5" onClick={onLater}>Not now</button>
