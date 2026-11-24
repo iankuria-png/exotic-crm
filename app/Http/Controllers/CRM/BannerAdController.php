@@ -196,6 +196,42 @@ class BannerAdController extends Controller
         });
     }
 
+    public function ctaOverlay(Request $request): JsonResponse
+    {
+        $this->ensureBannerAdRole($request);
+
+        $validated = $request->validate([
+            'platform_id' => ['required', 'integer', 'exists:platforms,id'],
+            'visible' => ['required', 'boolean'],
+            'dry_run' => ['sometimes', 'boolean'],
+        ]);
+
+        $platform = $this->authorizedPlatform($request, (int) $validated['platform_id']);
+        $visible = (bool) $validated['visible'];
+        $dryRun = (bool) ($validated['dry_run'] ?? false);
+
+        return $this->remoteResponse(function () use ($platform, $request, $visible, $dryRun) {
+            $outcome = $this->bannerAds->setActiveImageOverlay($platform, $visible, $dryRun);
+            foreach ($outcome['changed'] as $change) {
+                $this->audit($request, $platform, CrmAuditAction::BANNER_AD_UPDATE, (int) $change['after']['id'], $change['before'], $change['after'], 'Bulk CTA overlay '.($visible ? 'on' : 'off'));
+            }
+
+            $changed = count($outcome['changed']);
+            $failed = count($outcome['failed']);
+
+            return response()->json([
+                'matched' => $outcome['matched'],
+                'changed' => $changed,
+                'failed' => $outcome['failed'],
+                'message' => $dryRun
+                    ? null
+                    : ($failed > 0
+                        ? "CTA overlay updated on {$changed} banner".($changed === 1 ? '' : 's')."; {$failed} could not be updated."
+                        : 'CTA overlay '.($visible ? 'shown' : 'hidden')." on {$changed} banner".($changed === 1 ? '' : 's').'.'),
+            ], $failed > 0 && $changed === 0 ? 502 : 200);
+        });
+    }
+
     public function destinations(Request $request): JsonResponse
     {
         $this->ensureBannerAdRole($request);

@@ -95,6 +95,53 @@ class BannerAdService
         return $this->request($platform, 'delete', "/campaigns/{$campaignId}");
     }
 
+    /**
+     * Find active image banners whose CTA overlay differs from $visible and, unless dry-running,
+     * PATCH only _campaign_cta_visible on each. One failure does not stop the others.
+     */
+    public function setActiveImageOverlay(Platform $platform, bool $visible, bool $dryRun = false): array
+    {
+        $profileSupported = $this->settings($platform)['profile_locations']['supported'];
+        $targets = [];
+        foreach (['homepage', 'profile_location'] as $category) {
+            if ($category === 'profile_location' && ! $profileSupported) {
+                continue;
+            }
+            $page = 1;
+            do {
+                $result = $this->request($platform, 'get', '/campaigns', ['query' => [
+                    'status' => 'active',
+                    'category' => $category,
+                    'page' => $page,
+                    'per_page' => 100,
+                ]]);
+                foreach ((array) ($result['items'] ?? []) as $raw) {
+                    $item = $this->normalizeItem((array) $raw, $platform);
+                    if ($item['format'] === 'image' && $item['status'] === 'active' && $item['cta_visible'] !== $visible) {
+                        $targets[$item['id']] = $item;
+                    }
+                }
+                $pages = max(1, (int) ($result['pages'] ?? 1));
+            } while (++$page <= min($pages, 20));
+        }
+
+        $outcome = ['matched' => count($targets), 'changed' => [], 'failed' => []];
+        if ($dryRun) {
+            return $outcome;
+        }
+
+        foreach ($targets as $id => $before) {
+            try {
+                $after = $this->update($platform, $id, ['_campaign_cta_visible' => $visible]);
+                $outcome['changed'][] = ['before' => $before, 'after' => $after];
+            } catch (BannerAdRemoteException $exception) {
+                $outcome['failed'][] = ['id' => $id, 'title' => $before['title'], 'message' => $exception->getMessage()];
+            }
+        }
+
+        return $outcome;
+    }
+
     public function settings(Platform $platform): array
     {
         return $this->normalizeSettings($this->request($platform, 'get', '/settings'));

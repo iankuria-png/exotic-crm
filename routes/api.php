@@ -524,6 +524,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::get('/', [BannerAdController::class, 'index']);
         Route::post('/', [BannerAdController::class, 'store']);
         Route::patch('/settings', [BannerAdController::class, 'settings']);
+        Route::post('/cta-overlay', [BannerAdController::class, 'ctaOverlay']);
         Route::get('/media', [BannerAdController::class, 'media']);
         Route::post('/media', [BannerAdController::class, 'uploadMedia']);
         Route::get('/destinations', [BannerAdController::class, 'destinations']);

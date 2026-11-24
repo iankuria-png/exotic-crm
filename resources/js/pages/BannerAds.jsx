@@ -37,7 +37,7 @@ const DEFAULT_FORM = {
     _campaign_image_alt: '',
     _campaign_cta_text: '',
     _campaign_cta_url: '',
-    _campaign_cta_visible: true,
+    _campaign_cta_visible: false,
     _campaign_status: 'scheduled',
     _campaign_priority: 10,
     _campaign_start_date: '',
@@ -170,6 +170,71 @@ function SvgIcon({ path }) {
         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={path} />
         </svg>
+    );
+}
+
+function OverlaySwitch({ checked, onChange, labelledBy, disabled = false }) {
+    return (
+        <button
+            type="button"
+            role="switch"
+            aria-checked={checked}
+            aria-labelledby={labelledBy}
+            disabled={disabled}
+            onClick={() => onChange(!checked)}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:opacity-50 ${checked ? 'bg-teal-600' : 'bg-slate-300'}`}
+        >
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        </button>
+    );
+}
+
+function BulkOverlayDialog({ open, platformId, marketName, onClose, onDone }) {
+    const toast = useToast();
+    const countQuery = useQuery({
+        queryKey: ['banner-ad-overlay-count', platformId],
+        queryFn: () => api.post('/crm/banner-ads/cta-overlay', { platform_id: Number(platformId), visible: false, dry_run: true }).then((response) => response.data),
+        enabled: open && Boolean(platformId),
+        staleTime: 0,
+        gcTime: 0,
+    });
+    const applyMutation = useMutation({
+        mutationFn: () => api.post('/crm/banner-ads/cta-overlay', { platform_id: Number(platformId), visible: false }).then((response) => response.data),
+        onSuccess: (response) => {
+            if ((response?.failed || []).length > 0) {
+                toast.error(response.message);
+            } else {
+                toast.success(response?.message || 'CTA overlay hidden.');
+            }
+            onDone();
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not update the CTA overlays.');
+        },
+    });
+
+    const matched = countQuery.data?.matched ?? 0;
+    const market = marketName || 'this market';
+    let message = 'Checking active image banners...';
+    if (countQuery.isError) {
+        message = countQuery.error?.response?.data?.message || 'Could not check this market. Try again.';
+    } else if (countQuery.isSuccess) {
+        message = matched === 0
+            ? `Every active image banner in ${market} already hides the CTA overlay.`
+            : `${matched} active image banner${matched === 1 ? '' : 's'} in ${market} show${matched === 1 ? 's' : ''} the CTA overlay. Hide it on all of them? They stay live and clickable, and you can turn the overlay back on for any single banner.`;
+    }
+
+    return (
+        <ConfirmDialog
+            open={open}
+            title="Hide CTA overlays"
+            message={message}
+            confirmLabel={countQuery.isSuccess && matched > 0 ? `Hide on ${matched} banner${matched === 1 ? '' : 's'}` : 'Hide overlays'}
+            confirmDisabled={!countQuery.isSuccess || matched === 0}
+            isPending={applyMutation.isPending}
+            onCancel={onClose}
+            onConfirm={() => applyMutation.mutate()}
+        />
     );
 }
 
@@ -468,10 +533,21 @@ function BannerAdFormModal({
                                     <input type="url" readOnly={locationCampaign} className="crm-input" value={form._campaign_cta_url} onChange={(event) => update('_campaign_cta_url', event.target.value)} placeholder="https://example.com" />
                                 </Field>
                                 {form._campaign_format === 'image' ? (
-                                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                                        <input type="checkbox" checked={form._campaign_cta_visible} onChange={(event) => update('_campaign_cta_visible', event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
-                                        Show CTA overlay
-                                    </label>
+                                    <div className="flex items-start justify-between gap-4 rounded-md border border-slate-200 px-3 py-2.5 sm:col-span-2">
+                                        <div>
+                                            <p id="banner-cta-overlay-label" className="text-sm font-semibold text-slate-800">CTA overlay on image</p>
+                                            <p className="mt-0.5 text-xs text-slate-500">
+                                                {form._campaign_cta_visible
+                                                    ? 'The CTA button sits on top of the photo.'
+                                                    : 'Off: the photo shows clean and the whole banner still opens the CTA URL.'}
+                                            </p>
+                                        </div>
+                                        <OverlaySwitch
+                                            checked={Boolean(form._campaign_cta_visible)}
+                                            labelledBy="banner-cta-overlay-label"
+                                            onChange={(checked) => update('_campaign_cta_visible', checked)}
+                                        />
+                                    </div>
                                 ) : null}
                             </section>
                         </div>
@@ -614,6 +690,7 @@ export default function BannerAds() {
     const [perPage, setPerPage] = useState(50);
     const [formState, setFormState] = useState({ open: false, row: null });
     const [deleteRow, setDeleteRow] = useState(null);
+    const [overlayDialogOpen, setOverlayDialogOpen] = useState(false);
     const [scheduleRow, setScheduleRow] = useState(null);
     const [metricsRow, setMetricsRow] = useState(null);
 
@@ -801,7 +878,7 @@ export default function BannerAds() {
                     <div className="min-w-0">
                         <p className="truncate font-semibold text-slate-900">{row.title}</p>
                         <p className="truncate text-xs text-slate-500">
-                            {row.format === 'image' ? `Image ID ${row.image_id || '-'}` : (row.badge_text || row.description || 'Card ad')}
+                            {row.format === 'image' ? `Image ID ${row.image_id || '-'} · Overlay ${row.cta_visible ? 'on' : 'off'}` : (row.badge_text || row.description || 'Card ad')}
                         </p>
                     </div>
                 </div>
@@ -869,6 +946,15 @@ export default function BannerAds() {
                 title="Banner Ads"
                 subtitle="Manage WordPress banner ad campaigns by market."
                 actions={(
+                    <div className="flex flex-wrap items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setOverlayDialogOpen(true)}
+                        disabled={!canLoadAds || listQuery.isError}
+                        className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Hide CTA overlays
+                    </button>
                     <button
                         type="button"
                         onClick={() => setFormState({ open: true, row: null })}
@@ -877,6 +963,7 @@ export default function BannerAds() {
                     >
                         Add Ad
                     </button>
+                    </div>
                 )}
             />
 
@@ -1019,6 +1106,14 @@ export default function BannerAds() {
             />
 
             <MetricsDialog row={metricsRow} onClose={() => setMetricsRow(null)} />
+
+            <BulkOverlayDialog
+                open={overlayDialogOpen}
+                platformId={platformId}
+                marketName={selectedMarket?.name}
+                onClose={() => setOverlayDialogOpen(false)}
+                onDone={() => { setOverlayDialogOpen(false); invalidateAds(); }}
+            />
 
             <ConfirmDialog
                 open={Boolean(deleteRow)}

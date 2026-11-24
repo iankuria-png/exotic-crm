@@ -276,6 +276,63 @@ class BannerAdControllerTest extends TestCase
         ]);
     }
 
+    public function test_bulk_cta_overlay_previews_then_hides_only_active_image_overlays(): void
+    {
+        Http::preventStrayRequests();
+
+        $platform = $this->createPlatform();
+        $user = $this->createUser('marketing', [$platform->id]);
+        $base = 'https://kenya.example/wp-json/exotic-campaigns/v1';
+
+        Http::fake(function ($request) use ($base) {
+            if ($request->url() === $base.'/settings') {
+                return Http::response(['shuffle_mode' => true, 'profile_locations' => ['supported' => false]]);
+            }
+            if ($request->method() === 'GET' && str_starts_with($request->url(), $base.'/campaigns?')) {
+                return Http::response(['items' => [
+                    $this->campaignPayload(['id' => 1, 'title' => 'VVIP Placement: Vinty', 'format' => 'image', 'image_id' => 9, 'cta_visible' => true]),
+                    $this->campaignPayload(['id' => 2, 'format' => 'image', 'image_id' => 8, 'cta_visible' => false]),
+                    $this->campaignPayload(['id' => 3, 'format' => 'card', 'cta_visible' => true]),
+                ], 'total' => 3, 'pages' => 1, 'page' => 1]);
+            }
+            if ($request->method() === 'PATCH' && $request->url() === $base.'/campaigns/1') {
+                return Http::response($this->campaignPayload(['id' => 1, 'title' => 'VVIP Placement: Vinty', 'format' => 'image', 'image_id' => 9, 'cta_visible' => false]));
+            }
+
+            return Http::response(['message' => 'unexpected'], 500);
+        });
+
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/crm/banner-ads/cta-overlay', ['platform_id' => $platform->id, 'visible' => false, 'dry_run' => true])
+            ->assertOk()
+            ->assertJsonPath('matched', 1)
+            ->assertJsonPath('changed', 0);
+
+        Http::assertNotSent(fn ($request) => $request->method() === 'PATCH');
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/campaigns?') && $request['status'] === 'active' && $request['category'] === 'homepage');
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'category=profile_location'));
+
+        $this->postJson('/api/crm/banner-ads/cta-overlay', ['platform_id' => $platform->id, 'visible' => false])
+            ->assertOk()
+            ->assertJsonPath('matched', 1)
+            ->assertJsonPath('changed', 1)
+            ->assertJsonPath('failed', [])
+            ->assertJsonPath('message', 'CTA overlay hidden on 1 banner.');
+
+        Http::assertSent(fn ($request) => $request->method() === 'PATCH'
+            && $request->url() === $base.'/campaigns/1'
+            && $request->data() === ['_campaign_cta_visible' => false]);
+        Http::assertNotSent(fn ($request) => $request->method() === 'PATCH' && $request->url() !== $base.'/campaigns/1');
+
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'action' => CrmAuditAction::BANNER_AD_UPDATE,
+            'entity_type' => 'banner_ad',
+            'entity_id' => 1,
+        ]);
+    }
+
     public function test_media_listing_proxies_wordpress_media_endpoint(): void
     {
         Http::preventStrayRequests();
