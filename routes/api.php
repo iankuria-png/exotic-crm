@@ -112,6 +112,7 @@ use Illuminate\Support\Facades\Route;
 Route::post('/collection-events/v1/devices/{deviceId}', [\App\Http\Controllers\API\CollectionEventController::class, 'store'])->middleware('throttle:120,1');
 
 require __DIR__.'/collection.php';
+require __DIR__.'/ewms.php';
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
