@@ -3,9 +3,11 @@
 namespace App\Services;
 
 use App\Jobs\GenerateLeadProfileBioJob;
+use App\Jobs\ImportLeadProfilePhotoJob;
 use App\Models\Client;
 use App\Models\Lead;
 use App\Support\LeadProfileDefaults;
+use App\Support\LeadScrapedPhoto;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -22,7 +24,7 @@ class BulkLeadConversionService
     ) {}
 
     /**
-     * @param  array{smart_defaults?: bool, ai_bio?: bool}  $options  Lead Scraper starter facts and AI bio.
+     * @param  array{smart_defaults?: bool, ai_bio?: bool, photo?: bool}  $options  Lead Scraper starter facts, AI bio and listing photo.
      */
     public function preview(Request $request, array $ids, array $placements = [], array $options = []): array
     {
@@ -42,7 +44,12 @@ class BulkLeadConversionService
             ? collect($ids)->mapWithKeys(fn ($id) => [$id => LeadProfileDefaults::generate()])->all()
             : [];
         $aiBio = ! empty($options['ai_bio']);
-        $rows = collect($ids)->map(fn ($id) => $this->inspect($leads[$id], $placements[$id] ?? null, $defaults[$id] ?? null));
+        $photo = ! empty($options['photo']);
+        $photos = LeadScrapedPhoto::urlsFor($ids);
+        $rows = collect($ids)->map(fn ($id) => [
+            ...$this->inspect($leads[$id], $placements[$id] ?? null, $defaults[$id] ?? null),
+            'has_photo' => isset($photos[$id]),
+        ]);
         // Block every repeated contact, rather than choosing a winner by row order.
         $contacts = [];
         foreach ($rows as $row) {
@@ -53,7 +60,7 @@ class BulkLeadConversionService
             }
         }
         $repeated = collect($contacts)->filter(fn ($group) => count($group) > 1)->flatten()->unique();
-        $rows = $rows->map(function ($row) use ($request, $expires, $repeated, $placements, $defaults, $aiBio) {
+        $rows = $rows->map(function ($row) use ($request, $expires, $repeated, $placements, $defaults, $aiBio, $photo) {
             if ($row['action'] === 'create' && $repeated->contains($row['id'])) {
                 $row['action'] = 'needs_attention';
                 $row['message'] = 'Shares a contact with another selected lead. Select one of these leads and review again.';
@@ -66,6 +73,7 @@ class BulkLeadConversionService
                     'placement' => $placements[$row['id']] ?? null,
                     'defaults' => $defaults[$row['id']] ?? null,
                     'ai_bio' => $aiBio,
+                    'photo' => $photo,
                     'expires' => $expires->timestamp,
                 ], JSON_THROW_ON_ERROR));
             }
@@ -80,6 +88,7 @@ class BulkLeadConversionService
             'limit' => self::LIMIT,
             'summary' => $rows->countBy('action')->all(),
             'ai_bio' => $aiBio && $this->bioEngineReady(),
+            'photo' => $photo,
         ];
     }
 
@@ -121,6 +130,15 @@ class BulkLeadConversionService
                 $result['bio'] = 'queued';
             } else {
                 $result['bio'] = 'unavailable';
+            }
+        }
+        // The photo URL is read when the job runs; 'none' tells staff there is nothing to copy.
+        if (($result['status'] ?? null) === 'created' && ! empty($review['photo'])) {
+            if (LeadScrapedPhoto::urlFor((int) $lead->id) !== null) {
+                ImportLeadProfilePhotoJob::dispatch((int) $result['client_id'], (int) $lead->id, (int) $request->user()->id);
+                $result['photo'] = 'queued';
+            } else {
+                $result['photo'] = 'none';
             }
         }
 

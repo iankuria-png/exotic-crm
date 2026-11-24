@@ -20,14 +20,16 @@ class BulkLeadConversionController extends Controller
             'placements' => 'nullable|array|max:'.BulkLeadConversionService::LIMIT,
             'placements.*.region_id' => 'required_with:placements|integer|min:1',
             'placements.*.city_id' => 'nullable|integer|min:1',
-            // Lead Scraper: starter profile facts and an AI bio after creation.
+            // Lead Scraper: starter profile facts, an AI bio and the listing photo after creation.
             'smart_defaults' => 'nullable|boolean',
             'ai_bio' => 'nullable|boolean',
+            'photo' => 'nullable|boolean',
         ]);
 
         return response()->json($service->preview($request, array_map('intval', $data['lead_ids']), (array) ($data['placements'] ?? []), [
             'smart_defaults' => (bool) ($data['smart_defaults'] ?? false),
             'ai_bio' => (bool) ($data['ai_bio'] ?? false),
+            'photo' => (bool) ($data['photo'] ?? false),
         ]));
     }
 

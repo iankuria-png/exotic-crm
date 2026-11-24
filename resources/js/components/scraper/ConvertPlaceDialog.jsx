@@ -38,6 +38,7 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
     const [lockOutcome, setLockOutcome] = useState(null); // 'later' | { locked, total }
     const [smartDefaults, setSmartDefaults] = useState(true);
     const [aiBio, setAiBio] = useState(true);
+    const [photo, setPhoto] = useState(true);
 
     const places = useMemo(() => [...new Set(usable.map((l) => l.city || ''))], [usable]);
     const match = useQuery({
@@ -106,7 +107,7 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
         try {
             const placements = {};
             included.forEach((l) => { const o = placementFor(l); if (o) placements[l.lead_id] = { region_id: o.region_id, city_id: o.city_id }; });
-            const { data } = await api.post('/crm/leads/bulk-convert/preview', { lead_ids: included.map((l) => l.lead_id), placements, smart_defaults: smartDefaults, ai_bio: aiBio });
+            const { data } = await api.post('/crm/leads/bulk-convert/preview', { lead_ids: included.map((l) => l.lead_id), placements, smart_defaults: smartDefaults, ai_bio: aiBio, photo });
             setReview(data);
             setStep('review');
         } catch (e) {
@@ -234,6 +235,11 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                                         <span>Write an AI bio after creating
                                             <span className="block text-xs text-slate-500">No numbers and no contact details. Runs in the background and never replaces a bio someone has written.</span></span>
                                     </label>
+                                    <label className="mt-2 flex items-start gap-2 text-sm text-slate-700">
+                                        <input type="checkbox" className="mt-0.5" checked={photo} onChange={(e) => setPhoto(e.target.checked)} />
+                                        <span>Use the listing photo as the main image
+                                            <span className="block text-xs text-slate-500">A stand-in copied from the scraped site, which may carry its watermark. Replace it with the client's own photos. Skipped if the profile already has photos.</span></span>
+                                    </label>
                                 </fieldset>
                             </div>
                         )
@@ -254,13 +260,26 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                                 {review.rows.map((r) => (
                                     <li key={r.id} className="flex items-center justify-between gap-3 px-3 py-2">
                                         <span className="min-w-0 truncate"><span className="font-medium text-slate-900">{r.name}</span> <span className="crm-mono text-xs text-slate-500">{r.contact}</span>
-                                            {r.action === 'create' && r.profile_defaults ? <span className="block truncate text-xs text-slate-500">{describeDefaults(r.profile_defaults)}</span> : null}</span>
+                                            {r.action === 'create' && r.profile_defaults ? <span className="block truncate text-xs text-slate-500">{describeDefaults(r.profile_defaults)}</span> : null}
+                                            {r.action === 'create' && photo && !r.has_photo ? <span className="block truncate text-xs text-amber-700">No listing photo found</span> : null}</span>
                                         <span className="shrink-0 text-xs">{r.place ? <span className="mr-2 text-slate-600">📍 {r.place}</span> : null}{r.client_id && ['already_converted', 'existing_match'].includes(r.action)
                                             ? <Link className="font-medium text-teal-700 hover:underline" to={`/clients/${r.client_id}`}>{r.message} →</Link>
                                             : <span className={r.action === 'create' ? 'font-semibold text-teal-800' : 'text-slate-500'}>{r.message}</span>}</span>
                                     </li>
                                 ))}
                             </ul>
+                            {photo && ready.length ? (() => {
+                                const withPhoto = ready.filter((r) => r.has_photo).length;
+                                return (
+                                    <p className={`rounded-md px-3 py-2 text-xs ${withPhoto ? 'bg-teal-50 text-teal-900' : 'bg-amber-50 text-amber-900'}`}>
+                                        {withPhoto === ready.length
+                                            ? '📷 Each new profile gets its listing photo as main image, in the background.'
+                                            : withPhoto
+                                                ? `📷 ${withPhoto} of ${ready.length} new profiles get their listing photo. The scraper found no photo for the rest; add one from the profile editor.`
+                                                : 'The scraper found no listing photos for these leads. Add photos from the profile editor.'}
+                                    </p>
+                                );
+                            })() : null}
                             {aiBio && ready.length ? (
                                 <p className={`rounded-md px-3 py-2 text-xs ${review.ai_bio ? 'bg-teal-50 text-teal-900' : 'bg-amber-50 text-amber-900'}`}>
                                     {review.ai_bio ? '✨ An AI bio will be written for each new profile in the background, usually within a few minutes.' : 'AI bios are off for this CRM (SEO engine switched off). Profiles will be created without a bio.'}
@@ -291,7 +310,7 @@ export default function ConvertPlaceDialog({ platformId, platformName, leads, on
                                             <span className="min-w-0 truncate font-medium text-slate-900">{r.name}</span>
                                             <span className="shrink-0 text-xs">
                                                 {!res ? <span className="text-slate-400">Waiting</span>
-                                                    : res.status === 'created' ? <>{res.bio === 'queued' ? <span className="mr-2 text-slate-500">✨ Bio queued</span> : null}<Link className="font-semibold text-teal-700 hover:underline" to={`/clients/${res.client_id}`}>Created{res.city ? ` in ${res.city}` : ''} →</Link></>
+                                                    : res.status === 'created' ? <>{res.photo === 'queued' ? <span className="mr-2 text-slate-500">📷 Photo queued</span> : null}{res.bio === 'queued' ? <span className="mr-2 text-slate-500">✨ Bio queued</span> : null}<Link className="font-semibold text-teal-700 hover:underline" to={`/clients/${res.client_id}`}>Created{res.city ? ` in ${res.city}` : ''} →</Link></>
                                                         : <span className="text-rose-700">{res.message}</span>}
                                             </span>
                                         </li>

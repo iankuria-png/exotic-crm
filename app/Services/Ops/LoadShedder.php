@@ -47,6 +47,7 @@ class LoadShedder
     private const SHED_AT = [
         'auto_optimize' => self::LEVEL_CAUTIOUS,
         'bulk_bio' => self::LEVEL_CAUTIOUS,
+        'lead_photo' => self::LEVEL_CAUTIOUS,
         'pbn_seed' => self::LEVEL_CAUTIOUS,
         'geocoding' => self::LEVEL_CAUTIOUS,
         // Database Observatory. Listed so the ops board shows what a shed
