@@ -12,6 +12,9 @@ use Illuminate\Support\Facades\Http;
  * only a real JPEG/PNG/WebP large enough to be a profile photo (not a logo or icon) passes.
  *
  * Sends the listing page as Referer: many sites block image requests without one.
+ *
+ * Listings usually show a WordPress thumbnail (`photo-170x206.webp`); `downloadBest` tries the
+ * full-size original (`photo.webp`) first and falls back to the scraped address.
  */
 class LeadPhotoDownloader
 {
@@ -26,6 +29,36 @@ class LeadPhotoDownloader
     ];
 
     public function __construct(private readonly UrlSafety $urlSafety) {}
+
+    /**
+     * The scraped address, preceded by its WordPress full-size original when it is a sized copy.
+     *
+     * @return array<int, string>
+     */
+    public static function candidates(string $url): array
+    {
+        $original = preg_replace('#-\d{2,4}x\d{2,4}(\.(?:jpe?g|png|webp|gif))(?=$|[?\#])#i', '$1', $url, 1);
+
+        return array_values(array_unique(array_filter([$original, $url])));
+    }
+
+    /**
+     * First candidate that passes every check; otherwise the scraped address's own failure.
+     *
+     * @return array<string, mixed>
+     */
+    public function downloadBest(string $url, ?string $referer): array
+    {
+        $result = null;
+        foreach (self::candidates($url) as $candidate) {
+            $result = $this->download($candidate, $referer);
+            if ($result['ok']) {
+                return $result;
+            }
+        }
+
+        return $result ?? $this->fail('no_url', 'No photo address.');
+    }
 
     /**
      * Success: ok, bytes, mime, extension, width, height, final_url. Failure: ok false, error_code, error.

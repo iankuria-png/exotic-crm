@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\ClientSyncService;
 use App\Services\Scraper\Fetch\UrlSafety;
 use App\Services\Scraper\LeadPhotoDownloader;
+use App\Services\Scraper\ListingExtractor;
 use App\Services\WpDirectProvisioningService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
@@ -105,6 +106,56 @@ class LeadScraperPhotoImportTest extends TestCase
         $this->assertSame(9001, $event->content['attachment_id']);
         $this->assertSame('competitor.example', $event->content['source_host']);
         $this->assertSame([640, 800], [$event->content['width'], $event->content['height']]);
+    }
+
+    public function test_job_uses_the_wordpress_original_instead_of_the_listing_thumbnail(): void
+    {
+        // Labiby (24 Nov): the listing showed only a 170×206 sized copy of the photo.
+        $thumb = 'https://competitor.example/wp-content/uploads/1795/17953599558856-170x206.webp';
+        $this->assertSame(
+            ['https://competitor.example/wp-content/uploads/1795/17953599558856.webp', $thumb],
+            LeadPhotoDownloader::candidates($thumb)
+        );
+        $this->assertSame([self::PHOTO], LeadPhotoDownloader::candidates(self::PHOTO));
+
+        [$lead, $client] = $this->convertedPair($thumb);
+        Http::fake([
+            self::WP.'/clients/801/media' => Http::sequence()->push(['data' => []], 200)->push(['id' => 9002], 200),
+            'https://competitor.example/wp-content/uploads/1795/17953599558856.webp' => Http::response($this->jpeg(800, 1000), 200),
+            $thumb => Http::response($this->jpeg(170, 206), 200),
+        ]);
+
+        $this->runJob($client, $lead);
+
+        Http::assertNotSent(fn (HttpRequest $r) => $r->url() === $thumb);
+        $event = TimelineEvent::query()->where('entity_id', $client->id)->where('event_type', 'lead_photo_imported')->first();
+        $this->assertSame([800, 1000, true], [$event->content['width'], $event->content['height'], $event->content['full_size']]);
+        $this->assertNotNull($event->created_at);
+    }
+
+    public function test_job_falls_back_to_the_thumbnail_and_explains_when_it_is_too_small(): void
+    {
+        $thumb = 'https://competitor.example/wp-content/uploads/1795/lesly-170x206.webp';
+        [$lead, $client] = $this->convertedPair($thumb);
+        Http::fake([
+            self::WP.'/clients/801/media' => Http::response(['data' => []], 200),
+            'https://competitor.example/wp-content/uploads/1795/lesly.webp' => Http::response('', 404),
+            $thumb => Http::response($this->jpeg(170, 206), 200),
+        ]);
+
+        $this->runJob($client, $lead);
+
+        $event = TimelineEvent::query()->where('entity_id', $client->id)->where('event_type', 'lead_photo_failed')->first();
+        $this->assertSame('too_small', $event->content['error_code']);
+        $this->assertNotNull($event->created_at);
+    }
+
+    public function test_listing_extractor_prefers_the_largest_srcset_image(): void
+    {
+        $this->assertSame('b-640x800.jpg', ListingExtractor::largestSrcsetUrl('a-170x206.jpg 170w, b-640x800.jpg 640w, c-300x360.jpg 300w'));
+        $this->assertSame('hd.jpg', ListingExtractor::largestSrcsetUrl('sd.jpg 1x, hd.jpg 2x'));
+        $this->assertSame('one.jpg', ListingExtractor::largestSrcsetUrl('one.jpg'));
+        $this->assertNull(ListingExtractor::largestSrcsetUrl(''));
     }
 
     public function test_job_never_adds_a_photo_to_a_profile_that_already_has_media(): void

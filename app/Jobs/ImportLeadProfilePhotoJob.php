@@ -78,7 +78,7 @@ class ImportLeadProfilePhotoJob implements ShouldQueue
         }
 
         $lead = Lead::query()->find($this->leadId);
-        $photo = $downloader->download($url, $lead?->source_url);
+        $photo = $downloader->downloadBest($url, $lead?->source_url);
         if (! $photo['ok']) {
             $this->record($client, 'failed', $photo['error'].' Add a photo from the profile editor.', [
                 'error_code' => $photo['error_code'],
@@ -109,6 +109,7 @@ class ImportLeadProfilePhotoJob implements ShouldQueue
             'source_host' => parse_url($photo['final_url'], PHP_URL_HOST) ?: null,
             'width' => $photo['width'],
             'height' => $photo['height'],
+            'full_size' => $photo['final_url'] !== $url ? true : null,
         ]);
     }
 
@@ -129,6 +130,8 @@ class ImportLeadProfilePhotoJob implements ShouldQueue
             'entity_id' => (int) $client->id,
             'event_type' => 'lead_photo_'.$status,
             'actor_id' => $this->actorId,
+            // TimelineEvent has no automatic timestamps.
+            'created_at' => now(),
             'content' => array_filter([
                 'source' => 'lead_scraper_conversion',
                 'lead_id' => $this->leadId,

@@ -124,6 +124,16 @@ class ListingExtractor
         $image = null;
         $imgNode = $this->pick($doc, $card, $rules['image_selector'] ?? 'img');
         if ($imgNode) {
+            // The largest srcset entry beats the small thumbnail most listings put in src.
+            foreach (['data-lazy-srcset', 'data-srcset', 'srcset'] as $attr) {
+                $largest = self::largestSrcsetUrl((string) $imgNode->getAttribute($attr));
+                if ($largest !== null) {
+                    $image = UrlTools::resolve($pageUrl, $largest);
+                    break;
+                }
+            }
+        }
+        if ($imgNode && $image === null) {
             foreach (['data-original-url', 'data-lazy-src', 'data-src', 'src'] as $attr) {
                 $value = trim((string) $imgNode->getAttribute($attr));
                 if ($value !== '' && ! str_starts_with($value, 'data:')) {
@@ -201,5 +211,27 @@ class ListingExtractor
         $selector = trim((string) $selector);
 
         return $selector === '' ? null : $doc->first($selector, $card);
+    }
+
+    /**
+     * Largest candidate of a srcset (`a.jpg 170w, b.jpg 640w` or `2x` densities); null if none.
+     */
+    public static function largestSrcsetUrl(string $srcset): ?string
+    {
+        $best = null;
+        $bestSize = -1.0;
+        foreach (preg_split('/,\s+(?=\S)/', trim($srcset)) ?: [] as $entry) {
+            $parts = preg_split('/\s+/', trim($entry));
+            $url = trim((string) ($parts[0] ?? ''));
+            if ($url === '' || str_starts_with($url, 'data:')) {
+                continue;
+            }
+            $size = preg_match('/^(\d+(?:\.\d+)?)[wx]$/i', (string) ($parts[1] ?? '1x'), $m) ? (float) $m[1] : 1.0;
+            if ($size > $bestSize) {
+                [$best, $bestSize] = [$url, $size];
+            }
+        }
+
+        return $best;
     }
 }

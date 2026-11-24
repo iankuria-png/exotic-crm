@@ -118,6 +118,8 @@ class GenerateLeadProfileBioJob implements ShouldQueue
             'entity_id' => (int) $client->id,
             'event_type' => 'ai_bio_'.$status,
             'actor_id' => $this->actorId,
+            // TimelineEvent has no automatic timestamps.
+            'created_at' => now(),
             'content' => array_filter([
                 'source' => 'lead_scraper_conversion',
                 'note' => $note,
