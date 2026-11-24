@@ -40,6 +40,7 @@ use App\Services\ClientSessionDiagnosticsService;
 use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
 use App\Services\ClientSyncService;
+use App\Services\ClientWalletListService;
 use App\Services\ClientWpLinkRepairService;
 use App\Services\CredentialDeliveryService;
 use App\Services\DealPaymentService;
@@ -144,6 +145,7 @@ class ClientController extends Controller
             'per_page' => 'nullable|integer|min:1|max:150',
             'client_type' => 'nullable|string|in:escort,agency',
             'gender' => 'nullable|string|in:1,2,3,4,5',
+            'wallet_balance' => 'nullable|string|in:positive',
         ]);
 
         $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -338,6 +340,11 @@ class ClientController extends Controller
 
         if (! empty($validated['contact_unlock'])) {
             $this->applyContactUnlockClientFilter($query, $validated['contact_unlock']);
+        }
+
+        if (($validated['wallet_balance'] ?? null) === 'positive') {
+            app(ClientWalletListService::class)->applyPositiveBalanceFilter($query);
+            $query->with('walletBalances');
         }
 
         $statsQuery = clone $query;
@@ -2121,6 +2128,9 @@ class ClientController extends Controller
 
         $collection->each(fn (Client $client) => $this->decorateExpiryState($client));
         $this->decorateLifetimeValue($collection);
+        if ($collection->first()?->relationLoaded('walletBalances')) {
+            app(ClientWalletListService::class)->decorate($collection);
+        }
         $this->clientSeoPlaceholderService->annotate($collection);
 
         $collection->each(function (Client $client): void {

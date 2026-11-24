@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\ClientWalletBalance;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -820,6 +821,91 @@ class ClientIndexListingTest extends TestCase
         $this->getJson("/api/crm/clients?platform_id={$platform->id}&recovery_origin=unknown")
             ->assertUnprocessable()
             ->assertJsonValidationErrors('recovery_origin');
+    }
+
+    public function test_wallet_filter_uses_currency_ledgers_and_preserves_unmigrated_funds(): void
+    {
+        $platform = $this->createPlatform();
+        $platform->update(['supported_currencies' => ['KES', 'USD'], 'multi_currency_wallet_enabled' => true]);
+        $make = fn (array $attributes = []) => Client::factory()->create(array_merge([
+            'platform_id' => $platform->id,
+            'wallet_currency' => 'KES',
+            'wallet_balance' => 0,
+        ], $attributes));
+        $legacy = $make(['wallet_balance' => '50.25']);
+        $secondary = $make();
+        $mixed = $make(['wallet_balance' => 100]);
+        $stale = $make(['wallet_balance' => 999]);
+        $fallback = $make(['wallet_balance' => '0.01', 'wallet_currency' => '']);
+        $negative = $make(['wallet_balance' => -10]);
+        $empty = $make();
+        $syncedAt = now()->startOfSecond();
+        foreach ([[$secondary, 'USD', '12.50'], [$mixed, 'USD', '3.00'], [$stale, 'KES', '0.00'], [$empty, 'KES', '0.00'], [$negative, 'KES', '-5.00']] as [$client, $currency, $balance]) {
+            ClientWalletBalance::create(['client_id' => $client->id, 'currency' => $currency, 'balance' => $balance, 'last_synced_at' => $syncedAt]);
+        }
+        Sanctum::actingAs($this->createAdminUser());
+
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&wallet_balance=positive");
+        $response->assertOk()->assertJsonPath('total', 4)->assertJsonPath('stats.total', 4);
+        $rows = collect($response->json('data'))->keyBy('id');
+        $this->assertEqualsCanonicalizing([$legacy->id, $secondary->id, $mixed->id, $fallback->id], $rows->keys()->all());
+        $this->assertSame([['currency' => 'KES', 'balance' => '50.25', 'last_synced_at' => null]], $rows[$legacy->id]['wallet_list_balances']);
+        $this->assertSame([['currency' => 'USD', 'balance' => '12.50', 'last_synced_at' => $syncedAt->toIso8601String()]], $rows[$secondary->id]['wallet_list_balances']);
+        $this->assertSame(['KES', 'USD'], array_column($rows[$mixed->id]['wallet_list_balances'], 'currency'));
+        $this->assertSame(['100.00', '3.00'], array_column($rows[$mixed->id]['wallet_list_balances'], 'balance'));
+        $this->assertSame('KES', $rows[$fallback->id]['wallet_list_balances'][0]['currency']);
+        $this->assertSame('0.01', $rows[$fallback->id]['wallet_list_balances'][0]['balance']);
+        $this->assertArrayHasKey('lifetime_value_usd', $rows[$secondary->id]);
+        $this->assertArrayNotHasKey('wallet_balances', $rows[$secondary->id]);
+
+        // Both filter and list reads leave all balances untouched.
+        $this->assertSame('999.00', $stale->fresh()->wallet_balance);
+        $this->assertSame(5, ClientWalletBalance::count());
+        $unfiltered = $this->getJson("/api/crm/clients?platform_id={$platform->id}")->assertOk()->assertJsonPath('total', 7);
+        $this->assertArrayNotHasKey('wallet_list_balances', $unfiltered->json('data.0'));
+        $this->getJson('/api/crm/clients?wallet_balance=invalid')->assertUnprocessable()->assertJsonValidationErrors('wallet_balance');
+    }
+
+    public function test_wallet_filter_keeps_market_scope_search_pagination_and_lifetime_sort(): void
+    {
+        $allowed = $this->createPlatform();
+        $other = $this->createPlatform();
+        $staff = User::factory()->create(['role' => 'sales', 'status' => 'active', 'assigned_market_ids' => [$allowed->id]]);
+        $first = Client::factory()->create(['platform_id' => $allowed->id, 'name' => 'Wallet Alpha', 'wallet_balance' => 10, 'wallet_currency' => 'KES']);
+        Client::factory()->create(['platform_id' => $allowed->id, 'name' => 'Wallet Beta', 'wallet_balance' => 20, 'wallet_currency' => 'KES']);
+        Client::factory()->create(['platform_id' => $other->id, 'name' => 'Wallet Hidden', 'wallet_balance' => 500, 'wallet_currency' => 'KES']);
+        Sanctum::actingAs($staff);
+
+        $this->getJson('/api/crm/clients?wallet_balance=positive&per_page=1&sort_by=name&sort_direction=asc')
+            ->assertOk()->assertJsonPath('total', 2)->assertJsonPath('last_page', 2)
+            ->assertJsonPath('data.0.id', $first->id)->assertJsonCount(1, 'data.0.wallet_list_balances');
+        $this->getJson('/api/crm/clients?wallet_balance=positive&search=Alpha&sort_by=value&sort_direction=desc')
+            ->assertOk()->assertJsonPath('total', 1)->assertJsonPath('data.0.id', $first->id)
+            ->assertJsonPath('data.0.wallet_list_balances.0.balance', '10.00');
+        $this->getJson("/api/crm/clients?wallet_balance=positive&platform_id={$other->id}")->assertForbidden();
+        $this->getJson('/api/crm/clients?wallet_balance=positive&search=NoSuchClient')
+            ->assertOk()->assertJsonPath('total', 0)->assertJsonCount(0, 'data');
+    }
+
+    public function test_wallet_filter_matches_wallet_tab_currency_configuration(): void
+    {
+        $platform = $this->createPlatform();
+        $platform->update(['currency_code' => 'CDF', 'supported_currencies' => ['CDF', 'USD'], 'multi_currency_wallet_enabled' => false, 'wallet_settings' => ['enabled' => true, 'currency_code' => 'CDF']]);
+        $legacy = Client::factory()->create(['platform_id' => $platform->id, 'wallet_currency' => 'CDF', 'wallet_balance' => 100]);
+        $staleCurrency = Client::factory()->create(['platform_id' => $platform->id, 'wallet_currency' => 'CDF', 'wallet_balance' => 0]);
+        $mismatchedMirror = Client::factory()->create(['platform_id' => $platform->id, 'wallet_currency' => 'USD', 'wallet_balance' => 10]);
+        ClientWalletBalance::create(['client_id' => $staleCurrency->id, 'currency' => 'USD', 'balance' => 25]);
+        ClientWalletBalance::create(['client_id' => $legacy->id, 'currency' => 'USD', 'balance' => 20]);
+        Sanctum::actingAs($this->createAdminUser());
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&wallet_balance=positive")->assertOk()->assertJsonPath('total', 1);
+        $response->assertJsonPath('data.0.id', $legacy->id)->assertJsonCount(1, 'data.0.wallet_list_balances')
+            ->assertJsonPath('data.0.wallet_list_balances.0.currency', 'CDF');
+        $platform->update(['multi_currency_wallet_enabled' => true]);
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&wallet_balance=positive")->assertOk()->assertJsonPath('total', 2);
+        $rows = collect($response->json('data'))->keyBy('id');
+        $this->assertSame(['CDF', 'USD'], array_column($rows[$legacy->id]['wallet_list_balances'], 'currency'));
+        $this->assertSame(['USD'], array_column($rows[$staleCurrency->id]['wallet_list_balances'], 'currency'));
+        $this->assertFalse($rows->has($mismatchedMirror->id));
     }
 
     private function createPlatform(): Platform

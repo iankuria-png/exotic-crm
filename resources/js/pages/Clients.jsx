@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
@@ -390,6 +390,30 @@ function ClientValueCell({ row }) {
     );
 }
 
+function ClientWalletCell({ row }) {
+    const balances = row.wallet_list_balances || [];
+
+    if (!balances.length) {
+        return <span className="text-xs text-slate-400">—</span>;
+    }
+
+    return (
+        <Link
+            to={`/clients/${row.id}?tab=wallet`}
+            onClick={(event) => event.stopPropagation()}
+            aria-label={`Open wallet for ${row.name || 'client'}`}
+            className="group inline-flex flex-col items-end rounded-lg px-2 py-1 text-right transition-colors hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+        >
+            {balances.map((balance) => (
+                <span key={balance.currency || 'unknown'} title={balance.last_synced_at ? `Last synced ${new Date(balance.last_synced_at).toLocaleString()}` : 'Sync time unavailable'} className="whitespace-nowrap text-sm font-semibold tabular-nums text-teal-800">
+                    {balance.currency ? formatCurrency(balance.balance, balance.currency) : `${Number(balance.balance).toLocaleString()} · currency unknown`}
+                </span>
+            ))}
+            <span className="text-[10px] text-slate-500 group-hover:text-teal-700">View wallet ↗</span>
+        </Link>
+    );
+}
+
 function formatUnlockRevenue(summary = {}) {
     const entries = Object.entries(summary.revenue_native || {}).filter(([, value]) => Number(value || 0) > 0);
 
@@ -590,6 +614,13 @@ export default function Clients() {
     // API routes behind it — a sales user deep-linking to the tab falls back to All.
     const canRecoverSeo = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const [searchParams, setSearchParams] = useSearchParams();
+    const [isCompactViewport, setIsCompactViewport] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+    useEffect(() => {
+        const viewport = window.matchMedia('(max-width: 767px)');
+        const update = () => setIsCompactViewport(viewport.matches);
+        viewport.addEventListener('change', update);
+        return () => viewport.removeEventListener('change', update);
+    }, []);
     const allowedTabs = new Set([
         'all', 'conversion', 'closed', 'churned', 'optimizer', 'locations',
         ...(canRecoverSeo ? ['seo_recovery', 'profile_urls', 'bio_text'] : []),
@@ -676,6 +707,13 @@ export default function Clients() {
         const requested = (searchParams.get('behavior_tag') || '').trim();
         return allowedBehaviorTags.has(requested) ? requested : '';
     });
+    const walletBalanceFilter = searchParams.get('wallet_balance') === 'positive' ? 'positive' : '';
+    const setWalletBalanceFilter = (value) => setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        if (value) next.set('wallet_balance', value);
+        else next.delete('wallet_balance');
+        return next;
+    }, { replace: true });
     const [newUsersFilter, setNewUsersFilter] = useState(() => {
         const requested = (searchParams.get('new_users') || '').trim();
         if (allowedNewUsersFilters.has(requested)) {
@@ -760,7 +798,7 @@ export default function Clients() {
 
         setCityFilter((current) => (current === nextCity ? current : nextCity));
         setCityKeyFilter((current) => (current === nextCityKey ? current : nextCityKey));
-    }, [searchParams]);
+    }, [searchParams.get('city'), searchParams.get('city_key')]);
 
     useEffect(() => {
         const current = searchParams.get('recovery_origin') || '';
@@ -780,7 +818,7 @@ export default function Clients() {
         setSearchParams(params, { replace: true });
     }, [searchParams, setSearchParams, subscriptionStateFilter]);
 
-    const { data, isLoading, isFetching } = useQuery({
+    const { data, isLoading, isFetching, isError, refetch } = useQuery({
         queryKey: [
             'clients',
             page,
@@ -802,6 +840,7 @@ export default function Clients() {
             signupSourceFilter,
             retentionBandFilter,
             behaviorTagFilter,
+            walletBalanceFilter,
             segmentFilter,
             contactUnlockFilter,
             resolvedCreatedRange.createdFrom,
@@ -831,6 +870,7 @@ export default function Clients() {
                     ...(signupSourceFilter && { signup_source: signupSourceFilter }),
                     ...(retentionBandFilter && { retention_band: retentionBandFilter }),
                     ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
+                    ...(walletBalanceFilter && { wallet_balance: walletBalanceFilter }),
                     ...(segmentFilter && { segment: segmentFilter }),
                     ...(contactUnlockFilter && { contact_unlock: contactUnlockFilter }),
                     ...(contactUnlockFilter && { include_unlock_stats: 1 }),
@@ -1999,6 +2039,7 @@ export default function Clients() {
         || signupSourceFilter
         || retentionBandFilter
         || behaviorTagFilter
+        || walletBalanceFilter
         || segmentFilter
         || contactUnlockFilter
         || newUsersFilter
@@ -2342,7 +2383,7 @@ export default function Clients() {
         },
         {
             key: 'value',
-            label: 'Value',
+            label: walletBalanceFilter ? 'Lifetime value' : 'Value',
             width: '140px',
             headerClassName: 'text-right',
             cellClassName: 'w-[140px] max-w-[140px]',
@@ -2364,13 +2405,21 @@ export default function Clients() {
                         }`}
                         title={`Sort by value (${directionLabel})`}
                     >
-                        Value
+                        {walletBalanceFilter ? 'Lifetime value' : 'Value'}
                         <span aria-hidden="true">{isValueSortActive ? (sortOption === 'value_asc' ? 'LOW' : 'HIGH') : 'SORT'}</span>
                     </button>
                 );
             },
             render: (row) => <ClientValueCell row={row} />,
         },
+        ...(walletBalanceFilter ? [{
+            key: 'wallet_balance',
+            label: 'Wallet balance',
+            width: '180px',
+            headerClassName: 'text-right',
+            cellClassName: 'w-[180px] text-right',
+            render: (row) => <ClientWalletCell row={row} />,
+        }] : []),
         {
             key: 'contact_unlocks',
             label: 'Unlocks',
@@ -2924,6 +2973,7 @@ export default function Clients() {
                         ]}
                     />
 
+
                     <FilterSelect
                         label="Sort"
                         value={sortOption}
@@ -2970,6 +3020,17 @@ export default function Clients() {
                 ) : null}
 
                 <div className="flex flex-wrap items-end gap-3">
+                    <FilterSelect
+                        label="Wallet"
+                        className="min-w-[12rem]"
+                        value={walletBalanceFilter}
+                        onChange={(event) => { setWalletBalanceFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All balances' },
+                            { value: 'positive', label: 'Has wallet balance' },
+                        ]}
+                    />
+
                     <FilterSelect
                         label="Verified"
                         value={verifiedFilter}
@@ -3074,6 +3135,7 @@ export default function Clients() {
                                 setSignupSourceFilter('');
                                 setRetentionBandFilter('');
                                 setBehaviorTagFilter('');
+                                setWalletBalanceFilter('');
                                 setSegmentFilter('');
                                 setContactUnlockFilter('');
                                 setNewUsersFilter('');
@@ -3266,15 +3328,31 @@ export default function Clients() {
                 </section>
             ) : null}
 
+            {walletBalanceFilter ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-teal-200 bg-teal-50/60 px-4 py-3" role="status" aria-live="polite">
+                    <div>
+                        <p className="text-sm font-semibold text-teal-900">
+                            {isError ? 'Wallet results could not load' : isFetching ? 'Finding clients with wallet funds…' : `${Number(data?.total || 0).toLocaleString()} client${Number(data?.total || 0) === 1 ? '' : 's'} with wallet funds`}
+                        </p>
+                        <p className="mt-0.5 text-xs text-teal-800">Recorded balances in each wallet’s currency. Open a wallet to refresh its balance.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {isError ? <button type="button" onClick={() => refetch()} className="crm-btn-secondary text-xs">Try again</button> : null}
+                        <button type="button" onClick={() => { setWalletBalanceFilter(''); setPage(1); }} className="rounded-md px-3 py-2 text-xs font-semibold text-teal-800 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">Clear wallet filter</button>
+                    </div>
+                </div>
+            ) : null}
+
             <DataTable
                 columns={columns}
-                data={data?.data}
+                data={walletBalanceFilter && (isFetching || isError) ? [] : data?.data}
                 pagination={data}
                 onPageChange={setPage}
                 onRowClick={(row) => navigate(`/clients/${row.id}`)}
-                isLoading={isLoading}
-                emptyMessage="No clients found matching your filters."
+                isLoading={isLoading || Boolean(walletBalanceFilter && isFetching)}
+                emptyMessage={walletBalanceFilter ? (isError ? 'Wallet results could not load. Try again or clear the wallet filter.' : 'No clients with wallet funds match these filters. Clear the wallet filter or broaden your search.') : 'No clients found matching your filters.'}
                 compact
+                stickyColumns={walletBalanceFilter && isCompactViewport ? false : 2}
                 selectable={canSelectClients}
                 bulkActions={bulkActions}
                 clearSelectionKey={clearSelectionKey}
