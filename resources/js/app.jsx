@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
+import { useAuth } from './hooks/useAuth';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider, QueryCache, MutationCache } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -60,10 +61,25 @@ const queryClient = new QueryClient({
     },
 });
 
+function AccessSession({ children }) {
+    const { user } = useAuth();
+    const fingerprint = user?.access_policy_version || 'unverified';
+    const previous = useRef(null);
+    useLayoutEffect(() => {
+        if (previous.current !== fingerprint) {
+            void queryClient.cancelQueries();
+            queryClient.clear();
+            previous.current = fingerprint;
+        }
+    }, [fingerprint]);
+    return <React.Fragment key={fingerprint}>{children}</React.Fragment>;
+}
+
 function App() {
     return (
         <ErrorBoundary label="app">
             <QueryClientProvider client={queryClient}>
+                <AccessSession>
                 <ToastProvider>
                     <MediaUploadProvider>
                         <BrowserRouter>
@@ -71,6 +87,7 @@ function App() {
                         </BrowserRouter>
                     </MediaUploadProvider>
                 </ToastProvider>
+                </AccessSession>
             </QueryClientProvider>
         </ErrorBoundary>
     );

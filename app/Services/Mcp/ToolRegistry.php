@@ -279,6 +279,10 @@ class ToolRegistry
 
     public function available(string $name, User $user, McpSettingsService $settings, ?array $abilities = null): bool
     {
+        if (! app(\App\Services\CrmAccessPolicy::class)->allowsTool($user, $name)) {
+            return false;
+        }
+
         $meta = self::TOOLS[$name] ?? self::MODERN_TOOLS[$name] ?? null;
         $modernTool = array_key_exists($name, self::MODERN_TOOLS);
         if (! $meta || ($modernTool && ! $this->modernToolEnabled($name)) || (! $modernTool && ! (bool) data_get($settings->tool($name), 'enabled', false))) {

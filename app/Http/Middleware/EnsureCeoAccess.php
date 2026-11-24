@@ -16,7 +16,8 @@ class EnsureCeoAccess
             $user
                 && ($user->role ?? null) === 'admin'
                 && ($user->status ?? 'active') === 'active'
-                && (bool) ($user->is_ceo ?? false),
+                && (bool) ($user->is_ceo ?? false)
+                && app(\App\Services\CrmAccessPolicy::class)->allows($user, 'admin_dashboard'),
             403,
             'CEO dashboard access is restricted.'
         );

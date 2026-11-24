@@ -63,7 +63,7 @@ const button = 'inline-flex items-center justify-center gap-2 rounded-lg border 
 export function useCollectionCapabilities() {
     const { user } = useAuth();
     return useQuery({ queryKey: ['collection-capabilities', user?.id], queryFn: async () => (await api.get('/crm/collections/capabilities')).data,
-        enabled: ['admin', 'sub_admin', 'sales'].includes(user?.role), staleTime: 300000, retry: false });
+        enabled: Boolean(user?.capabilities?.payments_workspace) && ['admin', 'sub_admin', 'sales'].includes(user?.role), staleTime: 300000, retry: false });
 }
 
 export function CollectionArrivalBadge() {

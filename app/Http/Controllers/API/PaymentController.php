@@ -1323,6 +1323,8 @@ class PaymentController extends Controller
         }
 
         $limit = $request->limit ?? 10;
+        app(\App\Services\MarketAuthorizationService::class)->applyPlatformScope($query, $request->user());
+
         $payments = $query->limit($limit)->get();
 
         return response()->json([
@@ -1553,6 +1555,8 @@ class PaymentController extends Controller
         if ($request->has('platform_id')) {
             $query->where('platform_id', $request->platform_id);
         }
+
+        app(\App\Services\MarketAuthorizationService::class)->applyPlatformScope($query, $request->user());
 
         $payments = $query
             ->latest()

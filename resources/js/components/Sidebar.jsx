@@ -2,6 +2,7 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../hooks/useAuth';
+import { canVisit } from '../utils/access';
 import faqApi from '../services/faqApi';
 import kyc from '../services/kyc';
 
@@ -179,7 +180,7 @@ export default function Sidebar({ onClose }) {
         ? Number(queueCountQuery.data?.mine_count || 0)
         : Number(queueCountQuery.data?.in_review_count || 0);
 
-    const filteredNavGroups = role === 'field_sales'
+    const roleNavGroups = role === 'field_sales'
         ? fieldSalesGroups
         : role === 'marketing'
         ? [
@@ -216,6 +217,11 @@ export default function Sidebar({ onClose }) {
             : role === 'sales'
                 ? insertVisitorsGroup(insertPbnWorkspaceItem(insertBannerAdsRevenueItem(navGroups.filter((group) => group.title !== 'Admin')))).concat([resourcesGroup])
                 : navGroups.concat([resourcesGroup]);
+
+    const filteredNavGroups = roleNavGroups.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => item.external || canVisit(user, item.to)),
+    })).filter((group) => group.items.length > 0);
 
     return (
         <div className="flex h-full flex-col border-r border-white/10 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-900 text-slate-100">

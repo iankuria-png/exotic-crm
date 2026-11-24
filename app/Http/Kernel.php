@@ -53,6 +53,7 @@ class Kernel extends HttpKernel
             \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
             \App\Http\Middleware\RejectEwmsTokenOutsideEndpoint::class,
             \App\Http\Middleware\RejectMcpTokenOutsideEndpoint::class,
+            \App\Http\Middleware\EnsureCrmCapability::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
 
@@ -65,6 +66,25 @@ class Kernel extends HttpKernel
      *
      * @var array<string, class-string|string>
      */
+    // Keep Laravel's standard priority entries and authorize resources before binding.
+    protected $middlewarePriority = [
+        \Illuminate\Foundation\Http\Middleware\HandlePrecognitiveRequests::class,
+        \Illuminate\Cookie\Middleware\EncryptCookies::class,
+        \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+        \Illuminate\Session\Middleware\StartSession::class,
+        \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+        \Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests::class,
+        \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        \Illuminate\Routing\Middleware\ThrottleRequestsWithRedis::class,
+        \Illuminate\Contracts\Session\Middleware\AuthenticatesSessions::class,
+        \App\Http\Middleware\EnsureCrmSessionToken::class,
+        \App\Http\Middleware\EnsureCrmUserIsActive::class,
+        \App\Http\Middleware\CrmImpersonationMiddleware::class,
+        \App\Http\Middleware\EnsureCrmCapability::class,
+        \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        \Illuminate\Auth\Middleware\Authorize::class,
+    ];
+
     protected $middlewareAliases = [
         'auth' => \App\Http\Middleware\Authenticate::class,
         'auth.basic' => \Illuminate\Auth\Middleware\AuthenticateWithBasicAuth::class,

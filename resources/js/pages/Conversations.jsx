@@ -63,7 +63,7 @@ export default function Conversations() {
 
     const { data: dashboardData } = useQuery({
         queryKey: ['conversation-dashboard'],
-        queryFn: () => api.get('/crm/dashboard').then((response) => response.data),
+        queryFn: () => api.get('/crm/conversations/overview').then((response) => response.data),
         staleTime: 30_000,
     });
 

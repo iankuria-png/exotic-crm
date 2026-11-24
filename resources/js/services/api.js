@@ -76,6 +76,9 @@ async function confirmCredentialLossThenLogout() {
 api.interceptors.response.use(
     (response) => response,
     (error) => {
+        if (error.response?.status === 403 && error.response?.data?.code === 'crm_access_denied') {
+            window.dispatchEvent(new Event('crm-access-refresh'));
+        }
         if (error.response?.status === 401) {
             void confirmCredentialLossThenLogout();
         }

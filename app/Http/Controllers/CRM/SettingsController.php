@@ -4946,7 +4946,7 @@ class SettingsController extends Controller
             ->keyBy('id');
 
         $users = User::query()
-            ->select(['id', 'name', 'email', 'role', 'is_ceo', 'status', 'phone', 'notification_prefs', 'assigned_market_ids', 'sb_agent_id'])
+            ->select(['id', 'name', 'email', 'role', 'access_profile', 'is_ceo', 'status', 'phone', 'notification_prefs', 'assigned_market_ids', 'sb_agent_id'])
             ->with('platforms:id,name,country')
             ->orderBy('role')
             ->orderBy('name')
@@ -4979,6 +4979,7 @@ class SettingsController extends Controller
                     'name' => $user->name,
                     'email' => $user->email,
                     'role' => $user->role,
+                    'access_profile' => $user->access_profile,
                     'is_ceo' => (bool) ($user->is_ceo ?? false),
                     'status' => $user->status ?? 'active',
                     'payment_failure_sms_state' => $user->paymentFailureSmsState(),
@@ -5121,6 +5122,7 @@ class SettingsController extends Controller
     {
         $validated = $request->validate([
             'role' => 'required|in:admin,sub_admin,sales,field_sales,marketing',
+            'access_profile' => 'sometimes|nullable|in:no_payments_or_dashboards',
             'is_ceo' => 'nullable|boolean',
             'status' => 'required|in:active,inactive',
             'sb_agent_id' => 'nullable|integer',
@@ -5151,6 +5153,7 @@ class SettingsController extends Controller
 
         $beforeState = [
             'role' => $user->role,
+            'access_profile' => $user->access_profile,
             'is_ceo' => (bool) ($user->is_ceo ?? false),
             'status' => $user->status ?? 'active',
             'phone' => $user->phone,
@@ -5173,7 +5176,11 @@ class SettingsController extends Controller
         if (! empty($validated['password'])) {
             $updateData['password'] = Hash::make($validated['password']);
         }
-        $user->update($updateData);
+        $user->fill($updateData);
+        if (array_key_exists('access_profile', $validated)) {
+            $user->access_profile = $validated['access_profile'];
+        }
+        $user->save();
 
         if (method_exists($user, 'platforms')) {
             $user->platforms()->sync($assignedMarketIds);
@@ -5190,6 +5197,7 @@ class SettingsController extends Controller
                 $beforeState,
                 [
                     'role' => $user->role,
+                    'access_profile' => $user->access_profile,
                     'is_ceo' => (bool) ($user->is_ceo ?? false),
                     'status' => $user->status ?? 'active',
                     'phone' => $user->phone,
@@ -5218,6 +5226,7 @@ class SettingsController extends Controller
             'name' => $user->name,
             'email' => $user->email,
             'role' => $user->role,
+                    'access_profile' => $user->access_profile,
             'is_ceo' => (bool) ($user->is_ceo ?? false),
             'status' => $user->status ?? 'active',
             'payment_failure_sms_state' => $user->paymentFailureSmsState(),

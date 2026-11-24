@@ -53,9 +53,10 @@ import QuestionBank from './pages/University/admin/QuestionBank';
 import UniversityAnalytics from './pages/University/admin/Analytics';
 import UniversityManagement from './pages/University/admin/Management';
 import { useAuth } from './hooks/useAuth';
+import { canVisit, homePath } from './utils/access';
 
 function ProtectedRoute({ children }) {
-    const { user, isLoading } = useAuth();
+    const { user, isLoading, accessError } = useAuth();
     const location = useLocation();
 
     if (isLoading) {
@@ -66,58 +67,20 @@ function ProtectedRoute({ children }) {
         );
     }
 
+    if (accessError) {
+        return <div role="alert" className="mx-auto max-w-lg p-8 text-slate-700">
+            <h1 className="text-xl font-semibold">Access could not be checked</h1>
+            <p className="mt-2">Reconnect and try again to open your workspace.</p>
+            <button className="crm-btn-primary mt-4" onClick={() => window.dispatchEvent(new Event('crm-access-refresh'))}>Try again</button>
+        </div>;
+    }
+
     if (!user) {
         return <Navigate to="/login" replace />;
     }
 
-    if (user.role === 'marketing') {
-        const path = location.pathname || '/';
-        const allowed = path === '/'
-            || path.startsWith('/clients')
-            || path.startsWith('/kyc')
-            || path.startsWith('/push-campaigns')
-            || path.startsWith('/banner-ads')
-            || path.startsWith('/auto-push')
-            || path.startsWith('/team')
-            || path.startsWith('/faq')
-            || path.startsWith('/network-check')
-            || path.startsWith('/university');
-
-        if (!allowed) {
-            return <Navigate to="/push-campaigns" replace />;
-        }
-    }
-
-    if (
-        user.role === 'sales'
-        && (location.pathname || '').startsWith('/push-campaigns')
-    ) {
-        return <Navigate to="/" replace />;
-    }
-
-    if (user.role === 'field_sales') {
-        const path = location.pathname || '/';
-        const allowed = path.startsWith('/field')
-            || path.startsWith('/clients')
-            || path.startsWith('/deals')
-            || path.startsWith('/payments')
-            || path.startsWith('/leads')
-            || path.startsWith('/conversations')
-            || path.startsWith('/campaigns')
-            || path.startsWith('/banner-ads')
-            || path.startsWith('/kyc')
-            || path.startsWith('/reports')
-            || path.startsWith('/faq')
-            || path.startsWith('/network-check')
-            || path.startsWith('/university');
-
-        if (path === '/') {
-            return <Navigate to="/field/home" replace />;
-        }
-
-        if (!allowed) {
-            return <Navigate to="/field/home" replace />;
-        }
+    if (!canVisit(user, location.pathname)) {
+        return <Navigate to={homePath(user)} replace state={location.pathname === '/' ? undefined : { accessMessage: 'Your account cannot open that workspace.' }} />;
     }
 
     return children;

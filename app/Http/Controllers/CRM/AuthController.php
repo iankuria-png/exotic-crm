@@ -143,7 +143,8 @@ class AuthController extends Controller
                 && ($user->status ?? 'active') === 'active',
             'status' => $user->status ?? 'active',
             'assigned_market_ids' => $user->assignedMarketIds(),
-            'capabilities' => $this->capabilitiesForRole((string) $user->role),
+            ...app(\App\Services\CrmAccessPolicy::class)->snapshot($user),
+            'capabilities' => array_merge($this->capabilitiesForRole((string) $user->role), app(\App\Services\CrmAccessPolicy::class)->capabilities($user)),
         ];
     }
 
@@ -188,6 +189,13 @@ class AuthController extends Controller
         if (!is_array($payload)) {
             abort(410, 'This CRM impersonation link has expired.');
         }
+
+        $actor = User::find((int) data_get($payload, 'impersonator.id'));
+        $target = User::find((int) data_get($payload, 'user.id'));
+        abort_unless($actor && $target && $actor->isActive() && $target->isActive()
+            && app(\App\Services\CrmAccessPolicy::class)->allows($actor, 'impersonate_staff')
+            && $target->role !== 'admin', 403, 'This impersonation link is no longer permitted.');
+        $payload['user'] = $this->serializeUser($target);
 
         return response()->view('crm-impersonation-bridge', [
             'payload' => $payload,

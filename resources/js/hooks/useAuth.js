@@ -13,6 +13,16 @@ import {
     updateStoredUser,
 } from '../utils/authStorage';
 
+let validationInFlight = null;
+function validateCurrentAccess(token) {
+    if (validationInFlight?.token === token) return validationInFlight.promise;
+    const promise = api.get('/crm/me').finally(() => {
+        if (validationInFlight?.promise === promise) validationInFlight = null;
+    });
+    validationInFlight = { token, promise };
+    return promise;
+}
+
 export function useAuth() {
     const auth = useSyncExternalStore(
         subscribeToAuthChanges,
@@ -23,6 +33,7 @@ export function useAuth() {
     const token = auth.token;
     const impersonation = auth.impersonation || null;
     const [isLoading, setIsLoading] = useState(true);
+    const [accessError, setAccessError] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -36,34 +47,34 @@ export function useAuth() {
             };
         }
 
-        api.get('/crm/me')
-            .then(({ data }) => {
-                if (cancelled) {
-                    return;
-                }
-
-                updateStoredUser(data.user);
-                ensureSessionToken();
-            })
-            .catch((error) => {
-                if (cancelled) {
-                    return;
-                }
-
-                // Only a confirmed credential rejection ends the session. Network
-                // failures or 5xx must never wipe an otherwise-valid token.
-                if (error.response?.status === 401) {
-                    clearAuthSnapshot({ clearSessionToken: true });
-                }
-            })
-            .finally(() => {
-                if (!cancelled) {
-                    setIsLoading(false);
-                }
-            });
-
+        const refresh = (quiet = false) => {
+            if (quiet !== true) setIsLoading(true);
+            setAccessError(false);
+            validateCurrentAccess(token)
+                .then(({ data }) => {
+                    if (cancelled) return;
+                    updateStoredUser(data.user);
+                    ensureSessionToken();
+                })
+                .catch((error) => {
+                    if (cancelled) return;
+                    if (error.response?.status === 401) {
+                        clearAuthSnapshot({ clearSessionToken: true });
+                    } else {
+                        setAccessError(true);
+                    }
+                })
+                .finally(() => { if (!cancelled) setIsLoading(false); });
+        };
+        refresh();
+        const interval = window.setInterval(() => refresh(true), 60_000);
+        window.addEventListener('focus', refresh);
+        window.addEventListener('crm-access-refresh', refresh);
         return () => {
             cancelled = true;
+            window.clearInterval(interval);
+            window.removeEventListener('focus', refresh);
+            window.removeEventListener('crm-access-refresh', refresh);
         };
     }, [token]);
 
@@ -98,5 +109,5 @@ export function useAuth() {
         }
     }, [impersonation]);
 
-    return { user, isLoading, login, logout, impersonation };
+    return { user, isLoading, accessError, login, logout, impersonation };
 }

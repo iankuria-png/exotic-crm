@@ -7900,6 +7900,7 @@ function RolesWorkspace() {
     const toast = useToast();
     const launchWindowRef = useRef(null);
     const { user: currentUser } = useAuth();
+    const canManageAccess = currentUser?.capabilities?.manage_staff_access === true;
     const [selectedUser, setSelectedUser] = useState(null);
     const [editor, setEditor] = useState(null);
     const [auditUser, setAuditUser] = useState(null);
@@ -7989,10 +7990,12 @@ function RolesWorkspace() {
     const availableMarkets = data?.available_markets || [];
 
     const openEditor = (user) => {
+        if (!canManageAccess) return;
         testAlertSmsMutation.reset();
         setSelectedUser(user);
         setEditor({
             role: user.role || 'sales',
+            access_profile: user.access_profile || null,
             is_ceo: Boolean(user.is_ceo),
             status: user.status || 'active',
             sb_agent_id: user.sb_agent_id ?? '',
@@ -8005,7 +8008,7 @@ function RolesWorkspace() {
     };
 
     const canImpersonateUser = (user) => (
-        user?.status === 'active'
+        canManageAccess && user?.status === 'active'
         && user?.role !== 'admin'
         && Number(user?.id) !== Number(currentUser?.id)
     );
@@ -8261,6 +8264,7 @@ function RolesWorkspace() {
                     <button
                         type="button"
                         onClick={() => setCreateOpen(true)}
+                        disabled={!canManageAccess}
                         className="crm-btn-primary px-3 py-2"
                     >
                         Add user
@@ -8304,6 +8308,7 @@ function RolesWorkspace() {
                                                 <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${roleClasses(user.role)}`}>
                                                     {user.role.replace('_', ' ')}
                                                 </span>
+                                                {user.access_profile ? <p className="mt-1 text-xs text-slate-500">Payments and dashboards blocked</p> : null}
                                             </td>
                                             <td className="px-4 py-2.5">
                                                 {user.is_ceo ? (
@@ -8345,6 +8350,7 @@ function RolesWorkspace() {
                                                     <button
                                                         type="button"
                                                         onClick={() => openEditor(user)}
+                                                        disabled={!canManageAccess}
                                                         className="crm-btn-secondary px-3 py-1.5 text-xs"
                                                     >
                                                         Edit
@@ -8396,6 +8402,15 @@ function RolesWorkspace() {
 
                         <div className="max-h-[65vh] overflow-y-auto">
                             <div className="grid gap-3 p-4 md:grid-cols-2">
+                                <div className="md:col-span-2">
+                                    <label htmlFor="access-profile" className="mb-1 block text-sm font-medium text-slate-700">Workspace access</label>
+                                    <select id="access-profile" className="crm-select w-full" value={editor.access_profile || ''}
+                                        onChange={(event) => setEditor((current) => ({ ...current, access_profile: event.target.value || null }))}>
+                                        <option value="">Standard role permissions</option>
+                                        <option value="no_payments_or_dashboards">Other pages available; Payments and dashboards blocked</option>
+                                    </select>
+                                    <p className="mt-1 text-xs text-slate-500">This restriction also prevents changing staff access or impersonating users.</p>
+                                </div>
                                 <div>
                                     <label htmlFor="role-select" className="mb-1 block text-sm font-medium text-slate-700">Role</label>
                                     <select
@@ -8733,6 +8748,7 @@ function RolesWorkspace() {
                                     userId: selectedUser.id,
                                     payload: {
                                         role: editor.role,
+                                        access_profile: editor.access_profile,
                                         is_ceo: editor.role === 'admin' && Boolean(editor.is_ceo),
                                         status: editor.status,
                                         sb_agent_id: editor.sb_agent_id === '' ? null : Number(editor.sb_agent_id),
@@ -8743,7 +8759,7 @@ function RolesWorkspace() {
                                         reason: editor.reason,
                                     },
                                 })}
-                                disabled={!editor.reason.trim() || updateRoleMutation.isPending}
+                                disabled={!canManageAccess || !editor.reason.trim() || updateRoleMutation.isPending}
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 {updateRoleMutation.isPending ? 'Saving...' : 'Save changes'}

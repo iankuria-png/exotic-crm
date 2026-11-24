@@ -21,7 +21,7 @@ class CrmImpersonationMiddleware
             return $next($request);
         }
 
-        if (($actor->role ?? null) !== 'admin') {
+        if (! app(\App\Services\CrmAccessPolicy::class)->allows($actor, 'impersonate_staff')) {
             return response()->json([
                 'message' => 'Only admins can impersonate CRM users.',
             ], 403);

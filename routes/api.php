@@ -309,6 +309,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
     Route::post('/logout', [CrmAuthController::class, 'logout']);
     Route::post('/heartbeat', [TeamController::class, 'heartbeat']);
     Route::get('/team/me', [TeamController::class, 'myStats']);
+    Route::get('/conversations/overview', \App\Http\Controllers\CRM\ConversationOverviewController::class)->middleware('role:admin,sub_admin,sales,field_sales');
 
     // Global error handling: browser-side error ingest + diagnostics helpers.
     // Available to every authenticated CRM user (not admin-only) and throttled
@@ -1240,15 +1241,15 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
 // ==================== ALL ROUTES ARE PUBLIC (No authentication required) ====================
 
 // Authentication routes (public)
-Route::post('/register', [AuthController::class, 'register']);
+Route::post('/register', [AuthController::class, 'register'])->middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation']);
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/logout', [AuthController::class, 'logout']); // Even logout is public now
 Route::get('/auth/google/redirect', [AuthController::class, 'redirectToGoogle']);
 Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback']);
 
 // User management routes (public)
-Route::put('/users/{id}', [AuthController::class, 'updateUser']);
-Route::get('/users', [AuthController::class, 'getUsers']);
+Route::put('/users/{id}', [AuthController::class, 'updateUser'])->middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation']);
+Route::get('/users', [AuthController::class, 'getUsers'])->middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation']);
 
 // Platform routes
 Route::get('/platforms', [PlatformController::class, 'platform']);
@@ -1336,8 +1337,8 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
 Route::get('/my-platforms', [AuthController::class, 'getMyPlatforms']);
 
 // Dashboard routes (public)
-Route::post('/dashboard-summary', [DashboardController::class, 'summary']);
-Route::post('/summary', [DashboardController::class, 'summary']);
+Route::post('/dashboard-summary', [DashboardController::class, 'summary'])->middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation']);
+Route::post('/summary', [DashboardController::class, 'summary'])->middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation']);
 Route::post('/escort-posts', [DashboardController::class, 'escortPosts']);
 Route::get('/recent-users', [DashboardController::class, 'recentUsers']);
 
@@ -1365,8 +1366,8 @@ Route::middleware('wallet.auth:write')->group(function () {
     Route::post('/billing/initiate', [BillingController::class, 'initiate']);
     Route::post('/billing/retry-stk', [BillingController::class, 'retryStk']);
 });
-Route::get('/payments', [PaymentController::class, 'list']);
-Route::get('/payments/{user_id}', [PaymentController::class, 'getPayments'])->name('payment.history');
+Route::get('/payments', [PaymentController::class, 'list'])->middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation']);
+Route::get('/payments/{user_id}', [PaymentController::class, 'getPayments'])->name('payment.history')->middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.impersonation']);
 
 // Payment callbacks/webhooks (public)
 Route::post('/payment-callback', [PaymentController::class, 'callback'])

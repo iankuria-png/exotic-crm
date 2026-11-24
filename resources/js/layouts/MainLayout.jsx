@@ -195,6 +195,7 @@ export default function MainLayout() {
                 <main className="flex-1 overflow-y-auto p-4 lg:p-6">
                     {/* Keyed by path so a page crash resets when the user navigates. */}
                     <ErrorBoundary variant="inline" label="page" key={location.pathname}>
+                        {location.state?.accessMessage ? <p role="status" className="mb-4 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">{location.state.accessMessage}</p> : null}
                         <Outlet />
                     </ErrorBoundary>
                 </main>
