@@ -21,7 +21,7 @@ class FlexibleReceiptService
     public function record(Payment $payment): void
     {
         if ($payment->provider_environment === 'sandbox' || $payment->isClassifiedTest() || data_get($payment->payment_data, 'test_mode')
-            || data_get($payment->payment_data, 'provisioning_status') !== 'completed' || ! $payment->deal?->expires_at) {
+            || (data_get($payment->payment_data, 'provisioning_status') ?? data_get($payment->payment_data, 'canonical_state.provisioning_status')) !== 'completed' || ! $payment->deal?->expires_at) {
             return;
         }
         $phone = \App\Support\PhoneNormalizer::normalize($payment->client?->phone_normalized, $payment->platform->phone_prefix);

@@ -680,6 +680,15 @@ class WpSyncService
 
     public function payLinkCapabilities(): array { return $this->get('/pay-link-capabilities'); }
     public function payLinkState(int $postId): array { return $this->get("/clients/{$postId}/pay-link-state"); }
+    /** One bounded dashboard read; retain typed HTTP conflicts for useful customer errors. */
+    public function payLinkStateForRead(int $postId): array
+    {
+        $this->assertMarketAvailable();
+        $path = "/clients/{$postId}/pay-link-state";
+        $response = Http::withHeaders($this->headers())->connectTimeout(2)->timeout(8)->get($this->baseUrl.$path);
+
+        return $this->decodeResponse($response, 'GET', $path);
+    }
     public function payLinkOperation(string $key): array { return $this->get('/pay-link-operations/'.$key); }
     public function activatePayLink(int $postId, array $data): array { return $this->post("/clients/{$postId}/pay-link-activate", $data); }
 

@@ -18,9 +18,12 @@ class FlexibleAmountsController extends Controller
         if ($rules['mode'] === 'off' || ! $rules['surfaces']['dashboard']) {
             return response()->json(['mode' => 'off', 'plans' => []]);
         }
-        $state = app(FlexibleQuoteService::class)->state($client);
+        $state = app(\App\Services\PayLink\EligibilityService::class)->snapshotForRead($client, $request->input('wp_subscription_state'));
 
-        return response()->json(app(FlexibleQuoteService::class)->catalogue($client->platform, $client, 'dashboard', $state));
+        $catalogue = app(FlexibleQuoteService::class)->catalogue($client->platform, $client, 'dashboard', $state);
+        $catalogue['payment_methods'] = app(\App\Services\FlexibleAmounts\FlexiblePaymentMethodsService::class)->choices($client->platform, $client, $state);
+
+        return response()->json($catalogue);
     }
 
     public function quote(Request $request)
@@ -28,7 +31,9 @@ class FlexibleAmountsController extends Controller
         $client = app(FlexibleSelfCheckoutService::class)->client($request);
         abort_unless(RateLimiter::attempt('flexible-quote:'.$client->id, 90, fn () => true, 60), 429);
 
-        return response()->json(app(FlexibleQuoteService::class)->quote($client->platform, $client, $request->all()));
+        $state = app(\App\Services\PayLink\EligibilityService::class)->snapshotForRead($client, $request->input('wp_subscription_state'));
+
+        return response()->json(app(FlexibleQuoteService::class)->quote($client->platform, $client, $request->all(), 'dashboard', $state));
     }
 
     public function start(Request $request)

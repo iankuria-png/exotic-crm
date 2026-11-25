@@ -19,6 +19,8 @@ use Illuminate\Support\Str;
 
 trait FlexibleAmountsFixture
 {
+    protected $dropViews = true;
+
     protected Platform $market;
 
     protected Client $client;
@@ -51,6 +53,7 @@ trait FlexibleAmountsFixture
         $this->state = ['version' => 1, 'writers_ready' => true, 'eligible' => true, 'post_id' => $this->client->wp_post_id, 'wp_user_id' => $this->client->wp_user_id, 'live' => true, 'current_tier' => 'vip', 'escort_expire' => $this->client->escort_expire];
         $this->wp = \Mockery::mock(WpSyncService::class);
         $this->wp->shouldReceive('payLinkState')->andReturnUsing(fn () => $this->state);
+        $this->wp->shouldReceive('payLinkStateForRead')->andReturnUsing(fn () => $this->state);
         $this->mock(WpSyncFactory::class)->shouldReceive('forPlatform')->andReturn($this->wp);
     }
 

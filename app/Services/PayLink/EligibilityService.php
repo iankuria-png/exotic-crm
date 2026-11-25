@@ -19,10 +19,54 @@ class EligibilityService
 
     public function snapshot(Client $c): array
     {
+        $this->assertClientEligible($c);
+        $state = app(WpSyncFactory::class)->forPlatform($c->platform_id)->payLinkState($c->wp_post_id);
+
+        return $this->assertSnapshot($c, $state);
+    }
+
+    /** Dashboard reads may reuse only a fresh state generated and HMAC-signed by WordPress. */
+    public function snapshotForRead(Client $c, mixed $provided = null): array
+    {
+        $this->assertClientEligible($c);
+        if ($provided !== null) {
+            abort_unless(is_array($provided)
+                && ($provided['platform_id'] ?? null) === (int) $c->platform_id
+                && is_int($provided['issued_at'] ?? null)
+                && $provided['issued_at'] >= now()->timestamp - 30
+                && $provided['issued_at'] <= now()->timestamp + 5
+                && is_int($provided['post_id'] ?? null) && is_int($provided['wp_user_id'] ?? null)
+                && is_bool($provided['writers_ready'] ?? null) && is_bool($provided['eligible'] ?? null)
+                && is_bool($provided['live'] ?? null)
+                && is_int($provided['escort_expire'] ?? null) && $provided['escort_expire'] >= 0
+                && in_array($provided['current_tier'] ?? null, ['basic', 'premium', 'vip', 'vvip'], true),
+                409, 'Your profile details changed. Refresh and try again.');
+
+            return $this->assertSnapshot($c, $provided);
+        }
+
+        try {
+            $state = app(WpSyncFactory::class)->forPlatform($c->platform_id)->payLinkStateForRead($c->wp_post_id);
+        } catch (\Illuminate\Http\Client\RequestException $e) {
+            abort_if(in_array($e->response->status(), [401, 403, 404, 409, 422], true), 409,
+                'This profile needs a team check before renewing.');
+            abort(503, 'Could not check your profile. Please try again.');
+        } catch (\Illuminate\Http\Client\ConnectionException|\RuntimeException $e) {
+            abort(503, 'Could not check your profile. Please try again.');
+        }
+
+        return $this->assertSnapshot($c, $state);
+    }
+
+    private function assertClientEligible(Client $c): void
+    {
         abort_unless($c->platform?->is_active && $c->client_type === 'escort' && $c->wp_post_id > 0 && !$c->closed_at
             && !$c->profile_paused_at && !$c->profile_removal_requested_at && !$c->profile_reverted_at
             && !$c->is_high_risk && !in_array($c->lifecycle_state, ['archived', 'removed', 'paused', 'closed', 'reverted'], true), 409, 'This profile needs a team check before renewing.');
-        $state = app(WpSyncFactory::class)->forPlatform($c->platform_id)->payLinkState($c->wp_post_id);
+    }
+
+    private function assertSnapshot(Client $c, array $state): array
+    {
         abort_unless(($state['version'] ?? 0) === 1 && ($state['writers_ready'] ?? false) && ($state['eligible'] ?? false)
             && (int) ($state['post_id'] ?? 0) === (int) $c->wp_post_id && (int) ($state['wp_user_id'] ?? 0) === (int) $c->wp_user_id, 409, 'This profile needs a team check before renewing.');
         return $state;
