@@ -54,7 +54,7 @@ class FieldSalesController extends Controller
         $createdByCount = (clone $createdByQuery)->count();
         $untaggedCount = max(0, $createdByCount - $fieldTaggedCount);
 
-        $commissionQuery = Commission::query()->where('agent_user_id', (int) $user->id);
+        $commissionQuery = Commission::query()->whereIn('agent_user_id', $this->fieldAgents()->select('id'))->where('agent_user_id', (int) $user->id);
 
         $recentClients = (clone $createdByQuery)->latest('id')->limit(10)->get();
         $trialsActivated = Deal::query()
@@ -235,6 +235,7 @@ class FieldSalesController extends Controller
         ]);
 
         $query = Commission::query()
+            ->whereIn('agent_user_id', $this->fieldAgents()->select('id'))
             ->with(['client:id,name,platform_id,phone_normalized', 'deal:id,activated_at,expires_at'])
             ->where('agent_user_id', (int) $request->user()->id)
             ->latest('earned_at')
@@ -244,7 +245,7 @@ class FieldSalesController extends Controller
             $query->where('status', $validated['status']);
         }
 
-        $base = Commission::query()->where('agent_user_id', (int) $request->user()->id);
+        $base = Commission::query()->whereIn('agent_user_id', $this->fieldAgents()->select('id'))->where('agent_user_id', (int) $request->user()->id);
 
         return response()->json([
             'summary' => [
@@ -315,7 +316,8 @@ class FieldSalesController extends Controller
     private function validateCommissionFilters(Request $request): array
     {
         return $request->validate([
-            'agent_user_id' => 'nullable|integer|exists:users,id',
+            'agent_user_id' => ['nullable', 'integer', Rule::exists('users', 'id')->where(fn ($q) => $q
+                ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)->where('status', 'active'))],
             'market_id' => 'nullable|integer|exists:platforms,id',
             'status' => ['nullable', Rule::in(['pending', 'earned', 'paid', 'void'])],
             'date_from' => 'nullable|date',
@@ -326,6 +328,7 @@ class FieldSalesController extends Controller
     private function buildCommissionsQuery(array $validated)
     {
         $query = Commission::query()
+            ->whereIn('agent_user_id', $this->fieldAgents()->select('id'))
             ->with([
                 'agent:id,name,email,role',
                 'client:id,name,platform_id,phone_normalized,display_image_url,main_image_url,city',
@@ -361,7 +364,7 @@ class FieldSalesController extends Controller
     private function buildCommissionSummary(array $validated): array
     {
         $scope = function () use ($validated) {
-            $q = Commission::query();
+            $q = Commission::query()->whereIn('agent_user_id', $this->fieldAgents()->select('id'));
             if (!empty($validated['agent_user_id'])) {
                 $q->where('agent_user_id', (int) $validated['agent_user_id']);
             }
@@ -417,14 +420,13 @@ class FieldSalesController extends Controller
     }
 
     /**
-     * Field agents for reporting: the field-sales role plus anyone who earned field commission or was credited
-     * with a field activation, so a later role change (e.g. promotion) never hides their history.
+     * The operational roster contains active field agents. Historical rows remain
+     * stored when a beneficiary changes role, without making them eligible today.
      */
     private function fieldAgents()
     {
-        return User::query()->where(fn ($q) => $q->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
-            ->orWhereIn('id', Commission::query()->select('agent_user_id')->whereNotNull('agent_user_id'))
-            ->orWhereIn('id', Deal::query()->select('activated_by_field_agent')->whereNotNull('activated_by_field_agent')));
+        return User::query()->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+            ->where('status', 'active');
     }
 
     /**

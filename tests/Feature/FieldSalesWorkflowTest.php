@@ -293,7 +293,7 @@ class FieldSalesWorkflowTest extends TestCase
         $this->get('/api/crm/admin/commissions/export?status=earned')->assertOk();
     }
 
-    public function test_scoreboard_and_funnel_keep_an_agent_whose_role_later_changed(): void
+    public function test_scoreboard_and_funnel_exclude_an_agent_whose_role_later_changed(): void
     {
         $admin = User::factory()->create(['role' => 'admin', 'status' => 'active']);
         $platform = Platform::factory()->create(['field_activation_commission_rate' => 0.15]);
@@ -308,11 +308,11 @@ class FieldSalesWorkflowTest extends TestCase
         Sanctum::actingAs($admin);
 
         $response = $this->getJson('/api/crm/admin/commissions?status=earned')->assertOk();
-        $response->assertJsonCount(1, 'leaderboard');
-        $response->assertJsonPath('leaderboard.0.id', $agent->id);
-        $response->assertJsonPath('leaderboard.0.paid_deals', 1);
-        $response->assertJsonPath('summary.funnel.acquired', 1);
-        $this->assertContains($agent->id, array_column($response->json('agents'), 'id'));
+        $response->assertJsonCount(0, 'leaderboard');
+        $response->assertJsonCount(0, 'agents');
+        $response->assertJsonCount(0, 'data.data');
+        $response->assertJsonPath('summary.funnel.acquired', 0);
+        $this->assertDatabaseHas('commissions', ['agent_user_id' => $agent->id, 'amount' => 300, 'status' => 'earned']);
     }
 
     public function test_admin_can_save_field_sales_settings(): void

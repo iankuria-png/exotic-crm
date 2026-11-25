@@ -32,20 +32,18 @@ class CommissionService
             ?: $this->seedAgentFromPriorTrial($deal)
             ?: $this->seedAgentFromClient($deal)
         );
-        if ($agentId <= 0) {
-            return null;
-        }
+        return $this->withEligibleFieldAgent($agentId, function () use ($deal, $agentId) {
+            if ((int) ($deal->activated_by_field_agent ?? 0) !== $agentId) {
+                $deal->forceFill(['activated_by_field_agent' => $agentId])->save();
+            }
 
-        if ((int) ($deal->activated_by_field_agent ?? 0) !== $agentId) {
-            $deal->forceFill(['activated_by_field_agent' => $agentId])->save();
-        }
+            $platform = $deal->platform ?: $deal->client?->platform ?: Platform::query()->find($deal->platform_id);
+            $rate = (float) ($platform?->field_activation_commission_rate ?? 0.15);
 
-        $platform = $deal->platform ?: $deal->client?->platform ?: Platform::query()->find($deal->platform_id);
-        $rate = (float) ($platform?->field_activation_commission_rate ?? 0.15);
-
-        return $this->createEarnedCommission($deal, $agentId, 'activation', $rate, [
-            'source' => 'first_paid_activation',
-        ]);
+            return $this->createEarnedCommission($deal, $agentId, 'activation', $rate, [
+                'source' => 'first_paid_activation',
+            ]);
+        });
     }
 
     public function recordRenewalCommission(Deal $renewalDeal): ?Commission
@@ -60,37 +58,35 @@ class CommissionService
             ?: $this->seedAgentFromPriorPaidDeal($deal)
             ?: $this->seedAgentFromClient($deal)
         );
-        if ($agentId <= 0) {
-            return null;
-        }
+        return $this->withEligibleFieldAgent($agentId, function () use ($deal, $agentId) {
+            if ((int) ($deal->activated_by_field_agent ?? 0) !== $agentId) {
+                $deal->forceFill(['activated_by_field_agent' => $agentId])->save();
+            }
 
-        if ((int) ($deal->activated_by_field_agent ?? 0) !== $agentId) {
-            $deal->forceFill(['activated_by_field_agent' => $agentId])->save();
-        }
+            if ($this->isFirstPaidActivation($deal)) {
+                return null;
+            }
 
-        if ($this->isFirstPaidActivation($deal)) {
-            return null;
-        }
+            $platform = $deal->platform ?: $deal->client?->platform ?: Platform::query()->find($deal->platform_id);
+            $windowMonths = max(0, (int) ($platform?->field_renewal_commission_months ?? 4));
+            $firstPaid = $this->firstPaidFieldDeal($deal, $agentId);
+            if (!$firstPaid?->activated_at) {
+                return null;
+            }
 
-        $platform = $deal->platform ?: $deal->client?->platform ?: Platform::query()->find($deal->platform_id);
-        $windowMonths = max(0, (int) ($platform?->field_renewal_commission_months ?? 4));
-        $firstPaid = $this->firstPaidFieldDeal($deal, $agentId);
-        if (!$firstPaid?->activated_at) {
-            return null;
-        }
+            $activatedAt = $deal->activated_at ? Carbon::parse($deal->activated_at) : now();
+            if ($windowMonths > 0 && $activatedAt->greaterThan(Carbon::parse($firstPaid->activated_at)->copy()->addMonthsNoOverflow($windowMonths))) {
+                return null;
+            }
 
-        $activatedAt = $deal->activated_at ? Carbon::parse($deal->activated_at) : now();
-        if ($windowMonths > 0 && $activatedAt->greaterThan(Carbon::parse($firstPaid->activated_at)->copy()->addMonthsNoOverflow($windowMonths))) {
-            return null;
-        }
+            $rate = (float) ($platform?->field_renewal_commission_rate ?? 0.05);
 
-        $rate = (float) ($platform?->field_renewal_commission_rate ?? 0.05);
-
-        return $this->createEarnedCommission($deal, $agentId, 'renewal', $rate, [
-            'source' => 'renewal_activation',
-            'first_paid_deal_id' => (int) $firstPaid->id,
-            'window_months' => $windowMonths,
-        ]);
+            return $this->createEarnedCommission($deal, $agentId, 'renewal', $rate, [
+                'source' => 'renewal_activation',
+                'first_paid_deal_id' => (int) $firstPaid->id,
+                'window_months' => $windowMonths,
+            ]);
+        });
     }
 
     public function markPaid(array $commissionIds, array $payoutData): CommissionPayout
@@ -101,14 +97,26 @@ class CommissionService
         }
 
         return DB::transaction(function () use ($ids, $payoutData) {
+            $selected = Commission::query()->whereIn('id', $ids)->get(['id', 'agent_user_id']);
+            $selectedAgentIds = $selected->pluck('agent_user_id')->unique()->values();
+            if ($selected->count() !== count($ids) || $selectedAgentIds->count() !== 1) {
+                throw new InvalidArgumentException('Select earned commissions for one active field agent.');
+            }
+            // Lock the beneficiary before settlement rows. Accrual uses a
+            // shared lock, so independent customer activations can overlap.
+            $agent = User::query()->whereKey($selectedAgentIds->first())->lockForUpdate()->first();
+            if (!$agent || $agent->role !== MarketAuthorizationService::ROLE_FIELD_SALES || !$agent->isActive()) {
+                throw new InvalidArgumentException('Only active field agents can receive commission payouts.');
+            }
             $commissions = Commission::query()
                 ->whereIn('id', $ids)
                 ->where('status', 'earned')
                 ->lockForUpdate()
                 ->get();
 
-            if ($commissions->isEmpty()) {
-                throw new InvalidArgumentException('No earned commissions were selected.');
+            if ($commissions->count() !== count($ids)
+                || $commissions->contains(fn ($row) => (int) $row->agent_user_id !== (int) $agent->id)) {
+                throw new InvalidArgumentException('Every selected commission must be earned and belong to the same active field agent.');
             }
 
             $agentIds = $commissions->pluck('agent_user_id')->unique()->values();
@@ -242,6 +250,7 @@ class CommissionService
         $fieldSalesIds = User::query()
             ->whereIn('id', $candidates)
             ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+            ->where('status', 'active')
             ->pluck('id')
             ->all();
 
@@ -252,6 +261,33 @@ class CommissionService
         }
 
         return null;
+    }
+
+    public function isEligibleFieldAgent(int $agentId): bool
+    {
+        return $agentId > 0 && User::query()
+            ->whereKey($agentId)
+            ->where('role', MarketAuthorizationService::ROLE_FIELD_SALES)
+            ->where('status', 'active')
+            ->exists();
+    }
+
+    private function withEligibleFieldAgent(int $agentId, callable $record): ?Commission
+    {
+        if ($agentId <= 0) {
+            return null;
+        }
+
+        return DB::transaction(function () use ($agentId, $record) {
+            // This lock also covers the attribution save in the callback.
+            // It stays shared when nested inside a payment transaction.
+            $agent = User::query()->whereKey($agentId)->sharedLock()->first();
+            if (!$agent || $agent->role !== MarketAuthorizationService::ROLE_FIELD_SALES || !$agent->isActive()) {
+                return null;
+            }
+
+            return $record();
+        });
     }
 
     private function firstPaidFieldDeal(Deal $deal, int $agentId): ?Deal

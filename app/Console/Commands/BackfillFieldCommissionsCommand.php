@@ -78,7 +78,7 @@ class BackfillFieldCommissionsCommand extends Command
                     continue;
                 }
 
-                if ($agentId <= 0) {
+                if (! $commissionService->isEligibleFieldAgent($agentId)) {
                     if ($needsActivation) {
                         $activationsSkippedNoAgent++;
                     }
