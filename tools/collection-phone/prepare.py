@@ -22,8 +22,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("destination", type=Path)
     parser.add_argument("--archive", type=Path)
-    # GH builds the Ghana MTN MoMo filter (exotic-gh-v1) and Ghana receiving-number checks.
-    parser.add_argument("--country", choices=("TZ", "GH"), default="TZ")
+    # GH builds the Ghana MTN MoMo filter (exotic-gh-v1) and Ghana receiving-number checks;
+    # UG builds the Uganda MTN MoMoPay Till filter (exotic-ug-v1) and Uganda receiving-number checks.
+    parser.add_argument("--country", choices=("TZ", "GH", "UG"), default="TZ")
     args = parser.parse_args()
     if args.destination.exists():
         raise SystemExit("Use a new empty build destination; existing directories are preserved.")
@@ -56,6 +57,17 @@ def main():
         replace(receiver / "CollectionCaptureSettings.kt", '"Verified Tanzania SIM values and cursor required"', '"Verified Ghana SIM values and cursor required"')
         manifest["version_name"] = manifest["version_name"] + "-gh"
         manifest["country"] = "GH"
+    if args.country == "UG":
+        receiver = java / "modules/receiver"
+        shutil.copy2(HERE / "src/ug/PaymentOnlyPolicy.java", receiver / "PaymentOnlyPolicy.java")
+        replace(receiver / "PaymentCaptureState.kt", 'if (digits.startsWith("0") && digits.length == 10) digits = "255" + digits.drop(1)',
+                'if (digits.startsWith("0") && digits.length == 10) digits = "256" + digits.drop(1)')
+        replace(receiver / "PaymentCaptureState.kt", 'return digits.takeIf { it.matches(Regex("255[67][0-9]{8}")) }',
+                'return digits.takeIf { it.matches(Regex("256(?:7[0-9]|39)[0-9]{7}")) }')
+        replace(receiver / "CollectionCaptureSettings.kt", 'recipient.matches(Regex("255[67][0-9]{8}"))', 'recipient.matches(Regex("256(?:7[0-9]|39)[0-9]{7}"))')
+        replace(receiver / "CollectionCaptureSettings.kt", '"Verified Tanzania SIM values and cursor required"', '"Verified Uganda SIM values and cursor required"')
+        manifest["version_name"] = manifest["version_name"] + "-ug"
+        manifest["country"] = "UG"
     build = root / "app/build.gradle"
     replace(build, "    id 'com.google.gms.google-services'\n", "")
     replace(build, 'applicationId "me.capcom.smsgateway"', 'applicationId "com.exotic.paymentcapture"')

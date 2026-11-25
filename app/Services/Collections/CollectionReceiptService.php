@@ -40,7 +40,7 @@ class CollectionReceiptService
                     DB::table('collection_audit')->insertOrIgnore(['receipt_id' => null, 'account_id' => $account->id, 'actor_id' => null,
                         'action' => 'reversal_revoked_flagged', 'context' => json_encode(['event_id' => $event->id, 'reference' => $observation['reference'] ?? null]),
                         'dedupe_key' => 'reversal-revoked:'.$event->id, 'created_at' => now()]);
-                } elseif ($parser instanceof GhMtnMomoParser ? $parser->looksLikeCredit($event->normalized['message'] ?? '')
+                } elseif ($parser instanceof GhMtnMomoParser || $parser instanceof UgMtnMomoPayParser ? $parser->looksLikeCredit($event->normalized['message'] ?? '')
                     : preg_match('/^\S+\s+(?:confirmed|imethibitishwa).*?(?:received|Umepokea|Receive)/is', $event->normalized['message'] ?? '')) {
                     $account->update(['suspended_at' => now(), 'suspension_reason' => 'receiving_parser_drift']);
                 }
@@ -51,8 +51,11 @@ class CollectionReceiptService
             $providerAt = isset($observation['provider_at']) ? Carbon::parse($observation['provider_at'], 'UTC')
                 // Layouts without a provider clock (Ghana MoMo) use the signed device receive time.
                 : (($observation['time_source'] ?? null) === 'device_received' && $event->sms_received_at ? $event->sms_received_at->copy() : null);
-            $historical = $event->source_kind !== 'live' || ! $device->cutover_at || ! $providerAt
-                || $providerAt->lt($device->cutover_at) || ! $event->sms_received_at || $event->sms_received_at->lt($device->cutover_at);
+            // Uganda's MoMoPay view has no clock; its paired wallet view supplies provider_at to the same receipt.
+            // Its receive time only decides live vs historical, so arriving first never makes a live payment historical.
+            $clock = $providerAt ?? (($observation['time_source'] ?? null) === 'paired_view' ? $event->sms_received_at : null);
+            $historical = $event->source_kind !== 'live' || ! $device->cutover_at || ! $clock
+                || $clock->lt($device->cutover_at) || ! $event->sms_received_at || $event->sms_received_at->lt($device->cutover_at);
             $receipt = CollectionReceipt::where('account_id', $account->id)->where('reference_norm', $observation['reference'])->lockForUpdate()->first();
             if (! $receipt) {
                 $receipt = CollectionReceipt::create(['account_id' => $account->id, 'reference_raw' => $observation['reference_raw'] ?? $observation['reference'],

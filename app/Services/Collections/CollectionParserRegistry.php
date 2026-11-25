@@ -13,20 +13,22 @@ class CollectionParserRegistry
     private const PROVIDERS = [
         'vodacom_mpesa_tz' => ['country' => 'TZ', 'parser' => TzMpesaParser::class, 'currency' => 'TZS', 'filter' => 'exotic-tz-v1'],
         'mtn_momo_gh' => ['country' => 'GH', 'parser' => GhMtnMomoParser::class, 'currency' => 'GHS', 'filter' => 'exotic-gh-v1'],
+        'mtn_momopay_ug' => ['country' => 'UG', 'parser' => UgMtnMomoPayParser::class, 'currency' => 'UGX', 'filter' => 'exotic-ug-v1'],
     ];
 
-    public function forAccount(CollectionAccount $account): TzMpesaParser|GhMtnMomoParser|null
+    public function forAccount(CollectionAccount $account): TzMpesaParser|GhMtnMomoParser|UgMtnMomoPayParser|null
     {
         $provider = self::PROVIDERS[$account->provider_key] ?? null;
 
         return $provider && $provider['country'] === $account->country ? app($provider['parser']) : null;
     }
 
-    public function forSender(string $sender): TzMpesaParser|GhMtnMomoParser|null
+    public function forSender(string $sender): TzMpesaParser|GhMtnMomoParser|UgMtnMomoPayParser|null
     {
         return match ($sender) {
             'M-PESA' => app(TzMpesaParser::class),
             GhMtnMomoParser::SENDER => app(GhMtnMomoParser::class),
+            UgMtnMomoPayParser::SENDER => app(UgMtnMomoPayParser::class),
             default => null,
         };
     }
@@ -63,15 +65,19 @@ class CollectionParserRegistry
         return match ($country) {
             'GH' => app(GhMtnMomoParser::class)->phone($phone),
             'KE' => app(\App\Services\Collections\Kopokopo\KopokopoReceiptParser::class)->phone($phone),
+            'UG' => app(UgMtnMomoPayParser::class)->phone($phone),
             default => app(CollectionPrivacy::class)->tzPhone($phone),
         };
     }
 
-    /** Staff search accepts either enrolled country's phone format. */
+    /** Staff search accepts any enrolled country's international phone format; local numbers stay TZ, then GH. */
     public function anyPhone(?string $phone): ?string
     {
         $digits = preg_replace('/\D/', '', (string) $phone);
 
+        if (str_starts_with($digits, '256')) {
+            return $this->phone('UG', $phone);
+        }
         if (str_starts_with($digits, '254')) {
             return $this->phone('KE', $phone);
         }

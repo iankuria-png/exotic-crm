@@ -47,10 +47,10 @@ def main():
 <application android:label="Exotic synthetic capture tests" android:testOnly="true" android:allowBackup="false" />
 <instrumentation android:name="com.exotic.paymentcapture.tests.OnDevicePolicyTest" android:targetPackage="com.exotic.paymentcapture" android:functionalTest="true" />
 </manifest>''')
-        # The prepared source records its country; a Ghana build runs the Ghana synthetic cases.
+        # The prepared source records its country; Ghana and Uganda builds run their own synthetic cases.
         country = metadata.get("country", "TZ")
-        cases = {"TZ": 42, "GH": 37}[country]
-        source = Path(__file__).parent / ("tests/gh/OnDevicePolicyTest.java" if country == "GH" else "tests/OnDevicePolicyTest.java")
+        cases = {"TZ": 42, "GH": 37, "UG": 41}[country]
+        source = Path(__file__).parent / {"GH": "tests/gh/OnDevicePolicyTest.java", "UG": "tests/ug/OnDevicePolicyTest.java"}.get(country, "tests/OnDevicePolicyTest.java")
         run([args.java / "bin/javac", "--release", "8", "-cp", jar, "-d", classes, source])
         run([tools / "d8", "--lib", jar, "--min-api", "21", "--output", dex, *classes.rglob("*.class")], env=env)
         unsigned, signed = folder / "unsigned.apk", folder / "signed.apk"
