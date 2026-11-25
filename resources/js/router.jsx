@@ -71,7 +71,7 @@ function ProtectedRoute({ children }) {
         return <div role="alert" className="mx-auto max-w-lg p-8 text-slate-700">
             <h1 className="text-xl font-semibold">Access could not be checked</h1>
             <p className="mt-2">Reconnect and try again to open your workspace.</p>
-            <button className="crm-btn-primary mt-4" onClick={() => window.dispatchEvent(new Event('crm-access-refresh'))}>Try again</button>
+            <button className="crm-btn-primary mt-4" onClick={() => window.dispatchEvent(new CustomEvent('crm-access-refresh', { detail: { blocking: true } }))}>Try again</button>
         </div>;
     }
 

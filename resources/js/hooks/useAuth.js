@@ -47,12 +47,20 @@ export function useAuth() {
             };
         }
 
-        const refresh = (quiet = false) => {
-            if (quiet !== true) setIsLoading(true);
-            setAccessError(false);
+        // Only the first check and an explicit "Try again" may block the screen.
+        // Background re-checks (tab focus, timer, a 403 from any request) must
+        // not swap the workspace for a spinner or error: that unmounts every
+        // page and discards unsaved edits. A 401 still ends the session, and a
+        // changed access policy still resets the workspace in AccessSession.
+        const refresh = (blocking) => {
+            if (blocking) {
+                setIsLoading(true);
+                setAccessError(false);
+            }
             validateCurrentAccess(token)
                 .then(({ data }) => {
                     if (cancelled) return;
+                    setAccessError(false);
                     updateStoredUser(data.user);
                     ensureSessionToken();
                 })
@@ -60,21 +68,23 @@ export function useAuth() {
                     if (cancelled) return;
                     if (error.response?.status === 401) {
                         clearAuthSnapshot({ clearSessionToken: true });
-                    } else {
+                    } else if (blocking) {
                         setAccessError(true);
                     }
                 })
-                .finally(() => { if (!cancelled) setIsLoading(false); });
+                .finally(() => { if (blocking && !cancelled) setIsLoading(false); });
         };
-        refresh();
-        const interval = window.setInterval(() => refresh(true), 60_000);
-        window.addEventListener('focus', refresh);
-        window.addEventListener('crm-access-refresh', refresh);
+        const backgroundRefresh = () => refresh(false);
+        const requestedRefresh = (event) => refresh(event?.detail?.blocking === true);
+        refresh(true);
+        const interval = window.setInterval(backgroundRefresh, 60_000);
+        window.addEventListener('focus', backgroundRefresh);
+        window.addEventListener('crm-access-refresh', requestedRefresh);
         return () => {
             cancelled = true;
             window.clearInterval(interval);
-            window.removeEventListener('focus', refresh);
-            window.removeEventListener('crm-access-refresh', refresh);
+            window.removeEventListener('focus', backgroundRefresh);
+            window.removeEventListener('crm-access-refresh', requestedRefresh);
         };
     }, [token]);
 
