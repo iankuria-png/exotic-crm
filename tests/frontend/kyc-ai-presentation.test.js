@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aiLabel, reviewSummary, policyCopy } from '../../resources/js/components/kyc/kycAiPresentation.js';
+import { aiLabel, reviewSummary, policyCopy, evaluationScore } from '../../resources/js/components/kyc/kycAiPresentation.js';
 
 test('queue, active processing and stalled attempts have distinct truthful labels', () => {
     assert.equal(aiLabel({ status: 'queued' }), 'Waiting to start');
@@ -31,4 +31,17 @@ test('policy text matches auto-approve, advisory and automatic rejection setting
 test('specific rule failures explain why staff must act and QA is an applied approval', () => {
     assert.match(reviewSummary({ status: 'completed', recommendation: 'human', reason_codes: ['second_opinion_required'] }).detail, /not confirmed/);
     assert.match(reviewSummary({ status: 'completed', action_taken: 'approved', qa_sample: true }).next, /already approved/);
+});
+
+test('self-assessment accepts zero and suppresses unavailable or invalid scores', () => {
+    const review = { status: 'completed', mode: 'auto_approve', evaluation_confidence: .86 };
+    assert.equal(evaluationScore(review), 86);
+    assert.equal(evaluationScore({ ...review, evaluation_confidence: 0 }), 0);
+    assert.equal(evaluationScore({ status: 'completed', observations: { evaluation_confidence: .9 } }), 90);
+    for (const evaluation_confidence of [null, undefined, -1, 1.01, '0.9', NaN, Infinity]) {
+        assert.equal(evaluationScore({ ...review, evaluation_confidence }), null);
+    }
+    for (const change of [{ status: 'failed' }, { status: 'queued' }, { stale: true }, { mode: 'shadow' }, { error: 'superseded' }]) {
+        assert.equal(evaluationScore({ ...review, ...change }), null);
+    }
 });

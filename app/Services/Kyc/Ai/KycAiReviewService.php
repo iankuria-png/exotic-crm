@@ -89,6 +89,7 @@ class KycAiReviewService
             $review = KycAiReview::create([
                 'subject_id' => $subject->id, 'document_ids' => $ids, 'review_version' => $subject->review_version,
                 'mode' => $settings['mode'], 'status' => $capReached ? 'skipped_cap' : 'queued',
+                'prompt_version' => 'kyc-v2-confidence',
                 'reserved_usd' => $capReached ? 0 : 1,
                 'reason_codes' => $capReached ? ['daily_cap'] : [],
             ]);
@@ -157,14 +158,53 @@ class KycAiReviewService
         $data = $review->mode === 'shadow'
             ? ['id' => $review->id, 'mode' => 'shadow', 'status' => $review->status]
             : $review->toArray();
-        $data['stale'] = (int) $review->review_version !== (int) $subject->review_version
-            || $review->document_ids !== $subject->submitted_document_ids
-            || $review->document_ids !== $subject->documents()->whereIn('id', $review->document_ids)->orderBy('id')->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $versionChanged = (int) $review->review_version !== (int) $subject->review_version;
+        // Decisions also increment review_version. This exemption only affects
+        // display; the worker retains its strict version and status checks.
+        $decided = $review->status === 'completed'
+            && in_array($subject->status, ['approved', 'rejected', 'info_requested'], true);
+        $data['stale'] = ! $this->sameEvidence($subject, $review)
+            || ($versionChanged && ! $decided);
+        $data['decision_changed'] = ! $data['stale'] && $versionChanged;
+        if ($review->mode !== 'shadow') {
+            $confidence = $review->observations['evaluation_confidence'] ?? null;
+            $data['evaluation_confidence'] = ! $data['stale'] && $review->status === 'completed'
+                && $review->error !== 'superseded' && (is_int($confidence) || is_float($confidence))
+                && is_finite((float) $confidence) && $confidence >= 0 && $confidence <= 1
+                    ? (float) $confidence : null;
+        }
         if (in_array($review->status, ['queued', 'running']) && $review->updated_at->lt(now()->subMinutes(10))) {
             $data['status'] = 'stalled';
         }
 
         return $data;
+    }
+
+    private function sameEvidence(KycSubject $subject, KycAiReview $review): bool
+    {
+        $ids = array_map('intval', $review->document_ids ?? []);
+        $submitted = array_map('intval', $subject->submitted_document_ids ?? []);
+        sort($ids);
+        sort($submitted);
+        if (! $ids || $ids !== $submitted) {
+            return false;
+        }
+        $subject->loadMissing('documents:id,subject_id,capture_set_id,document_type');
+        $documents = $subject->documents;
+        $existing = $documents->whereIn('id', $ids)->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all();
+        if ($ids !== $existing || $documents->contains(fn ($doc) => (int) $doc->id > max($ids))) {
+            return false;
+        }
+        // Earlier captures can retain a back photo after switching to a passport.
+        // Later uploads have newer IDs, including staff uploads without a set.
+        if ($subject->capture_set_id) {
+            $capture = $documents->where('capture_set_id', $subject->capture_set_id);
+
+            return $capture->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all() === $ids
+                && $capture->every(fn ($doc) => $doc->document_type === $subject->document_type);
+        }
+
+        return true;
     }
 
     public function automationContext(KycSubject $subject): array

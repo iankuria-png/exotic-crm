@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import kyc from '../../services/kyc';
+import KycConfidenceScore from './KycConfidenceScore';
 
 import { reviewSummary, policyCopy } from './kycAiPresentation';
 export { aiLabel } from './kycAiPresentation';
@@ -40,6 +41,7 @@ export default function KycAiFindings({ review, subject = {}, automation = {}, s
         {error ? <p role="alert" className="m-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">{error.response?.data?.message || 'The check could not be started. Please try again.'}</p> : null}
         {notice ? <p role="status" className="px-5 pt-4 text-sm text-teal-800">{notice}</p> : null}
         <div className="space-y-3 px-5 py-4">
+            {complete ? <KycConfidenceScore review={review} /> : null}
             <div className="border-l-2 border-teal-600 pl-3"><p className="text-xs font-semibold text-slate-800">Next step</p><p className="mt-1 text-sm leading-6 text-slate-600">{summary.next}</p></div>
             {summary.blocked ? <p className="text-xs leading-5 text-amber-800">{summary.blocked}</p> : null}
             {active ? <ol aria-label="AI review progress" className="grid grid-cols-3 gap-2 text-xs">

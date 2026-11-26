@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../components/ToastProvider';
-import api from '../services/api';
+import KycConfidenceScore from '../components/kyc/KycConfidenceScore';
 import kyc from '../services/kyc';
 import { aiLabel } from '../components/kyc/KycAiFindings';
 import KycPanel from '../components/kyc/KycPanel';
@@ -77,12 +77,8 @@ export default function Kyc() {
 
     const settingsQuery = useQuery({
         queryKey: ['kyc-settings-summary'],
-        queryFn: () => kyc.getSettings(),
-    });
-
-    const platformsQuery = useQuery({
-        queryKey: ['kyc-platforms'],
-        queryFn: () => api.get('/platforms').then((response) => response.data?.platforms || []),
+        queryFn: () => kyc.getSettings({ summary: 1 }),
+        staleTime: 30_000,
     });
 
     const queueQuery = useQuery({
@@ -139,7 +135,7 @@ export default function Kyc() {
             : [...current, subjectId]);
     };
 
-    const queueDisabled = enabledPlatformIds.length === 0;
+    const queueDisabled = settingsQuery.isSuccess && enabledPlatformIds.length === 0;
 
     return (
         <div className="space-y-4">
@@ -170,6 +166,8 @@ export default function Kyc() {
                 )}
             />
 
+            {settingsQuery.isPending ? <p role="status" className="text-sm text-slate-500">Loading KYC markets…</p> : null}
+            {settingsQuery.isError ? <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">Could not load KYC markets. You can still review available submissions. <button type="button" onClick={() => settingsQuery.refetch()} className="font-semibold underline underline-offset-4">Retry markets</button></p> : null}
             {queueDisabled ? (
                 <section className="crm-surface px-5 py-6">
                     <div className="max-w-3xl space-y-3">
@@ -188,9 +186,9 @@ export default function Kyc() {
                         <div className="flex flex-wrap items-end gap-3">
                             <div>
                                 <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Market</label>
-                                <select value={platformId} onChange={(event) => setPlatformId(event.target.value)} className="crm-select min-w-[190px]">
+                                <select aria-label="Market" disabled={!settingsQuery.isSuccess} value={platformId} onChange={(event) => setPlatformId(event.target.value)} className="crm-select min-w-[190px] disabled:opacity-60">
                                     <option value="">All enabled markets</option>
-                                    {(platformsQuery.data || []).map((platform) => (
+                                    {(settingsQuery.data?.platforms || []).map((platform) => (
                                         <option key={platform.id} value={platform.id} disabled={!enabledPlatformIds.includes(Number(platform.id))}>
                                             {platform.name || platform.platform_name}{!enabledPlatformIds.includes(Number(platform.id)) ? ' — configure to enable' : ''}
                                         </option>
@@ -273,7 +271,7 @@ export default function Kyc() {
                                             <td className="px-4 py-4 align-top">
                                                 <div className="flex items-start gap-2">
                                                 <div>
-                                                    <p className="text-sm font-semibold text-slate-900">{decodeDisplayName(row.client?.name || `Client #${row.client?.id}`)}</p>
+                                                    <p className="text-sm font-semibold text-slate-900">{row.client?.id ? <Link to={`/clients/${row.client.id}`} target="_blank" rel="noopener noreferrer" className="text-teal-800 underline decoration-teal-800/30 underline-offset-4 hover:decoration-teal-800 focus-visible:rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-700" aria-label={`Open ${decodeDisplayName(row.client?.name || 'client')} in a new tab`}>{decodeDisplayName(row.client?.name || `Client #${row.client.id}`)}<span aria-hidden="true" className="ml-1 text-xs">↗</span></Link> : 'Client unavailable'}</p>
                                                         <p className="mt-1 text-xs text-slate-500">Subject #{row.id} • {row.client?.verified ? 'Public badge on' : 'Not publicly verified'}</p>
                                                     </div>
                                                     {isHighRevenue(row) ? <span className="inline-flex items-center rounded-md bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">High revenue</span> : null}
@@ -281,7 +279,7 @@ export default function Kyc() {
                                             </td>
                                             <td className="px-4 py-4 align-top text-sm text-slate-600">{row.client?.platform?.name || row.client?.platform?.platform_name || '—'}</td>
                                             <td className="px-4 py-4 align-top"><span className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${statusChip(row.status)}`}>{String(row.status || '').replaceAll('_', ' ')}</span></td>
-                                            <td className="px-4 py-4 align-top text-sm text-slate-600">{aiLabel(row.ai_review, row.status)}</td>
+                                            <td className="px-4 py-4 align-top text-sm text-slate-600">{aiLabel(row.ai_review, row.status)}<KycConfidenceScore review={row.ai_review} compact /></td>
                                             <td className="px-4 py-4 align-top text-sm text-slate-600">{formatDate(row.updated_at)}</td>
                                             <td className="px-4 py-4 text-right align-top">
                                                 <button type="button" onClick={() => setReviewRow(row)} className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Review</button>
@@ -297,7 +295,7 @@ export default function Kyc() {
                                 <div key={row.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                                     <div className="flex items-start justify-between gap-3">
                                         <div>
-                                            <p className="text-sm font-semibold text-slate-900">{decodeDisplayName(row.client?.name || `Client #${row.client?.id}`)}</p>
+                                            <p className="text-sm font-semibold text-slate-900">{row.client?.id ? <Link to={`/clients/${row.client.id}`} target="_blank" rel="noopener noreferrer" className="text-teal-800 underline decoration-teal-800/30 underline-offset-4 hover:decoration-teal-800 focus-visible:rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-700" aria-label={`Open ${decodeDisplayName(row.client?.name || 'client')} in a new tab`}>{decodeDisplayName(row.client?.name || `Client #${row.client.id}`)}<span aria-hidden="true" className="ml-1 text-xs">↗</span></Link> : 'Client unavailable'}</p>
                                             <p className="mt-1 text-xs text-slate-500">{row.client?.platform?.name || row.client?.platform?.platform_name || 'Unknown market'}</p>
                                         </div>
                                         <input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleOne(row.id)} className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-600" />
@@ -307,7 +305,7 @@ export default function Kyc() {
                                         {isHighRevenue(row) ? <span className="inline-flex items-center rounded-md bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">High revenue</span> : null}
                                     </div>
                                     <dl className="mt-3 grid gap-2 text-sm text-slate-600">
-                                        <div className="flex items-center justify-between gap-3"><dt>AI check</dt><dd>{aiLabel(row.ai_review, row.status)}</dd></div>
+                                        <div className="flex items-center justify-between gap-3"><dt>AI check</dt><dd>{aiLabel(row.ai_review, row.status)}<KycConfidenceScore review={row.ai_review} compact /></dd></div>
                                         <div className="flex items-center justify-between gap-3"><dt>Updated</dt><dd>{formatDate(row.updated_at)}</dd></div>
                                     </dl>
                                     <button type="button" onClick={() => setReviewRow(row)} className="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Review submission</button>
@@ -322,7 +320,7 @@ export default function Kyc() {
                     <nav className="flex items-center justify-between text-xs text-slate-600" aria-label="Queue pages"><button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)} className="rounded-lg border border-slate-200 px-3 py-2 disabled:opacity-40">Previous</button><span>Page {page} of {queueQuery.data?.last_page || 1}</span><button type="button" disabled={page >= (queueQuery.data?.last_page || 1)} onClick={() => setPage(page + 1)} className="rounded-lg border border-slate-200 px-3 py-2 disabled:opacity-40">Next</button></nav>
                 </>
             )}
-            {reviewRow ? <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/60 p-0 sm:p-4" onClick={(event) => {if (event.target === event.currentTarget) setReviewRow(null);}}><div role="dialog" aria-modal="true" aria-label={`Review ${decodeDisplayName(reviewRow.client?.name || 'submission')}`} data-kyc-review-dialog className="flex h-full w-full max-w-7xl flex-col bg-slate-50 shadow-xl"><div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4"><div><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Evidence review</p><h2 className="mt-1 text-base font-semibold text-slate-900">{decodeDisplayName(reviewRow.client?.name)} · Identity review</h2></div><button type="button" onClick={() => setReviewRow(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Close review</button></div><div className="min-h-0 flex-1 overflow-y-auto"><KycPanel client={{...reviewRow.client, kyc_subject: {id:reviewRow.id, status:reviewRow.status}}} canReview={['admin','sub_admin','sales'].includes(role)} /></div></div></div> : null}
+            {reviewRow ? <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/60 p-0 sm:p-4" onClick={(event) => {if (event.target === event.currentTarget) setReviewRow(null);}}><div role="dialog" aria-modal="true" aria-label={`Review ${decodeDisplayName(reviewRow.client?.name || 'submission')}`} data-kyc-review-dialog className="flex h-full w-full max-w-7xl flex-col bg-slate-50 shadow-xl"><div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4"><div><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Evidence review</p><h2 className="mt-1 text-base font-semibold text-slate-900">{decodeDisplayName(reviewRow.client?.name)} · Identity review</h2></div><div className="flex shrink-0 items-center gap-2">{reviewRow.client?.id ? <Link to={`/clients/${reviewRow.client.id}`} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-100" aria-label="Open client in a new tab">Open client <span aria-hidden="true">↗</span></Link> : null}<button type="button" onClick={() => setReviewRow(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Close review</button></div></div><div className="min-h-0 flex-1 overflow-y-auto"><KycPanel client={{...reviewRow.client, kyc_subject: {id:reviewRow.id, status:reviewRow.status}}} canReview={['admin','sub_admin','sales'].includes(role)} /></div></div></div> : null}
         </div>
     );
 }

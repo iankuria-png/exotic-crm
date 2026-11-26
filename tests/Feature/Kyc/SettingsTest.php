@@ -9,8 +9,8 @@ use Tests\TestCase;
 
 class SettingsTest extends TestCase
 {
-    use RefreshDatabase;
     use InteractsWithKycFixtures;
+    use RefreshDatabase;
 
     public function test_sub_admin_cannot_enable_auto_suspend(): void
     {
@@ -38,5 +38,24 @@ class SettingsTest extends TestCase
 
         $response->assertOk();
         $this->assertSame([$platform->id], KycSetting::query()->firstOrFail()->enabled_platform_ids);
+    }
+
+    public function test_queue_summary_is_scoped_and_skips_storage_and_billing_queries(): void
+    {
+        $allowed = $this->createPlatform();
+        $hidden = $this->createPlatform();
+        $this->setKycSettings(['enabled_platform_ids' => [$allowed->id, $hidden->id]]);
+        $this->actingAsKycUser('sales', [$allowed->id]);
+        \DB::enableQueryLog();
+        $response = $this->getJson('/api/crm/kyc/settings?summary=1')->assertOk();
+        $sql = implode(' ', array_column(\DB::getQueryLog(), 'query'));
+        \DB::disableQueryLog();
+        $response->assertJsonCount(1, 'platforms')->assertJsonPath('platforms.0.id', $allowed->id)
+            ->assertJsonMissingPath('total_blob_bytes')->assertJsonMissingPath('s3_health')
+            ->assertJsonMissingPath('settings.ai_review');
+        $this->assertStringNotContainsString('kyc_document_blobs', $sql);
+        $this->assertStringNotContainsString('billing_', $sql);
+        $this->actingAsKycUser();
+        $this->getJson('/api/crm/kyc/settings')->assertOk()->assertJsonStructure(['total_blob_bytes', 's3_health', 'settings' => ['ai_review']]);
     }
 }

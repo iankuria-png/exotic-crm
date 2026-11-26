@@ -17,7 +17,7 @@ class QueueController extends Controller
 
     public function index(Request $request)
     {
-        $query = KycSubject::query()->with(['client.platform', 'client.activeDeal.product', 'sites', 'aiLastReview'])
+        $query = KycSubject::query()->with(['client.platform', 'client.activeDeal.product', 'sites', 'aiLastReview', 'documents:id,subject_id,capture_set_id,document_type'])
             ->where(fn ($submission) => $submission->whereNotNull('submitted_at')->orWhereHas('documents'))
             ->whereHas('client', fn ($builder) => $builder->where('kyc_required', true));
 
@@ -80,7 +80,8 @@ class QueueController extends Controller
         $page->getCollection()->transform(function ($subject) {
             $finding = app(\App\Services\Kyc\Ai\KycAiReviewService::class)->findings($subject);
             $subject->unsetRelation('aiLastReview');
-            $subject->setAttribute('ai_review', $finding ? \Illuminate\Support\Arr::only($finding, ['id', 'status', 'mode', 'recommendation', 'action_taken', 'human_decision', 'qa_sample', 'error', 'stale', 'reason_codes']) : null);
+            $subject->unsetRelation('documents');
+            $subject->setAttribute('ai_review', $finding ? \Illuminate\Support\Arr::only($finding, ['id', 'status', 'mode', 'recommendation', 'action_taken', 'human_decision', 'qa_sample', 'error', 'stale', 'decision_changed', 'evaluation_confidence', 'reason_codes']) : null);
 
             return $subject;
         });

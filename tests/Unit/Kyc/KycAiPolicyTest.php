@@ -10,7 +10,7 @@ class KycAiPolicyTest extends TestCase
 {
     public static function clean(): array
     {
-        return ['legal_name' => 'Test Person', 'dob' => '1995-04-20', 'nationality' => 'Kenyan', 'document_number_last4' => '1234', 'readable' => true, 'document_type_matches' => true, 'expired' => false, 'tamper_suspected' => false, 'screen_or_copy' => false, 'single_face' => true, 'poses_consistent' => true, 'face_match' => 'likely_same', 'face_match_confidence' => .98, 'quality_problems' => []];
+        return ['legal_name' => 'Test Person', 'dob' => '1995-04-20', 'nationality' => 'Kenyan', 'document_number_last4' => '1234', 'readable' => true, 'document_type_matches' => true, 'expired' => false, 'tamper_suspected' => false, 'screen_or_copy' => false, 'single_face' => true, 'poses_consistent' => true, 'face_match' => 'likely_same', 'face_match_confidence' => .98, 'quality_problems' => [], 'evaluation_confidence' => null];
     }
 
     private function settings(): array
@@ -62,6 +62,26 @@ class KycAiPolicyTest extends TestCase
             try {
                 KycObservationSchema::validate(array_replace(self::clean(), $extra));
                 $this->fail('Invalid schema accepted');
+            } catch (\RuntimeException $e) {
+                $this->assertSame('invalid_observation_schema', $e->getMessage());
+            }
+        }
+    }
+
+    public function test_self_assessment_is_nullable_bounded_and_independent_of_policy(): void
+    {
+        $legacy = self::clean();
+        unset($legacy['evaluation_confidence']);
+        $this->assertNull(KycObservationSchema::validate($legacy)['evaluation_confidence']);
+        foreach ([null, 0, .86, 1] as $score) {
+            $observations = KycObservationSchema::validate(array_replace(self::clean(), ['evaluation_confidence' => $score]));
+            $this->assertSame($score, $observations['evaluation_confidence']);
+            $this->assertSame('approve', (new KycAiPolicy)->decide($observations, $this->settings())['recommendation']);
+        }
+        foreach ([-.01, 1.01, '0.9', true] as $score) {
+            try {
+                KycObservationSchema::validate(array_replace(self::clean(), ['evaluation_confidence' => $score]));
+                $this->fail('Invalid self-assessment accepted');
             } catch (\RuntimeException $e) {
                 $this->assertSame('invalid_observation_schema', $e->getMessage());
             }

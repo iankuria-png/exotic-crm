@@ -59,6 +59,7 @@ class AiReviewJobTest extends TestCase
         $this->assertTrue($review->qa_sample);
         $this->assertTrue($review->subject->client->verified);
         $this->assertSame('kyc', $review->subject->client->verified_source);
+        $this->assertFalse(app(KycAiReviewService::class)->findings($review->subject->fresh())['stale']);
         $this->assertDatabaseHas('kyc_review_events', ['subject_id' => $review->subject_id, 'ai_review_id' => $review->id, 'event' => 'automation_queued']);
         $this->assertDatabaseHas('kyc_review_events', ['subject_id' => $review->subject_id, 'ai_review_id' => $review->id, 'event' => 'provider_attempted']);
         $this->assertDatabaseHas('kyc_review_events', ['subject_id' => $review->subject_id, 'ai_review_id' => $review->id, 'event' => 'policy_evaluated']);
@@ -110,6 +111,7 @@ class AiReviewJobTest extends TestCase
         $this->assertSame('info_requested', $review->fresh()->action_taken);
         $this->assertSame(['id_front'], $review->fresh()->retake);
         $this->assertSame('info_requested', $review->subject->status);
+        $this->assertFalse(app(KycAiReviewService::class)->findings($review->subject->fresh())['stale']);
     }
 
     public function test_human_review_wins_and_agreement_is_recorded(): void
@@ -141,6 +143,18 @@ class AiReviewJobTest extends TestCase
         (new RunKycAiReviewJob($review->id))->handle($vision, new KycAiPolicy, app(KycSettingsService::class));
         $this->assertSame('cancelled', $review->fresh()->status);
         $this->assertEquals(0, $review->fresh()->reserved_usd);
+    }
+
+    public function test_truncated_output_never_uses_a_fallback_or_takes_a_decision(): void
+    {
+        $review = $this->review();
+        $vision = $this->mock(KycVisionClient::class);
+        $vision->shouldReceive('inspect')->once()->andThrow(new \RuntimeException('provider_output_truncated'));
+        (new RunKycAiReviewJob($review->id))->handle($vision, new KycAiPolicy, app(KycSettingsService::class));
+        $this->assertSame('provider_output_truncated', $review->fresh()->error);
+        $this->assertSame('failed', $review->fresh()->status);
+        $this->assertSame('in_review', $review->subject->status);
+        $this->assertFalse($review->subject->client->verified);
     }
 
     public function test_human_filter_includes_advisory_and_stalled_reviews_and_respects_markets(): void

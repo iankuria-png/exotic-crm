@@ -21,6 +21,7 @@ class KycObservationSchema
             'poses_consistent' => ['type' => 'boolean'],
             'face_match' => ['type' => 'string', 'enum' => ['likely_same', 'likely_different', 'inconclusive', 'declined']],
             'face_match_confidence' => ['type' => 'number', 'minimum' => 0, 'maximum' => 1],
+            'evaluation_confidence' => ['type' => ['number', 'null'], 'minimum' => 0, 'maximum' => 1],
             'quality_problems' => ['type' => 'array', 'maxItems' => 6, 'items' => [
                 'type' => 'object', 'additionalProperties' => false, 'required' => ['kind', 'reason'],
                 'properties' => [
@@ -35,6 +36,10 @@ class KycObservationSchema
 
     public static function validate(mixed $value): array
     {
+        // Earlier observations predate self-assessment. Do not invent a score.
+        if (is_array($value) && ! array_key_exists('evaluation_confidence', $value)) {
+            $value['evaluation_confidence'] = null;
+        }
         $object = json_decode(json_encode($value));
         if (! (new Validator)->validate($object, json_decode(json_encode(self::schema())))->isValid()) {
             throw new RuntimeException('invalid_observation_schema');

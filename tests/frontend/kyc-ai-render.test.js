@@ -7,7 +7,7 @@ import { createServer } from 'vite';
 
 let server, Findings;
 before(async () => {
-    server = await createServer({ server: { middlewareMode: true }, appType: 'custom' });
+    server = await createServer({ optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true }, appType: 'custom' });
     Findings = (await server.ssrLoadModule('/resources/js/components/kyc/KycAiFindings.jsx')).default;
 });
 after(async () => { await server?.close(); });
@@ -37,4 +37,18 @@ test('applied approval explains the outcome and keeps technical metadata expanda
     assert.match(html, /AI approval was applied/);
     assert.match(html, /No routine reviewer decision is required/);
     assert.match(html, /<summary[^>]*>AI attempt details/);
+});
+
+test('self-assessment is separate from face confidence and historical scores stay absent', () => {
+    const review = { status: 'completed', action_taken: 'info_requested', evaluation_confidence: .86,
+        observations: { face_match: 'likely_same', face_match_confidence: .95 } };
+    const html = render({ review, subject: { status: 'info_requested' } });
+    assert.match(html, /AI self-confidence/);
+    assert.match(html, />86</);
+    assert.match(html, /95% model confidence/);
+    assert.match(html, /uncalibrated/);
+    assert.match(render({ review: { status: 'completed' } }), /Not recorded/);
+    for (const change of [{ mode: 'shadow' }, { stale: true }, { status: 'failed' }]) {
+        assert.doesNotMatch(render({ review: { ...review, ...change } }), /AI self-confidence/);
+    }
 });

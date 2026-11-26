@@ -10,6 +10,7 @@ export const reasonCopy = {
     model_declined: 'The AI provider declined the comparison. No automated identity decision was made.',
     invalid_observation_schema: 'The AI response could not be validated. No automated decision was made.',
     incomplete_response: 'The AI response was incomplete. No automated decision was made.',
+    provider_output_truncated: 'The AI reached its response limit before finishing. No automated decision was made. A fresh check can be started while this case awaits review.',
     provider_not_configured: 'The AI provider is not configured for this market.',
     provider_unavailable: 'The AI provider did not return a usable result.',
     unsupported_document_format: 'A file format could not be processed. Inspect the originals.',
@@ -38,6 +39,13 @@ export function aiLabel(review, subjectStatus) {
     if (review.action_taken === 'info_requested') return 'AI requested photo retakes';
     if (review.action_taken === 'rejected') return 'AI rejected';
     return { approve: 'AI suggests approval', retake: 'AI suggests photo retakes', reject: 'Possible mismatch · staff decide', human_urgent: 'Priority staff review', human: 'Staff review needed' }[review.recommendation] || 'Staff review needed';
+}
+
+export function evaluationScore(review) {
+    if (!review || review.status !== 'completed' || review.mode === 'shadow' || review.stale || review.error === 'superseded') return null;
+    const value = review.evaluation_confidence ?? review.observations?.evaluation_confidence;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) return null;
+    return Math.round(value * 100);
 }
 
 export function reviewSummary(review, subject = {}, automation = {}) {

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Restore trustworthy KYC findings and client navigation — plan</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+--bg:#0a0a0b;--bg2:#101013;--card:#131317;--card2:#17171c;--line:#26262e;
+--line2:#33333d;--ink:#ededf2;--mut:#9a9aa8;--mut2:#6e6e7d;--acc:#7c5cff;
+--acc2:#a48bff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--info:#58a6ff;
+--r:10px;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+--wf-paper:#0d0d10;--wf-card:#17171c;--wf-ink:#ededf2;--wf-muted:#8b8b99;
+--wf-line:#2c2c36;--wf-accent:#7c5cff;--wf-accent-soft:#241d47;
+--wf-warn:#d29922;--wf-ok:#3fb950;--wf-radius:8px;
+}
+@media(prefers-color-scheme:light){:root{
+--bg:#fbfbfd;--bg2:#fff;--card:#fff;--card2:#f7f7fa;--line:#e3e3ea;
+--line2:#d0d0da;--ink:#16161c;--mut:#5c5c6b;--mut2:#8a8a99;--acc:#6247d6;
+--acc2:#7c5cff;--wf-paper:#fff;--wf-card:#f7f7fa;--wf-ink:#16161c;
+--wf-muted:#5c5c6b;--wf-line:#e3e3ea;--wf-accent:#6247d6;--wf-accent-soft:#efecff;
+}}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:minmax(0,1fr);max-width:1180px;margin:0 auto;padding:0 28px 120px}
+@media(min-width:1080px){.shell{grid-template-columns:232px minmax(0,1fr);gap:56px;padding-left:32px}}
+nav.toc{display:none}
+@media(min-width:1080px){nav.toc{display:block;position:sticky;top:0;align-self:start;
+max-height:100vh;overflow:auto;padding:96px 0 40px;font-size:13px}}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:5px 10px;
+border-left:2px solid transparent;border-radius:0 4px 4px 0}
+nav.toc a:hover{color:var(--ink);background:var(--card);border-left-color:var(--acc)}
+nav.toc a.l3{padding-left:22px;font-size:12.5px;color:var(--mut2)}
+header.hero{padding:72px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font:600 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+color:var(--acc2);margin-bottom:18px}
+h1{font-size:clamp(30px,4.2vw,44px);line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;font-weight:660}
+.obj{font-size:18px;color:var(--mut);max-width:70ch;margin:0 0 26px;line-height:1.6}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 12px/1 var(--sans);color:var(--mut);background:var(--card);
+border:1px solid var(--line);border-radius:999px;padding:7px 13px}
+.chip b{color:var(--ink);font-weight:600}
+main h2{font-size:24px;letter-spacing:-.02em;margin:56px 0 14px;padding-top:10px;font-weight:640}
+main h3{font-size:17px;margin:34px 0 10px;font-weight:620;letter-spacing:-.01em}
+main h4{font-size:15px;margin:0 0 8px;font-weight:620}
+main p{margin:0 0 14px;max-width:76ch}
+main ul,main ol{margin:0 0 16px;padding-left:22px;max-width:76ch}
+main li{margin:5px 0}
+a{color:var(--acc2)}
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+blockquote{margin:0 0 16px;padding:2px 0 2px 18px;border-left:3px solid var(--line2);color:var(--mut)}
+code{font-family:var(--mono);font-size:.875em;background:var(--card2);
+border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre.code{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);
+padding:14px 16px;overflow-x:auto;margin:0 0 16px}
+pre.code code{background:none;border:0;padding:0;font-size:12.75px;line-height:1.6}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{text-align:left;font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+.blk{margin:30px 0;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.bh{font:600 11.5px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+color:var(--mut);padding:14px 18px;border-bottom:1px solid var(--line);background:var(--card2)}
+.bh code{background:none;border:0;padding:0;text-transform:none;letter-spacing:0;
+font-size:12.5px;color:var(--ink)}
+.bb{padding:18px}
+.bb>.tw,.bb>*:last-child{margin-bottom:0}
+.cap{color:var(--mut2);font-size:13px;margin:10px 0 0!important}
+.tag{font:500 10.5px/1 var(--mono);color:var(--mut2);border:1px solid var(--line);
+border-radius:4px;padding:3px 6px;text-transform:uppercase;letter-spacing:.07em}
+.pill{display:inline-block;font:600 10.5px/1 var(--mono);border-radius:999px;
+padding:4px 9px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.p-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.p-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.p-bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.p-mut{color:var(--mut);background:var(--card2)}
+.callout{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
+margin:22px 0;padding:15px 17px;border:1px solid var(--line);border-left-width:3px;
+border-radius:var(--r);background:var(--card)}
+.callout .ct{font:600 10.5px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.callout .cb>*:last-child{margin-bottom:0}
+.t-note{border-left-color:var(--info)} .t-note .ct{color:var(--info)}
+.t-decision{border-left-color:var(--acc)} .t-decision .ct{color:var(--acc2)}
+.t-risk{border-left-color:var(--bad)} .t-risk .ct{color:var(--bad)}
+.t-warn{border-left-color:var(--warn)} .t-warn .ct{color:var(--warn)}
+.t-ok{border-left-color:var(--ok)} .t-ok .ct{color:var(--ok)}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+li.step{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 0;
+border-bottom:1px solid var(--line)}
+li.step:first-child{padding-top:0} li.step:last-child{border-bottom:0;padding-bottom:0}
+.sn{width:28px;height:28px;border-radius:8px;background:var(--wf-accent-soft);
+color:var(--acc2);font:600 12.5px/28px var(--mono);text-align:center}
+.sc h4{margin:3px 0 8px}
+.sm{display:grid;grid-template-columns:64px 1fr;gap:10px;font-size:13px;margin-top:5px}
+.sm .k{font:600 10.5px/1.7 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut2)}
+.sm .v{color:var(--mut)}
+.ty{font:500 12px/1 var(--mono);color:var(--acc2)}
+.rels{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.rel{font:500 11.5px/1 var(--mono);color:var(--mut);background:var(--card2);
+border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+.ep-h{display:flex;align-items:center;gap:11px;margin-bottom:12px;flex-wrap:wrap}
+.verb{font:700 11px/1 var(--mono);letter-spacing:.08em;padding:6px 9px;border-radius:6px;color:#0a0a0b}
+.v-GET{background:var(--info)} .v-POST{background:var(--ok)}
+.v-PUT,.v-PATCH{background:var(--warn)} .v-DELETE{background:var(--bad)}
+.v-HEAD,.v-OPTIONS{background:var(--mut)}
+.path{font-size:13.5px;background:none;border:0;padding:0}
+.sub{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin:14px 0 7px}
+table.ac{font-family:var(--mono);font-size:12.5px}
+table.ac td{padding:2px 10px;border:0;vertical-align:top}
+.ln{color:var(--mut2);text-align:right;user-select:none;width:1%;padding-right:14px!important}
+.cd code{background:none;border:0;padding:0;white-space:pre}
+.cl.hl{background:var(--wf-accent-soft)}
+.cl.hl .ln{color:var(--acc2)}
+.nt{font-family:var(--sans);color:var(--mut);font-size:12.5px;width:34%}
+.an b{color:var(--ink)}
+.diff{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line);
+border-radius:var(--r);overflow:hidden;font-family:var(--mono);font-size:12.5px}
+@media(min-width:760px){.diff{grid-template-columns:1fr 1fr}}
+.dcol{background:var(--bg2);padding-bottom:10px}
+.dh{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);padding:11px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.dl{padding:1px 14px;white-space:pre-wrap;word-break:break-word}
+.d-del{background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.d-add{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.dg{padding:6px 2px;overflow-x:auto}
+.dg svg{max-width:100%;height:auto}
+.wfw{display:flex;justify-content:center}
+.wf{background:var(--wf-paper);border:1px solid var(--wf-line);border-radius:12px;
+overflow:hidden;width:100%}
+.wf.s-desktop{max-width:100%} .wf.s-tablet{max-width:720px}
+.wf.s-mobile{max-width:378px} .wf.s-panel{max-width:440px}
+.wfbar{display:flex;gap:6px;padding:10px 13px;border-bottom:1px solid var(--wf-line);
+background:var(--wf-card)}
+.wfbar i{width:9px;height:9px;border-radius:50%;background:var(--wf-line)}
+.wfb{padding:16px;color:var(--wf-ink);font-size:13.5px}
+.cmp{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.cmp{grid-template-columns:1fr 1fr}}
+.ccol{border:1px solid var(--line);border-radius:var(--r);padding:15px;background:var(--bg2)}
+.ch{font:600 10.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+color:var(--mut2);margin-bottom:11px}
+.ccol>*:last-child{margin-bottom:0}
+ol.qs{list-style:none;margin:0;padding:0}
+li.q{padding:16px 0;border-bottom:1px solid var(--line)}
+li.q:first-child{padding-top:0} li.q:last-child{border-bottom:0;padding-bottom:0}
+.qh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.qn{font:700 11px/1 var(--mono);color:var(--acc2)}
+.qt{font-weight:600;flex:1;min-width:200px}
+ul.opts{list-style:none;margin:11px 0 0;padding:0}
+ul.opts li{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;
+padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin:0 0 7px;background:var(--bg2)}
+.box{width:14px;height:14px;border:1.5px solid var(--line2);border-radius:3px;margin-top:4px}
+.box.m{border-radius:3px} .ol{font-size:14px}
+.od{display:block;color:var(--mut);font-size:13px;margin-top:2px}
+.freeform{border:1px dashed var(--line2);border-radius:8px;padding:15px;
+color:var(--mut2);font-size:13px;margin-top:11px}
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+color:var(--mut2);font-size:12.5px}
+@media print{
+ nav.toc{display:none}.shell{grid-template-columns:1fr;max-width:none;padding:0}
+ .blk,.callout,.tw{break-inside:avoid}body{background:#fff;color:#000}
+}
+</style>
+</head><body>
+<div class="shell">
+<nav class="toc"><a class="l2" href="#evidence-and-intended-behavior">Evidence and intended behavior</a><a class="l2" href="#verification">Verification</a><a class="l2" href="#audit-log">Audit log</a><a class="l2" href="#open-questions">Open questions</a></nav>
+<div>
+<header class="hero">
+<div class="eyebrow">Implementation plan</div>
+<h1>Restore trustworthy KYC findings and client navigation</h1>
+<p class="obj">Make the queue load honestly, retain completed AI findings for unchanged photos, and show a separate model self-assessment with direct client navigation.</p>
+<div class="meta"><span class="chip">Status <b>authorized local implementation</b></span><span class="chip">Owner <b>Ian Kuria</b></span><span class="chip">Date <b>2026-11-25</b></span><span class="chip">Scope <b>CRM KYC queue, findings and provider diagnostics; local implementation only</b></span><span class="chip">Non-goals <b>production deployment or settings changes; identity approval policy changes or historical AI reprocessing</b></span></div>
+</header>
+<main><h2 id="evidence-and-intended-behavior">Evidence and intended behavior</h2>
+<p>Production read-only probes on 25 November found 91 completed AI attempts, eight incomplete responses, and no queued/running KYC work. All five open retakes have the same submitted/reviewed photo IDs but different decision versions. KycSubjectService increments review_version on every decision; KycAiReviewService incorrectly treats that as proof that photos changed. Brenda&#x27;s historical approval without an AI result is a truthful state.</p>
+<p>The queue controller took 309 ms and settings 57 ms in native server probes. Browser/network cold-load latency has not been measured. The page renders the disabled-market state before settings resolve and calls the full billing-decorated platform directory just to populate market names. The new summary response returns only enabled IDs and authorized market names, avoiding the storage calculation and unrelated billing work. Queue errors remain actionable even if settings fail.</p>
+<section class="blk"><header class="bh">KYC review — completed check</header><div class="bb"><div class="wfw"><div class="wf s-desktop"><div class="wfbar"><i></i><i></i><i></i></div><div class="wfb"><div style='display:grid;grid-template-columns:170px 1fr;gap:18px'><aside style='border-right:1px solid var(--wf-line);padding:12px'>Workspace<br/><br/>Clients<br/><br/><strong>KYC queue</strong></aside><main><div style='display:flex;justify-content:space-between;gap:12px'><strong>KYC queue</strong><span>All enabled markets</span></div><hr/><div style='display:flex;justify-content:space-between'><a href='#'>Sample advertiser ↗</a><span>Info requested</span><span>AI requested photo retakes</span></div><hr/><div style='display:flex;justify-content:space-between'><strong>Evidence review</strong><a href='#'>Open client ↗</a></div><div style='margin-top:20px;border:1px solid var(--wf-line);padding:16px'><strong>Verification assistant</strong><p>AI requested photo retakes</p><strong>AI self-confidence · 86/100</strong><p>Model self-assessment · uncalibrated</p><p>Face comparison · 85% model confidence</p><p>Next step: wait for a clearer photo.</p></div></main></div></div></div></div><p class="cap">Illustrative score for a future scored result; existing cases retain their real recorded values.</p></div></section>
+<aside class="callout t-decision"><div class="ct">DECISION</div><div class="cb"><p>Ian explicitly authorized diagnosis and local implementation on 25 November. This plan records that work; production delivery remains separate. AI self-confidence assesses the model&#x27;s evaluation, remains separate from face-match confidence, and never changes approval thresholds or policy.</p></div></aside>
+<section class="blk"><header class="bh">Implementation steps</header><div class="bb"><ol class="steps"><li class="step"><div class="sn">1</div><div class="sc"><h4>Fix findings provenance without weakening execution guards</h4><div class="sm"><span class="k">Reuses</span><span class="v">KycAiReviewService::findings, document IDs and subject decision versions</span></div><div class="sm"><span class="k">Adds</span><span class="v">photo-currentness checked against sorted reviewed/submitted IDs, surviving reviewed rows and current capture/type metadata. Retained older captures are allowed; extra documents added after the reviewed set (larger auto-increment ID) invalidate findings, including staff uploads without capture metadata. Only completed reviews on approved/rejected/info_requested subjects allow version-only decision changes with decision_changed=true; in_review, expired/re-requested, cancelled and superseded attempts retain strict invalidation; execution guards stay unchanged</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Kyc/Ai/KycAiReviewService.php; app/Http/Controllers/CRM/Kyc/QueueController.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">AI and human decisions retain unchanged evidence; replacement, deletion, newly uploaded photos, re-request and in-flight version races remain stale; shadow remains withheld</span></div></div></li><li class="step"><div class="sn">2</div><div class="sc"><h4>Remove unnecessary queue startup work and false disabled state</h4><div class="sm"><span class="k">Reuses</span><span class="v">existing GET /api/crm/kyc/settings and queue React Query</span></div><div class="sm"><span class="k">Adds</span><span class="v">summary=1 response with enabled_platform_ids and authorized id/name markets; loaded-only empty state, pending/error/retry states; no full /platforms call; eager document ID metadata for findings checks</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Http/Controllers/CRM/Kyc/SettingsController.php; resources/js/services/kyc.js; resources/js/pages/Kyc.jsx; app/Http/Controllers/CRM/Kyc/QueueController.php</span></div><div class="sm"><span class="k">Verify</span><span class="v">delayed/failed settings never claim markets disabled; authorized market scope and full settings contract retained; no blob query in summary; filter/paging retained</span></div></div></li><li class="step"><div class="sn">3</div><div class="sc"><h4>Add an explicit model self-assessment and actionable failure diagnostics</h4><div class="sm"><span class="k">Reuses</span><span class="v">strict observation schema and existing observations JSON storage</span></div><div class="sm"><span class="k">Adds</span><span class="v">nullable evaluation_confidence number 0..1 requested for new attempts; legacy responses normalize missing value to null; 0..100 score shown in findings/queue only for completed current non-shadow results. Queue allowlist adds only derived evaluation_confidence and decision_changed, never raw observations; finite numeric values only including zero, rejecting strings/out-of-range values. Existing face confidence labelled separately. Increase max_tokens 2000 to 4000; record allowlisted finish reason and token counts in review events, distinguish output length from other incomplete responses, preserve no-fallback rule for incomplete/refused/invalid output</span></div><div class="sm"><span class="k">Files</span><span class="v">app/Services/Kyc/Ai/KycObservationSchema.php; app/Services/Kyc/Ai/KycVisionClient.php; app/Jobs/Kyc/RunKycAiReviewJob.php; resources/js/components/kyc/KycAiFindings.jsx; resources/js/components/kyc/kycAiPresentation.js</span></div><div class="sm"><span class="k">Verify</span><span class="v">strict bounds/null/legacy normalization; no fabricated historic score; no policy change; length/content_filter/error branches never decide; no raw response or reasoning logged</span></div></div></li><li class="step"><div class="sn">4</div><div class="sc"><h4>Make client navigation and verification complete</h4><div class="sm"><span class="k">Reuses</span><span class="v">existing /clients/:id route, evidence drawer, responsive styles and fixture tests</span></div><div class="sm"><span class="k">Adds</span><span class="v">client-name links on desktop/mobile and Open client in drawer opening a new tab; synthetic browser journey plus scoped backend/presentation checks and matching isolated build</span></div><div class="sm"><span class="k">Files</span><span class="v">resources/js/pages/Kyc.jsx; tests/Feature/Kyc/; tests/frontend/</span></div><div class="sm"><span class="k">Verify</span><span class="v">keyboard links preserve queue in original tab; same client IDs on all surfaces; 390px and desktop states; local build generated outside canonical public/build to preserve unrelated work</span></div></div></li></ol></div></section>
+<section class="blk"><header class="bh">Data model · Observation JSON addition</header><div class="bb"><div class="tw"><table><thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead><tbody><tr><td><code>evaluation_confidence</code></td><td><span class="ty">number 0..1 | null</span></td><td>Model self-assessment; independent from face_match_confidence. Required nullable in provider strict schema; missing legacy values normalize to null. Stored in existing observations JSON; no migration.</td></tr><tr><td><code>decision_changed</code></td><td><span class="ty">boolean</span></td><td>Derived findings field when the case decision version changed while reviewed photos remain identical. Does not grant execution eligibility.</td></tr></tbody></table></div></div></section>
+<section class="blk"><header class="bh">Risks</header><div class="bb"><div class="tw"><table><thead><tr><th>Risk</th><th>Impact</th><th>Likelihood</th><th>Mitigation</th></tr></thead><tbody><tr><td>Displaying old findings after photos change</td><td><span class="pill p-bad">high</span></td><td>possible</td><td>Compare reviewed/submitted IDs, existence, capture/type and later-added IDs; retain earlier captures such as national-ID back photos after passport switch. Preserve strict in_review/expired version guard and superseded suppression; exercise replacement/deletion/addition/re-request and retained old capture.</td></tr><tr><td>Self-confidence is mistaken for verified identity accuracy</td><td><span class="pill p-bad">high</span></td><td>possible</td><td>Explicit model self-assessment label, uncalibrated explanation, independent face score, null for historical data, no approval policy use.</td></tr><tr><td>Incomplete-response cause cannot be reconstructed</td><td><span class="pill p-warn">medium</span></td><td>likely</td><td>Eight historical attempts only record generic incomplete_response. Token cap is a plausible contributor, not proven. Add safe finish-reason telemetry for future attempts and make no provider calls during this task.</td></tr><tr><td>Dirty old checkout changes unrelated release assets</td><td><span class="pill p-bad">high</span></td><td>possible</td><td>Preserve canonical build and staging, generate task build in isolated output, no commit/push/deployment without requested scope.</td></tr></tbody></table></div></div></section>
+<h2 id="verification">Verification</h2>
+<p>Use PHP8.2 artisan tests/Feature/Kyc and tests/Unit/Kyc with SQLite :memory:, node --test tests/frontend/kyc-ai-*.test.js, scoped Pint/syntax, and an isolated Vite production build. Use synthetic fixture browser checks for slow settings, settings failure, matching current results, missing/invalid/historical scores, both client links, drawer navigation, keyboard and mobile overflow. Retain screenshots and results under output/kyc-diagnosis-2026-11-25. No real identity documents or model calls.</p>
+<h2 id="audit-log">Audit log</h2>
+<p>Round 1: NOT READY. Resolved retained-capture evidence comparison, exact completed/decided version exemption, and explicit privacy-safe queue score contract. Round 2: READY. Eager-loaded metadata explicitly includes id, subject_id, capture_set_id and document_type.</p>
+<section class="blk" id="open-questions"><header class="bh">Open questions</header><div class="bb"><ol class="qs"></ol></div></section></main>
+<footer>Rendered from <code>plan.mdx</code> · review surface only — no code was written to produce this.</footer>
+</div></div></body></html>

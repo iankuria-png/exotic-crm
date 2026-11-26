@@ -11,9 +11,21 @@ class SettingsController extends Controller
 {
     public function __construct(private readonly KycSettingsService $settingsService) {}
 
-    public function show()
+    public function show(Request $request)
     {
         $settings = $this->settingsService->get();
+
+        if ($request->boolean('summary')) {
+            $platformIds = app(\App\Services\MarketAuthorizationService::class)->resolveAccessiblePlatformIds($request->user());
+            $platforms = \App\Models\Platform::query()
+                ->when(is_array($platformIds), fn ($query) => $query->whereIn('id', $platformIds ?: [0]))
+                ->orderBy('name')->get(['id', 'name']);
+
+            return response()->json([
+                'settings' => $settings->only('enabled_platform_ids'),
+                'platforms' => $platforms,
+            ]);
+        }
 
         return response()->json([
             'settings' => array_merge($settings->toArray(), ['ai_review' => $this->settingsService->aiSettings()]),
@@ -81,12 +93,14 @@ class SettingsController extends Controller
 
         if ($request->user()->role === 'sub_admin') {
             $current = $this->settingsService->get();
-            abort_if(isset($validated['private_content_upload_policy_default']) && $validated['private_content_upload_policy_default'] !== $current->private_content_upload_policy_default,403,'Only an admin can change the global private-content KYC policy.');
+            abort_if(isset($validated['private_content_upload_policy_default']) && $validated['private_content_upload_policy_default'] !== $current->private_content_upload_policy_default, 403, 'Only an admin can change the global private-content KYC policy.');
             $old = $current->private_content_upload_policy_per_platform ?? [];
             if (isset($validated['private_content_upload_policy_per_platform'])) {
                 $new = $validated['private_content_upload_policy_per_platform'];
-                foreach (array_unique(array_merge(array_keys($old),array_keys($new))) as $id) {
-                    if (($old[$id] ?? null) !== ($new[$id] ?? null)) app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($request->user(),(int)$id);
+                foreach (array_unique(array_merge(array_keys($old), array_keys($new))) as $id) {
+                    if (($old[$id] ?? null) !== ($new[$id] ?? null)) {
+                        app(\App\Services\MarketAuthorizationService::class)->ensureUserCanAccessPlatform($request->user(), (int) $id);
+                    }
                 }
             }
         }

@@ -70,7 +70,7 @@ class RunKycAiReviewJob implements ShouldQueue
                     $hadFailure = true;
                     app(\App\Services\Kyc\KycReviewEventService::class)->record($subject, 'provider_attempt_failed', 'Provider attempt did not return usable observations.', ['model' => $model, 'attempt' => $index + 1, 'reason' => $this->publicFailureReason($e->getMessage())], $review, 'warning');
                     // A refusal or malformed answer is not retried to evade a provider's decision.
-                    if (in_array($e->getMessage(), ['model_declined', 'invalid_observation_schema', 'incomplete_response'])) {
+                    if (in_array($e->getMessage(), ['model_declined', 'invalid_observation_schema', 'incomplete_response', 'provider_output_truncated'])) {
                         throw $e;
                     }
                 }
@@ -149,7 +149,7 @@ class RunKycAiReviewJob implements ShouldQueue
                 }
             });
         } catch (\Throwable $e) {
-            $reason = in_array($e->getMessage(), ['model_declined', 'invalid_observation_schema', 'incomplete_response', 'provider_not_configured', 'unsupported_document_format', 'invalid_image']) ? $e->getMessage() : 'automated_check_unavailable';
+            $reason = in_array($e->getMessage(), ['model_declined', 'invalid_observation_schema', 'incomplete_response', 'provider_output_truncated', 'provider_not_configured', 'unsupported_document_format', 'invalid_image']) ? $e->getMessage() : 'automated_check_unavailable';
             $review->refresh()->update(['status' => 'failed', 'error' => $reason, 'latency_ms' => (int) ((microtime(true) - $started) * 1000), 'completed_at' => now(), 'reserved_usd' => max(0, 1 - $review->cost_usd)]);
             app(\App\Services\Kyc\KycReviewEventService::class)->record($review->subject, 'automation_failed', 'Automated review did not produce a decision and remains for human review.', ['reason' => $reason], $review, 'warning');
         }
@@ -175,7 +175,7 @@ class RunKycAiReviewJob implements ShouldQueue
     private function publicFailureReason(string $reason): string
     {
         return match ($reason) {
-            'model_declined', 'invalid_observation_schema', 'incomplete_response', 'provider_not_configured', 'unsupported_document_format', 'invalid_image' => $reason,
+            'model_declined', 'invalid_observation_schema', 'incomplete_response', 'provider_output_truncated', 'provider_not_configured', 'unsupported_document_format', 'invalid_image' => $reason,
             default => 'provider_unavailable',
         };
     }

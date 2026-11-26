@@ -56,8 +56,8 @@ const kyc = {
         return api.delete(`/crm/kyc/subjects/${subjectId}/documents/${documentId}`).then((response) => response.data);
     },
 
-    getSettings() {
-        return api.get('/crm/kyc/settings').then((response) => response.data);
+    getSettings(params = {}) {
+        return api.get('/crm/kyc/settings', { params }).then((response) => response.data);
     },
 
     updateSettings(payload) {
