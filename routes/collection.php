@@ -13,6 +13,7 @@ Route::middleware(['auth:sanctum', 'crm.session-token', 'crm.active', 'crm.imper
         Route::post('kopokopo/reconcile', [\App\Http\Controllers\CRM\CollectionKopokopoController::class, 'reconcile']);
         Route::post('kopokopo/polls/{poll}/recover', [\App\Http\Controllers\CRM\CollectionKopokopoController::class, 'recover'])->whereUuid('poll');
         Route::get('capabilities', [CollectionPaymentController::class, 'capabilities']);
+        Route::get('clients/{client}/reference-suggestions', [\App\Http\Controllers\CRM\CollectionReferenceSuggestionController::class, 'index'])->whereNumber('client');
         Route::get('clients/{client}/sales', [CollectionSalesController::class, 'clientSales'])->whereNumber('client');
         Route::get('receipts', [CollectionPaymentController::class, 'index']);
         Route::get('receipts/{receipt}', [CollectionPaymentController::class, 'show'])->whereNumber('receipt');

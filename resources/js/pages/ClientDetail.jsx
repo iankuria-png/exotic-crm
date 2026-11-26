@@ -1,3 +1,4 @@
+import ManualPaymentReferenceSuggestions from '../components/subscriptions/ManualPaymentReferenceSuggestions';
 import DiscountPricingEditor, { normalizeDiscountPercentage, roundMoney, roundPercent, discountedAmount, normalizePayableAmount, discountPercentageFromPayable, effectiveDiscountedAmount, formatNumericInput, formatPercentInput } from '../components/billing/DiscountPricingEditor';
 import SubsidiaryActivationResult from '../components/clients/SubsidiaryActivationResult';
 import TrialAuthorizationControl from '../components/trials/TrialAuthorizationControl';
@@ -4933,8 +4934,9 @@ export default function ClientDetail() {
                                     ) : null}
                                     {dealPaymentMethod === 'manual' ? (
                                         <div>
-                                            <label className="mb-1 block text-sm font-medium text-slate-700">MPESA / Transaction Reference</label>
-                                            <input type="text" value={dealPaymentReference} onChange={(e) => setDealPaymentReference(e.target.value)} className="crm-input" placeholder="e.g. MPESA123ABC" />
+                                            <label htmlFor="client-deal-payment-reference" className="mb-1 block text-sm font-medium text-slate-700">MPESA / Transaction Reference</label>
+                                            <input id="client-deal-payment-reference" aria-describedby="client-deal-payment-reference-feedback" type="text" value={dealPaymentReference} onChange={(e) => setDealPaymentReference(e.target.value)} className="crm-input" placeholder="e.g. MPESA123ABC" />
+                                            <ManualPaymentReferenceSuggestions key={`${id}-${dealActionDialog.deal?.id}-${dealActionDialog.type}`} clientId={id} dealId={dealActionDialog.deal?.id} amountMinor={Math.round((dealApplyDiscount ? selectedDealDiscountedTotal : selectedDealBaseAmount) * 100)} value={dealPaymentReference} onChange={setDealPaymentReference} inputId="client-deal-payment-reference" error={((dealActionDialog.type === 'extend' ? extendDealMutation.error : renewDealMutation.error)?.response?.data?.errors?.payment_reference || [])[0] || ''} refreshKey={dealActionDialog.type === 'extend' ? `${extendDealMutation.submittedAt}-${extendDealMutation.isError}` : `${renewDealMutation.submittedAt}-${renewDealMutation.isError}`} />
                                         </div>
                                     ) : null}
                                     {dealPaymentMethod === 'link' && canOverridePaymentLinkProvider ? (
@@ -6688,12 +6690,14 @@ export default function ClientDetail() {
                                         </label>
                                         <input
                                             id="client-detail-payment-reference"
+                                            aria-describedby="client-detail-payment-reference-feedback"
                                             type="text"
                                             value={activationPaymentReference}
                                             onChange={(event) => setActivationPaymentReference(event.target.value)}
                                             className="crm-input"
                                             placeholder="e.g. MPESA123ABC"
                                         />
+                                        <ManualPaymentReferenceSuggestions key={`${id}-${activationDialog.dealId}`} clientId={id} dealId={activationDialog.dealId} amountMinor={Math.round((activationApplyDiscount ? activationDiscountedTotal : activationBaseAmount) * 100)} value={activationPaymentReference} onChange={setActivationPaymentReference} inputId="client-detail-payment-reference" error={(activateDealMutation.error?.response?.data?.errors?.payment_reference || [])[0] || ''} refreshKey={`${activateDealMutation.submittedAt}-${activateDealMutation.isError}`} />
                                     </div>
                                 ) : null}
 

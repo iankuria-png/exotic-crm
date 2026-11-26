@@ -1068,7 +1068,10 @@ class DealController extends Controller
         try {
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $wpSync = WpSyncService::forPlatform($client->platform_id);
-            $wpExtension = $wpSync->extendClient($client->wp_post_id, (int) $validated['additional_days']);
+            $wpExtension = null;
+            if ($paymentMethod !== 'manual') {
+                $wpExtension = $wpSync->extendClient($client->wp_post_id, (int) $validated['additional_days']);
+            }
             $discountAudit = null;
             $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
                 $client,
@@ -1096,6 +1099,8 @@ class DealController extends Controller
                     (int) $request->user()->id,
                     $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
                 );
+                // Validate and prepare receipt-owned cash before changing the remote expiry.
+                $wpExtension = $wpSync->extendClient($client->wp_post_id, (int) $validated['additional_days']);
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
                 $initiation = $this->dealPaymentService->initiatePaymentForDeal(
                     $deal,
@@ -1218,6 +1223,9 @@ class DealController extends Controller
             $deal->load(['client', 'product', 'platform']);
 
             return response()->json($deal);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Exception $e) {
             DB::rollBack();
 
